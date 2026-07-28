@@ -1,0 +1,83 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fishmesh-gateway
+  labels:
+    app.kubernetes.io/name: fishmesh-gateway
+spec:
+  replicas: 1
+  revisionHistoryLimit: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: fishmesh-gateway
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: fishmesh-gateway
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: /metrics
+        prometheus.io/port: "8080"
+    spec:
+      serviceAccountName: fishmesh-gateway
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      # The control plane is ARM64, while this first image is deliberately built for
+      # the x86_64 inference node so it can use the same offline image-import path.
+      nodeSelector:
+        kubernetes.io/arch: amd64
+        kubellm.io/gpu: "true"
+      tolerations:
+        - key: kubellm.io/gpu
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: gateway
+          image: fishmesh:dev
+          imagePullPolicy: Never
+          command: ["/usr/local/bin/fishmesh-gateway"]
+          envFrom:
+            - configMapRef:
+                name: fishmesh-gateway-config
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3

@@ -1,0 +1,21 @@
+# This policy is intentionally not part of the base kustomization because the current
+# K3s Flannel CNI does not enforce NetworkPolicy. Apply it only after moving to a
+# policy-capable CNI (for example Cilium or Calico), then validate enforcement.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: fishmesh-gateway-egress
+  namespace: kubellm
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: fishmesh-gateway
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: qwen-vllm
+      ports:
+        - protocol: TCP
+          port: 8000

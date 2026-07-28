@@ -1,0 +1,43 @@
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: fishmesh-qwen-models
+  labels:
+    app.kubernetes.io/part-of: fishmesh
+    fishmesh.io/storage: qwen-models
+spec:
+  capacity:
+    storage: 2Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: fishmesh-local-models
+  volumeMode: Filesystem
+  local:
+    path: /var/lib/fishmesh/models
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - fishmesh-gpu
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: qwen-models
+  namespace: kubellm
+  labels:
+    app.kubernetes.io/part-of: fishmesh
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+  storageClassName: fishmesh-local-models
+  selector:
+    matchLabels:
+      fishmesh.io/storage: qwen-models

@@ -1,0 +1,16 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: kubellm
+resources:
+  - serviceaccounts.yaml
+  - gateway-config.yaml
+  - upstream-service.yaml
+  - gateway-deployment.yaml
+  - gateway-service.yaml
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: fishmesh
+      app.kubernetes.io/component: baseline
+    # The upstream Service must continue selecting vLLM Pods, which do not carry
+    # FishMesh's component label. Never mutate resource selectors globally.
+    includeSelectors: false

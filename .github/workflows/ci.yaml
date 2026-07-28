@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.x"
+          check-latest: true
+      - name: Test and statically check Go
+        run: |
+          go test -race ./...
+          go vet ./...
+          go build ./...
+      - name: Render Kubernetes manifests
+        run: kubectl kustomize deploy/baseline/base >/tmp/fishmesh-baseline.yaml

@@ -1,0 +1,69 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: model-cache-preload
+  namespace: kube-system
+  labels:
+    app.kubernetes.io/name: model-cache-preload
+    app.kubernetes.io/part-of: fishmesh
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: model-cache-preload
+        app.kubernetes.io/part-of: fishmesh
+    spec:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      nodeSelector:
+        kubellm.io/gpu: "true"
+      tolerations:
+        - key: kubellm.io/gpu
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
+      containers:
+        - name: download-models
+          image: docker.io/vllm/vllm-openai:v0.11.0
+          imagePullPolicy: Never
+          command: ["python3", "-c"]
+          args:
+            - |
+              from huggingface_hub import snapshot_download
+              for model in ("Qwen/Qwen2.5-0.5B-Instruct", "Qwen/Qwen3-0.6B"):
+                  print(f"Downloading {model}", flush=True)
+                  snapshot_download(repo_id=model, cache_dir="/cache/huggingface")
+          env:
+            - name: HF_ENDPOINT
+              value: https://hf-mirror.com
+            - name: HF_HOME
+              value: /cache/huggingface
+            - name: HTTP_PROXY
+              value: http://127.0.0.1:7890
+            - name: HTTPS_PROXY
+              value: http://127.0.0.1:7890
+            - name: NO_PROXY
+              value: 127.0.0.1,localhost,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,.ts.net
+          resources:
+            requests:
+              cpu: 250m
+              memory: 1Gi
+            limits:
+              cpu: "2"
+              memory: 4Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: model-cache
+              mountPath: /cache
+      volumes:
+        - name: model-cache
+          hostPath:
+            path: /var/lib/fishmesh/model-cache
+            type: DirectoryOrCreate
