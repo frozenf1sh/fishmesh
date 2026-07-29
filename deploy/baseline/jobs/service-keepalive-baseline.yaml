@@ -1,16 +1,14 @@
-# Historical no-keepalive baseline. The V2 default is
-# deploy/baseline/jobs/service-keepalive-baseline.yaml; use the connection-matrix
-# overlay when this condition must be reproduced with Gateway keepalive disabled.
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: fishmesh-random-service-baseline
+  name: fishmesh-service-keepalive-baseline
   namespace: kubellm
   labels:
     app.kubernetes.io/name: fishmesh-loadgen
-    app.kubernetes.io/component: baseline
+    app.kubernetes.io/component: serving-baseline
   annotations:
-    fishmesh.io/experiment: random-service-baseline
+    fishmesh.io/experiment: service-keepalive-baseline
+    fishmesh.io/purpose: v2-serving-baseline
 spec:
   backoffLimit: 0
   ttlSecondsAfterFinished: 3600
@@ -18,7 +16,7 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: fishmesh-loadgen
-        app.kubernetes.io/component: baseline
+        app.kubernetes.io/component: serving-baseline
     spec:
       restartPolicy: Never
       serviceAccountName: fishmesh-loadgen
@@ -36,6 +34,22 @@ spec:
         runAsGroup: 65532
         seccompProfile:
           type: RuntimeDefault
+      initContainers:
+        - name: gateway-startup-delay
+          image: busybox:1.36
+          command: ["sh", "-c", "sleep 10"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 50m
+              memory: 32Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
       containers:
         - name: loadgen
           image: fishmesh:dev
@@ -46,9 +60,10 @@ spec:
             - --concurrency=4
             - --prefix-groups=8
             - --prefix-bytes=4096
+            - --prefix-namespace=service-keepalive-baseline-v2
             - --max-tokens=32
             - --request-timeout=90s
-            - --keep-alive=false
+            - --keep-alive=true
           resources:
             requests:
               cpu: 100m

@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fishmesh-analyst-config
+  annotations:
+    fishmesh.io/agent-mode: demo
+    fishmesh.io/side-effect-policy: read-only
+data:
+  FISHMESH_ANALYST_LISTEN_ADDRESS: ":8090"
+  # demo 是默认且可重复的 fixture；observability overlay 才会启用真实指标读取。
+  FISHMESH_ANALYST_MODE: demo
+  FISHMESH_GATEWAY_METRICS_URL: http://fishmesh-gateway.kubellm.svc.cluster.local:8080/metrics
+  FISHMESH_VLLM_METRICS_URLS: ""
+  FISHMESH_GPU_METRICS_URL: ""
+  FISHMESH_KUBERNETES_NAMESPACE: kubellm
+  FISHMESH_KUBERNETES_API_URL: ""
+  FISHMESH_KUBERNETES_TOKEN_FILE: /var/run/secrets/kubernetes.io/serviceaccount/token
+  FISHMESH_KUBERNETES_CA_FILE: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+  FISHMESH_ANALYST_REQUEST_TIMEOUT: 5s
+  FISHMESH_ANALYST_SHUTDOWN_TIMEOUT: 10s

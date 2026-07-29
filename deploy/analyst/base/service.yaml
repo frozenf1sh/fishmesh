@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: fishmesh-analyst
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: fishmesh-analyst
+  ports:
+    - name: http
+      port: 8090
+      targetPort: http
+      protocol: TCP

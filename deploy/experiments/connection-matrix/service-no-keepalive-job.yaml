@@ -1,24 +1,18 @@
-# Historical no-keepalive baseline. The V2 default is
-# deploy/baseline/jobs/service-keepalive-baseline.yaml; use the connection-matrix
-# overlay when this condition must be reproduced with Gateway keepalive disabled.
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: fishmesh-random-service-baseline
+  name: fishmesh-exp-service-no-keepalive
   namespace: kubellm
   labels:
     app.kubernetes.io/name: fishmesh-loadgen
-    app.kubernetes.io/component: baseline
-  annotations:
-    fishmesh.io/experiment: random-service-baseline
+    fishmesh.io/experiment: service-no-keepalive
 spec:
   backoffLimit: 0
-  ttlSecondsAfterFinished: 3600
+  ttlSecondsAfterFinished: 86400
   template:
     metadata:
       labels:
         app.kubernetes.io/name: fishmesh-loadgen
-        app.kubernetes.io/component: baseline
     spec:
       restartPolicy: Never
       serviceAccountName: fishmesh-loadgen
@@ -41,23 +35,11 @@ spec:
           image: fishmesh:dev
           imagePullPolicy: Never
           command: ["/usr/local/bin/fishmesh-loadgen"]
-          args:
-            - --requests=200
-            - --concurrency=4
-            - --prefix-groups=8
-            - --prefix-bytes=4096
-            - --max-tokens=32
-            - --request-timeout=90s
-            - --keep-alive=false
+          args: ["--requests=200", "--concurrency=4", "--prefix-groups=8", "--prefix-bytes=4096", "--prefix-namespace=matrix-no-keepalive-v2", "--max-tokens=32", "--request-timeout=90s", "--keep-alive=false"]
           resources:
-            requests:
-              cpu: 100m
-              memory: 128Mi
-            limits:
-              cpu: "1"
-              memory: 256Mi
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: "1", memory: 256Mi}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
-            capabilities:
-              drop: ["ALL"]
+            capabilities: {drop: ["ALL"]}

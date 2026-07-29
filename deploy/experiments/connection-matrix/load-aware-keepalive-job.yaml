@@ -1,0 +1,31 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: fishmesh-exp-load-aware-keepalive
+  namespace: kubellm
+  labels:
+    app.kubernetes.io/name: fishmesh-loadgen
+    fishmesh.io/experiment: load-aware-keepalive
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: fishmesh-loadgen
+    spec:
+      restartPolicy: Never
+      serviceAccountName: fishmesh-loadgen
+      automountServiceAccountToken: false
+      nodeSelector: {kubellm.io/gpu: "true"}
+      tolerations:
+        - {key: kubellm.io/gpu, operator: Equal, value: "true", effect: NoSchedule}
+      securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: loadgen
+          image: fishmesh:dev
+          imagePullPolicy: Never
+          command: ["/usr/local/bin/fishmesh-loadgen"]
+          args: ["--requests=200", "--concurrency=4", "--prefix-groups=8", "--prefix-bytes=4096", "--prefix-namespace=matrix-load-aware-v1", "--max-tokens=32", "--request-timeout=90s", "--keep-alive=true"]
+          resources: {requests: {cpu: 100m, memory: 128Mi}, limits: {cpu: "1", memory: 256Mi}}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: ["ALL"]}}

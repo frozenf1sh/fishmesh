@@ -13,6 +13,9 @@ vet:
 
 manifest:
 	kubectl kustomize deploy/baseline/base >/dev/null
+	kubectl kustomize deploy/analyst/base >/dev/null
+	kubectl kustomize deploy/analyst/gateway-metrics >/dev/null
+	kubectl kustomize deploy/analyst/observability >/dev/null
 
 ci: test vet build manifest
 

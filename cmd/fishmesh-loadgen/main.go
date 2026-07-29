@@ -11,7 +11,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/frozenf1sh/fishmesh/internal/loadgen"
+	"github.com/frozenf1sh/fishmesh/internal/workload/loadgen"
 )
 
 func main() {
@@ -22,8 +22,11 @@ func main() {
 	flag.IntVar(&config.Concurrency, "concurrency", 4, "maximum in-flight requests")
 	flag.IntVar(&config.PrefixGroups, "prefix-groups", 8, "number of deterministic shared-prefix groups")
 	flag.IntVar(&config.PrefixBytes, "prefix-bytes", 4096, "approximate bytes in each shared system prefix")
+	flag.StringVar(&config.PrefixNamespace, "prefix-namespace", "default", "namespace for this benchmark's prefix corpus")
+	flag.IntVar(&config.HotPrefixRatio, "hot-prefix-ratio", 0, "percentage of requests assigned to prefix group 0")
 	flag.IntVar(&config.MaxTokens, "max-tokens", 32, "maximum generated tokens per request")
 	flag.DurationVar(&config.RequestTimeout, "request-timeout", 90*time.Second, "per-request timeout")
+	flag.BoolVar(&config.KeepAlive, "keep-alive", false, "reuse client-to-gateway HTTP connections")
 	flag.StringVar(&config.OutputPath, "output", "", "optional JSONL result path; stdout is always used")
 	flag.Parse()
 

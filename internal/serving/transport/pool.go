@@ -1,0 +1,56 @@
+// Package transport owns upstream HTTP client lifecycle. Routing decides which
+// backend to use; this package decides how that backend's connection is reused.
+package transport
+
+import (
+	"net/http"
+	"sync"
+	"time"
+
+	"github.com/frozenf1sh/fishmesh/internal/serving/routing"
+)
+
+type Config struct {
+	KeepAlive      bool
+	RequestTimeout time.Duration
+}
+
+type Pool struct {
+	config  Config
+	mu      sync.Mutex
+	clients map[string]*http.Client
+}
+
+func NewPool(config Config) *Pool {
+	return &Pool{config: config, clients: make(map[string]*http.Client)}
+}
+
+func (p *Pool) ClientFor(backend routing.Backend) *http.Client {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if client, ok := p.clients[backend.ID]; ok {
+		return client
+	}
+	client := &http.Client{Transport: &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		DisableKeepAlives:     !p.config.KeepAlive,
+		ForceAttemptHTTP2:     false,
+		MaxIdleConns:          16,
+		MaxIdleConnsPerHost:   16,
+		IdleConnTimeout:       90 * time.Second,
+		ResponseHeaderTimeout: p.config.RequestTimeout,
+	}, Timeout: p.config.RequestTimeout}
+	p.clients[backend.ID] = client
+	return client
+}
+
+// Close releases idle sockets owned by every backend client. The gateway calls
+// this during graceful shutdown so a rolling update does not retain transport
+// resources beyond the process lifetime.
+func (p *Pool) Close() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, client := range p.clients {
+		client.CloseIdleConnections()
+	}
+}

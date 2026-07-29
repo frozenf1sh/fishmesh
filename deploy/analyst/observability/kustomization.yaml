@@ -1,0 +1,37 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: kubellm
+resources:
+  - ../base
+  - rbac.yaml
+patches:
+  - target:
+      kind: ConfigMap
+      name: fishmesh-analyst-config
+    patch: |-
+      - op: replace
+        path: /data/FISHMESH_ANALYST_MODE
+        value: observability
+      - op: replace
+        path: /data/FISHMESH_VLLM_METRICS_URLS
+        value: http://qwen-vllm-baseline.kubellm.svc.cluster.local:8000/metrics
+      - op: replace
+        path: /metadata/annotations/fishmesh.io~1agent-mode
+        value: observability
+  - target:
+      kind: ServiceAccount
+      name: fishmesh-analyst
+    patch: |-
+      - op: replace
+        path: /automountServiceAccountToken
+        value: true
+      - op: replace
+        path: /metadata/annotations/fishmesh.io~1security-note
+        value: "namespace-scoped read-only Events/Pods observation"
+  - target:
+      kind: Deployment
+      name: fishmesh-analyst
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/automountServiceAccountToken
+        value: true

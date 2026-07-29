@@ -1,0 +1,16 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: kubellm
+resources:
+  - ../base
+patches:
+  - target:
+      kind: ConfigMap
+      name: fishmesh-analyst-config
+    patch: |-
+      - op: replace
+        path: /data/FISHMESH_ANALYST_MODE
+        value: gateway
+      - op: replace
+        path: /metadata/annotations/fishmesh.io~1agent-mode
+        value: gateway-metrics
