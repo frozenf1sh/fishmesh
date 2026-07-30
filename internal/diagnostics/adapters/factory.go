@@ -9,6 +9,7 @@ import (
 	"github.com/frozenf1sh/fishmesh/internal/diagnostics/application"
 	"github.com/frozenf1sh/fishmesh/internal/diagnostics/config"
 	"github.com/frozenf1sh/fishmesh/internal/diagnostics/domain"
+	kubernetes "github.com/frozenf1sh/fishmesh/internal/platform/kubernetes"
 )
 
 // NewRegistryForConfig 负责组装运行模式，不让 cmd 包了解具体工具实现。
@@ -32,7 +33,7 @@ func NewRegistryForConfig(runtimeConfig config.Config, client *http.Client, cloc
 		needsKubernetesTLS := strings.HasPrefix(runtimeConfig.KubernetesAPIURL, "https://") || os.Getenv("KUBERNETES_SERVICE_HOST") != ""
 		if needsKubernetesTLS {
 			var err error
-			kubernetesClient, err = NewKubernetesHTTPClient(client, runtimeConfig.KubernetesCAFile)
+			kubernetesClient, err = kubernetes.NewHTTPClient(client, runtimeConfig.KubernetesCAFile)
 			if err != nil {
 				return nil, err
 			}

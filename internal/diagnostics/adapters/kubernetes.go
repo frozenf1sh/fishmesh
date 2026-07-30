@@ -2,8 +2,6 @@ package adapters
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -29,31 +27,6 @@ type KubernetesEventsTool struct {
 	TokenFile  string
 	HTTPClient *http.Client
 	Clock      application.Clock
-}
-
-// NewKubernetesHTTPClient clones the caller's timeout settings and adds the
-// projected ServiceAccount CA. It never disables TLS verification.
-func NewKubernetesHTTPClient(base *http.Client, caFile string) (*http.Client, error) {
-	if base == nil {
-		base = http.DefaultClient
-	}
-	caBytes, err := os.ReadFile(caFile)
-	if err != nil {
-		return nil, fmt.Errorf("read Kubernetes CA: %w", err)
-	}
-	pool, err := x509.SystemCertPool()
-	if err != nil || pool == nil {
-		pool = x509.NewCertPool()
-	}
-	if !pool.AppendCertsFromPEM(caBytes) {
-		return nil, fmt.Errorf("append Kubernetes CA: no PEM certificate found")
-	}
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	if configured, ok := base.Transport.(*http.Transport); ok {
-		transport = configured.Clone()
-	}
-	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: pool} //nolint:gosec // CA verification remains enabled.
-	return &http.Client{Transport: transport, Timeout: base.Timeout}, nil
 }
 
 func (t KubernetesEventsTool) Descriptor() domain.ToolDescriptor {

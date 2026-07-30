@@ -27,26 +27,48 @@ const (
 //
 // 所有字段都给了合理默认值，因此零配置也能启动；显式配置通过校验后覆盖默认值。
 type Config struct {
-	ListenAddress    string        // HTTP 监听地址，如 ":8080"
-	UpstreamURL      string        // 上游 vLLM 服务的完整 URL，如上面的 ClusterIP DNS 名
-	RoutingMode      string        // service、prefix-affinity 或 load-aware
-	BackendEndpoints []string      // endpoint 路由模式下的实验 backend URL 列表
-	KeepAlive        bool          // 是否复用 Gateway 到 upstream 的 HTTP 连接
-	RequestTimeout   time.Duration // 单个请求（含流式响应全程）的超时上限
-	ShutdownTimeout  time.Duration // 优雅关停时等待 in-flight 请求完成的上限
+	ListenAddress       string        // HTTP 监听地址，如 ":8080"
+	UpstreamURL         string        // 上游 vLLM 服务的完整 URL，如上面的 ClusterIP DNS 名
+	RoutingMode         string        // service、prefix-affinity 或 load-aware
+	BackendEndpoints    []string      // endpoint 路由模式下的实验 backend URL 列表
+	EndpointDiscovery   string        // static 或 endpointslice
+	EndpointService     string        // EndpointSlice 对应的 Service 名称
+	EndpointNamespace   string        // EndpointSlice 所在 namespace
+	KubernetesAPIURL    string        // 可选；为空时使用 in-cluster API 地址
+	KubernetesToken     string        // ServiceAccount token 文件
+	KubernetesCA        string        // ServiceAccount CA 文件
+	EndpointRefresh     time.Duration // EndpointSlice watch 重连间隔
+	EndpointMaxAge      time.Duration // EndpointSlice 成功快照允许保持 Ready 的最长时间
+	ObservationMode     string        // none 或 prometheus
+	ObservationInterval time.Duration // backend metrics 采集间隔
+	ObservationMaxAge   time.Duration // 快照允许保持 OK 的最长时间
+	KeepAlive           bool          // 是否复用 Gateway 到 upstream 的 HTTP 连接
+	RequestTimeout      time.Duration // 单个请求（含流式响应全程）的超时上限
+	ShutdownTimeout     time.Duration // 优雅关停时等待 in-flight 请求完成的上限
 }
 
 // LoadConfigFromEnvironment 从 FISHMESH_* 环境变量读取配置并校验。
 // 返回的 Config 保证已通过 Validate()，可以直接安全使用。
 func LoadConfigFromEnvironment() (Config, error) {
 	config := Config{
-		ListenAddress:    valueOrDefault("FISHMESH_LISTEN_ADDRESS", defaultListenAddress),
-		UpstreamURL:      valueOrDefault("FISHMESH_UPSTREAM_URL", defaultUpstreamURL),
-		RoutingMode:      valueOrDefault("FISHMESH_ROUTING_MODE", defaultRoutingMode),
-		BackendEndpoints: backendEndpointsFromEnvironment(),
-		KeepAlive:        boolOrDefault("FISHMESH_UPSTREAM_KEEPALIVE", false),
-		RequestTimeout:   durationOrDefault("FISHMESH_REQUEST_TIMEOUT", 90*time.Second),
-		ShutdownTimeout:  durationOrDefault("FISHMESH_SHUTDOWN_TIMEOUT", 30*time.Second),
+		ListenAddress:       valueOrDefault("FISHMESH_LISTEN_ADDRESS", defaultListenAddress),
+		UpstreamURL:         valueOrDefault("FISHMESH_UPSTREAM_URL", defaultUpstreamURL),
+		RoutingMode:         valueOrDefault("FISHMESH_ROUTING_MODE", defaultRoutingMode),
+		BackendEndpoints:    backendEndpointsFromEnvironment(),
+		EndpointDiscovery:   valueOrDefault("FISHMESH_ENDPOINT_DISCOVERY", "static"),
+		EndpointService:     valueOrDefault("FISHMESH_ENDPOINT_SERVICE", "qwen-vllm"),
+		EndpointNamespace:   valueOrDefault("FISHMESH_ENDPOINT_NAMESPACE", "kubellm"),
+		KubernetesAPIURL:    strings.TrimSpace(os.Getenv("FISHMESH_KUBERNETES_API_URL")),
+		KubernetesToken:     valueOrDefault("FISHMESH_KUBERNETES_TOKEN_FILE", "/var/run/secrets/kubernetes.io/serviceaccount/token"),
+		KubernetesCA:        valueOrDefault("FISHMESH_KUBERNETES_CA_FILE", "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"),
+		EndpointRefresh:     durationOrDefault("FISHMESH_ENDPOINT_REFRESH_INTERVAL", 30*time.Second),
+		EndpointMaxAge:      durationOrDefault("FISHMESH_ENDPOINT_MAX_AGE", 90*time.Second),
+		ObservationMode:     valueOrDefault("FISHMESH_BACKEND_OBSERVATION_MODE", "none"),
+		ObservationInterval: durationOrDefault("FISHMESH_BACKEND_OBSERVATION_INTERVAL", 15*time.Second),
+		ObservationMaxAge:   durationOrDefault("FISHMESH_BACKEND_OBSERVATION_MAX_AGE", 45*time.Second),
+		KeepAlive:           boolOrDefault("FISHMESH_UPSTREAM_KEEPALIVE", false),
+		RequestTimeout:      durationOrDefault("FISHMESH_REQUEST_TIMEOUT", 90*time.Second),
+		ShutdownTimeout:     durationOrDefault("FISHMESH_SHUTDOWN_TIMEOUT", 30*time.Second),
 	}
 	return config, config.Validate()
 }
@@ -73,10 +95,30 @@ func (c Config) Validate() error {
 		// Preserve zero-value Config behavior used by unit tests and local callers.
 		return nil
 	}
+	if c.EndpointDiscovery != "" && c.EndpointDiscovery != "static" && c.EndpointDiscovery != "endpointslice" {
+		return fmt.Errorf("endpoint discovery must be static or endpointslice: %q", c.EndpointDiscovery)
+	}
+	if c.EndpointDiscovery == "endpointslice" && c.EndpointRefresh <= 0 {
+		return fmt.Errorf("endpoint refresh interval must be positive")
+	}
+	if c.EndpointDiscovery == "endpointslice" && c.EndpointMaxAge <= 0 {
+		return fmt.Errorf("endpoint max age must be positive")
+	}
+	if c.ObservationMode != "" && c.ObservationMode != "none" && c.ObservationMode != "prometheus" {
+		return fmt.Errorf("backend observation mode must be none or prometheus: %q", c.ObservationMode)
+	}
+	if c.ObservationMode == "prometheus" && (c.ObservationInterval <= 0 || c.ObservationMaxAge <= 0) {
+		return fmt.Errorf("backend observation interval and max age must be positive")
+	}
 	if c.RoutingMode != "service" && c.RoutingMode != "prefix-hash" && c.RoutingMode != "prefix-affinity" && c.RoutingMode != "load-aware" {
 		return fmt.Errorf("routing mode must be service, prefix-affinity, or load-aware: %q", c.RoutingMode)
 	}
-	if c.RoutingMode == "prefix-hash" || c.RoutingMode == "prefix-affinity" || c.RoutingMode == "load-aware" {
+	if c.EndpointDiscovery == "endpointslice" {
+		if strings.TrimSpace(c.EndpointService) == "" || strings.TrimSpace(c.EndpointNamespace) == "" {
+			return fmt.Errorf("EndpointSlice discovery requires service and namespace")
+		}
+	}
+	if c.EndpointDiscovery == "static" && (c.RoutingMode == "prefix-hash" || c.RoutingMode == "prefix-affinity" || c.RoutingMode == "load-aware") {
 		if len(c.BackendEndpoints) < 1 {
 			return fmt.Errorf("%s routing requires at least one backend endpoint", c.RoutingMode)
 		}

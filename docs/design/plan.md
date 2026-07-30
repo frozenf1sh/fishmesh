@@ -86,7 +86,7 @@ Cluster Analyst Agent 每 30–60 秒或在异常触发时运行，输入：
 
 ```text
 internal/serving/routing/   # Strategy、Backend、Snapshot、Decision
-internal/serving/endpoint/  # Resolver；当前 Static，后续 EndpointSlice
+internal/serving/endpoint/  # Resolver；Static + EndpointSlice watcher
 internal/serving/transport/ # 每个 backend 的 HTTP client/keepalive 生命周期
 internal/serving/gateway/    # HTTP/SSE 代理、请求生命周期和 metrics
 internal/workload/loadgen/   # 可重复工作负载与 JSONL artifact
@@ -94,7 +94,7 @@ internal/diagnostics/        # domain/application/adapters/delivery/config
 ```
 
 Gateway 只负责组合这些边界，不再在 HTTP handler 中直接实现 hash、连接池和 endpoint
-状态。这样后续接入 vLLM metrics 或 EndpointSlice 时，可以替换 resolver/snapshot，而不
+状态。这样后续接入 vLLM/GPU metrics 或 Hybrid policy 时，可以替换 resolver/snapshot，而不
 改变请求协议和 Loadgen。
 
 ## 4. MVP 最终边界
@@ -110,7 +110,7 @@ Gateway 只负责组合这些边界，不再在 HTTP handler 中直接实现 has
 
 - `RouteStrategy`、`BackendResolver`、`TransportProvider` 三个接口；
 - Service、Prefix Affinity、In-flight Load-aware 三种策略；
-- EndpointSlice Ready watch，替代 Pod IP 快照；
+- EndpointSlice Ready watch，替代 Pod IP 快照；已完成第一版并保留 static fallback；
 - 健康检查、fallback、热点保护和连接池上限；
 - 通过 vLLM `/metrics` 接入 queue/running、TTFT、Prefix Cache 和 GPU 数据。
 
@@ -125,7 +125,10 @@ Gateway 只负责组合这些边界，不再在 HTTP handler 中直接实现 has
 
 ### Tier 1：正式 Hybrid Scheduler
 
-把当前三个策略统一为 score-based policy，使用 EWMA TTFT、queue headroom、GPU free memory、Prefix Cache hit 和错误率；对热点 prefix 设置 TTL 和最大并发，防止把所有请求压到一个 Pod。
+把当前三个策略统一为 score-based policy，使用 Backend Snapshot 中的 EWMA TTFT、queue
+headroom、GPU free memory、Prefix Cache hit 和错误率；对热点 prefix 设置 TTL 和最大并发，
+防止把所有请求压到一个 Pod。当前快照已完成 vLLM per-backend 对齐，GPU/node identity
+mapping 和 freshness 门控仍待补齐。
 
 ### Tier 2：Kernel Telemetry
 
@@ -153,18 +156,36 @@ Agent 只提交 `Recommendation`，由策略门控和 Controller 决定是否应
 - 所有策略都必须有 Service fallback、超时、健康状态和资源上限。
 - 所有 GPU 实验前先验证内核、DKMS、NVML、CDI、device plugin 和 vLLM readiness。
 
-## 7. 最终实施顺序
+## 7. 当前迭代记录（2026-08-09）
 
-1. 提交并固化当前 Loadgen 热点分布和 Gateway load-aware 原型。
-2. 把静态 endpoint resolver 替换为 namespace-scoped EndpointSlice watcher。
-3. 接入 vLLM metrics 和 GPU exporter，形成真正的 backend snapshot。
-4. 实现 Hybrid Scheduler，并用本报告的 hot/mixed/saturation 负载重新验证。
-5. 实现只读 Cluster Analyst Agent 和结构化 Recommendation。
-6. 在 Shadow/Simulation 中验证 Agent 建议，最后再考虑 guarded actuation。
+本轮完成了从动态地址到可审计 backend snapshot 的连续链路：
+
+1. EndpointSlice resolver 保留 Pod `targetRef`，并记录最近成功时间、resourceVersion、
+   错误和 Ready backend 数；watch 之外增加周期性 relist，避免无事件长连接阻塞恢复；
+2. 新增 Kubernetes identity provider，以一次 namespace-scoped Pod list 建立
+   `backend ID -> Pod -> Node -> declared GPU request` 映射；
+3. Gateway `/metrics` 暴露 identity、GPU request、discovery status/freshness，缓存超过
+   `FISHMESH_ENDPOINT_MAX_AGE` 后 `/readyz` 返回 503；
+4. K3s 正常验证两个 backend 均映射到 `fishmesh-gpu`，GPU request 均为 1；临时撤销 RoleBinding
+   后状态变为 `degraded/503`，恢复权限后约一个刷新周期自动回到 `ok/200`；
+5. 验证完成后已恢复默认 Service + keep-alive baseline，删除实验 RBAC。
+
+当前边界：GPU request 是声明值，不是实时利用率；必须先把 DCGM/NVIDIA exporter 的
+   node/device label 与 Pod identity 对齐，才能把 GPU headroom 纳入调度分数。
+
+## 8. 最终实施顺序
+
+1. 完成 GPU exporter node/device label 与 Pod→Node 身份链路的对应验证；
+2. 实现 Hybrid Scheduler score，加入 queue、TTFT、Prefix Cache、GPU headroom 和 discovery
+   failure penalty，并保持 Service fallback；
+3. 用 hot/mixed/saturation 负载重新验证 P50/P95/P99、成功率和 backend 分布；
+4. 实现只读 Cluster Analyst Agent 和结构化 Recommendation；
+5. 在 Shadow/Simulation 中验证 Agent 建议，最后再考虑 guarded actuation。
 
 项目完成的标准不是“所有模块都存在”，而是能够用实验回答：何时 Keepalive 足够、何时 Prefix Affinity 值得付出复杂度、何时负载和故障信号必须覆盖语义局部性，以及 Agent 的建议是否有可审计证据。
 
 当前 Agent 骨架已落地在 `cmd/fishmesh-analyst` 与 `internal/diagnostics`：它以结构化
 `Incident -> Tool Signal -> RulePolicy -> Diagnosis` 验证控制面契约，默认 demo 模式
-可重复，`gateway-metrics` overlay 可接入 Gateway `/metrics`。LLM narrator、vLLM/GPU/
-Kubernetes/eBPF collectors 和 guarded actuator 仍按上面的分层顺序推进。
+可重复，`gateway-metrics` 与 `observability` overlay 可接入 Gateway、vLLM、GPU 和
+Kubernetes 只读信号。LLM narrator、eBPF collector 和 guarded actuator 仍按上面的分层
+顺序推进。

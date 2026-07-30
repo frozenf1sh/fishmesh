@@ -6,6 +6,7 @@ package endpoint
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/frozenf1sh/fishmesh/internal/serving/routing"
 )
@@ -13,6 +14,21 @@ import (
 // Resolver returns a point-in-time backend snapshot.
 type Resolver interface {
 	Snapshot(context.Context) ([]routing.Backend, error)
+	Status() ResolverStatus
+	Close() error
+}
+
+// ResolverStatus describes discovery freshness independently from the cached
+// backend list. A temporary API outage can keep serving cached endpoints while
+// exposing degraded status; callers decide when the cache is too old for
+// readiness.
+type ResolverStatus struct {
+	Status          routing.ObservationStatus
+	LastSuccess     time.Time
+	LastError       string
+	Freshness       time.Duration
+	ReadyBackends   int
+	ResourceVersion string
 }
 
 type staticResolver struct{ backends []routing.Backend }
@@ -35,3 +51,9 @@ func NewStatic(backends []routing.Backend) (Resolver, error) {
 func (r staticResolver) Snapshot(context.Context) ([]routing.Backend, error) {
 	return append([]routing.Backend(nil), r.backends...), nil
 }
+
+func (r staticResolver) Status() ResolverStatus {
+	return ResolverStatus{Status: routing.ObservationOK, ReadyBackends: len(r.backends)}
+}
+
+func (staticResolver) Close() error { return nil }

@@ -1,0 +1,55 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: kubellm
+resources:
+  - ../../baseline/base
+  - rbac.yaml
+patches:
+  - target:
+      kind: ConfigMap
+      name: fishmesh-gateway-config
+    patch: |-
+      - op: replace
+        path: /data/FISHMESH_ROUTING_MODE
+        value: prefix-affinity
+      - op: replace
+        path: /data/FISHMESH_ENDPOINT_DISCOVERY
+        value: endpointslice
+      - op: replace
+        path: /data/FISHMESH_ENDPOINT_SERVICE
+        value: qwen-vllm
+      - op: replace
+        path: /data/FISHMESH_ENDPOINT_NAMESPACE
+        value: kubellm
+      - op: replace
+        path: /data/FISHMESH_ENDPOINT_REFRESH_INTERVAL
+        value: 10s
+      - op: replace
+        path: /data/FISHMESH_ENDPOINT_MAX_AGE
+        value: 30s
+      - op: replace
+        path: /data/FISHMESH_BACKEND_ENDPOINTS
+        value: ""
+      - op: replace
+        path: /metadata/annotations/fishmesh.io~1routing-mode
+        value: prefix-affinity-endpointslice
+      - op: replace
+        path: /metadata/annotations/fishmesh.io~1config-version
+        value: v3-endpointslice-experiment
+  - target:
+      kind: ServiceAccount
+      name: fishmesh-gateway
+    patch: |-
+      - op: replace
+        path: /automountServiceAccountToken
+        value: true
+      - op: add
+        path: /metadata/annotations/fishmesh.io~1security-note
+        value: "namespace-scoped read-only EndpointSlice observation"
+  - target:
+      kind: Deployment
+      name: fishmesh-gateway
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/automountServiceAccountToken
+        value: true

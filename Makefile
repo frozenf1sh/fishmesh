@@ -16,6 +16,8 @@ manifest:
 	kubectl kustomize deploy/analyst/base >/dev/null
 	kubectl kustomize deploy/analyst/gateway-metrics >/dev/null
 	kubectl kustomize deploy/analyst/observability >/dev/null
+	kubectl kustomize deploy/experiments/endpoint-slice >/dev/null
+	kubectl kustomize deploy/experiments/backend-snapshot >/dev/null
 
 ci: test vet build manifest
 

@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
+	"time"
 )
 
 const (
@@ -22,8 +23,53 @@ const (
 // ID is intentionally separate from URL so logs and metrics do not depend on
 // URL formatting.
 type Backend struct {
-	ID  string
-	URL string
+	ID       string
+	URL      string
+	Metadata map[string]string
+}
+
+// BackendIdentity links a resolved address to Kubernetes workload identity.
+// GPURequested is the declared resource request, not live utilization; a
+// separate node-level exporter must provide utilization before a scheduler can
+// use it as a score input.
+type BackendIdentity struct {
+	PodName      string
+	NodeName     string
+	GPURequested float64
+	Ready        bool
+	Status       ObservationStatus
+	Error        string
+}
+
+// ObservationStatus describes the quality of a backend's latest telemetry.
+// It is intentionally a string in the routing contract so exporters and
+// future policies can preserve unknown states without a package-wide enum
+// migration.
+type ObservationStatus string
+
+const (
+	ObservationOK          ObservationStatus = "ok"
+	ObservationDegraded    ObservationStatus = "degraded"
+	ObservationUnavailable ObservationStatus = "unavailable"
+)
+
+// BackendObservation is the low-cardinality, per-backend telemetry contract.
+// The routing package owns the shape; infrastructure adapters own how values
+// are collected. Zero-valued numeric fields mean "not observed", not zero
+// load, and Status/Error make that distinction explicit.
+type BackendObservation struct {
+	Identity            BackendIdentity
+	Status              ObservationStatus
+	Source              string
+	ObservedAt          time.Time
+	Freshness           time.Duration
+	QueueLength         float64
+	RunningRequests     float64
+	PrefixCacheHitRate  float64
+	TTFTP95Milliseconds float64
+	GPUUtilization      float64
+	GPUMemoryUsage      float64
+	Error               string
 }
 
 // Snapshot is the gateway's read-only view of the current backend state.
@@ -31,8 +77,9 @@ type Backend struct {
 // information. Future EndpointSlice/vLLM metric adapters can add state without
 // changing the Strategy interface.
 type Snapshot struct {
-	Backends []Backend
-	Inflight map[string]int64
+	Backends     []Backend
+	Inflight     map[string]int64
+	Observations map[string]BackendObservation
 }
 
 // Decision records the selected backend and an explainable reason.

@@ -33,7 +33,8 @@ Workload Context
 
 - `internal/serving/gateway`：请求路径应用服务和 HTTP/SSE 交付；负责生命周期、fallback、metrics。
 - `internal/serving/routing`：纯函数式策略；只认识 `Backend` 和 `Snapshot`。
-- `internal/serving/endpoint`：后端发现端口；当前是静态 resolver，后续替换为 EndpointSlice。
+- `internal/serving/endpoint`：后端发现端口；提供静态 resolver 和 namespace-scoped
+  EndpointSlice watcher，二者由 Gateway 配置选择。
 - `internal/serving/transport`：HTTP client/keep-alive 生命周期，不参与路由决策。
 
 ### Diagnostics Context
@@ -67,7 +68,7 @@ domain -> standard library only
 ## 4. 为什么不是进一步拆成更多服务
 
 当前 Gateway、Loadgen、Analyst 的运行时边界已经清晰，但 EndpointSlice watcher、指标
-采集器和 Agent actuator 尚未成熟。现在只收紧 Go 包边界，不增加进程、数据库、消息队列
+聚合和 Agent actuator 尚未成熟。现在只收紧 Go 包边界，不增加进程、数据库、消息队列
 或 CRD。等出现独立扩缩容、独立权限或故障隔离需求时，再拆成服务或 Operator。
 
 ## 5. 下一阶段实施顺序
@@ -85,14 +86,29 @@ domain -> standard library only
 
 ### N2：EndpointSlice resolver
 
-将 `internal/serving/endpoint` 的静态实现替换为 namespace-scoped EndpointSlice watcher，
-保持 `Resolver` 接口和 Gateway 请求协议不变。先做只读缓存、Ready 过滤、原子快照和
-Service fallback，再做故障演练。
+已完成第一版 namespace-scoped EndpointSlice watcher：使用最小 `get/list/watch` RBAC，
+只接受 Ready 的 IPv4/IPv6 地址，按地址和端口生成稳定 backend ID，使用锁保护快照，并
+在 watch 断开后重新 list。Gateway 的 `Resolver` 接口和请求协议没有改变；动态 backend
+URL 不再依赖静态 Pod IP 映射，非法或缺失地址会回退到 Service。Kustomize 实验入口为
+`deploy/experiments/endpoint-slice`，默认 baseline 仍然是 Service + keep-alive。
+
+2026-08-09 已在真实 K3s 验证：EndpointSlice 返回两个 Ready vLLM 地址，Gateway Pod 成功
+通过 ServiceAccount 读取资源，`/v1/models` 返回 `X-FishMesh-Routing-Mode: prefix-affinity`
+和稳定的 `X-FishMesh-Backend-ID: endpoint-*`。验证后已恢复 baseline 并删除实验 RBAC。
 
 ### N3：Hybrid Scheduler
 
-把当前 Service、Prefix Affinity、Load-aware 三个策略统一成可解释 score policy，输入
-仅使用经过采样/聚合的 backend snapshot；Agent 只能提出 Recommendation，不直接改策略。
+Backend Snapshot 第一版已完成：EndpointSlice backend ID 与每个 vLLM `/metrics` 的 queue、
+running、Prefix Cache、TTFT 和 vLLM GPU cache usage 已对齐，并暴露 freshness/error；当前
+快照只作为观测，不改变 Prefix Affinity。Pod/Node 身份和 EndpointSlice 断连状态已具备；
+下一步验证 GPU exporter label 对齐，再把 Service、Prefix Affinity、Load-aware 三个策略
+统一成可解释 score policy。
+Agent 只能提出 Recommendation，不直接改策略。
+
+阶段 04 已完成身份与故障状态基础：backend 保留 Pod targetRef，Pod list 映射 Node 和声明
+GPU request；EndpointSlice status/freshness 进入 Prometheus，缓存超过 max age 后 readiness
+返回 503；watch 之外增加周期性 relist，RBAC 恢复后可自动回到 `ok/200`。实时 GPU 利用率
+仍必须等待 exporter 的 Pod/device label 映射。
 
 ### N4：诊断闭环
 

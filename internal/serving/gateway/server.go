@@ -13,10 +13,14 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
+	kubernetes "github.com/frozenf1sh/fishmesh/internal/platform/kubernetes"
 	"github.com/frozenf1sh/fishmesh/internal/serving/endpoint"
+	"github.com/frozenf1sh/fishmesh/internal/serving/identity"
+	"github.com/frozenf1sh/fishmesh/internal/serving/observation"
 	"github.com/frozenf1sh/fishmesh/internal/serving/routing"
 	"github.com/frozenf1sh/fishmesh/internal/serving/transport"
 	"github.com/prometheus/client_golang/prometheus"
@@ -27,16 +31,18 @@ import (
 // transport reuse and metrics are separate boundaries so future EndpointSlice,
 // vLLM-metrics and hybrid policies do not require rewriting the proxy.
 type Server struct {
-	config      Config
-	service     routing.Backend
-	resolver    endpoint.Resolver
-	strategy    routing.Strategy
-	backendURLs map[string]*url.URL
-	pool        *transport.Pool
-	inflight    map[string]*atomic.Int64
-	metrics     *metrics
-	logger      *slog.Logger
-	registry    *prometheus.Registry
+	config       Config
+	service      routing.Backend
+	resolver     endpoint.Resolver
+	strategy     routing.Strategy
+	backendURLs  map[string]*url.URL
+	pool         *transport.Pool
+	observations *observation.Service
+	inflight     map[string]*atomic.Int64
+	inflightMu   sync.RWMutex
+	metrics      *metrics
+	logger       *slog.Logger
+	registry     *prometheus.Registry
 }
 
 type routeDecision struct {
@@ -60,7 +66,6 @@ func NewServer(config Config, logger *slog.Logger) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	backendURLs := map[string]*url.URL{service.ID: upstream}
 	backends := make([]routing.Backend, 0, len(config.BackendEndpoints))
 	for index, rawEndpoint := range config.BackendEndpoints {
@@ -73,13 +78,55 @@ func NewServer(config Config, logger *slog.Logger) (*Server, error) {
 		backendURLs[backend.ID] = parsed
 	}
 	var resolver endpoint.Resolver
-	resolverBackends := backends
-	if len(resolverBackends) == 0 {
-		resolverBackends = []routing.Backend{service}
+	var kubernetesClient *http.Client
+	if config.EndpointDiscovery == "endpointslice" {
+		kubernetesClient = http.DefaultClient
+		if config.KubernetesCA != "" {
+			kubernetesClient, err = kubernetes.NewHTTPClient(kubernetesClient, config.KubernetesCA)
+			if err != nil {
+				return nil, err
+			}
+		}
+		resolver, err = endpoint.NewEndpointSlice(endpoint.EndpointSliceConfig{
+			Namespace: config.EndpointNamespace, ServiceName: config.EndpointService,
+			BaseURL: config.KubernetesAPIURL, TokenFile: config.KubernetesToken,
+			CAFile: config.KubernetesCA, HTTPClient: kubernetesClient, RefreshInterval: config.EndpointRefresh,
+		})
+	} else {
+		resolverBackends := backends
+		if len(resolverBackends) == 0 {
+			resolverBackends = []routing.Backend{service}
+		}
+		resolver, err = endpoint.NewStatic(resolverBackends)
 	}
-	resolver, err = endpoint.NewStatic(resolverBackends)
 	if err != nil {
 		return nil, err
+	}
+	var observations *observation.Service
+	if config.ObservationMode == "prometheus" {
+		var identityProvider observation.IdentityProvider
+		if config.EndpointDiscovery == "endpointslice" {
+			identityProvider, err = identity.New(identity.Config{
+				Namespace: config.EndpointNamespace, BaseURL: config.KubernetesAPIURL,
+				TokenFile: config.KubernetesToken, CAFile: config.KubernetesCA,
+				HTTPClient: kubernetesClient,
+			})
+			if err != nil {
+				_ = resolver.Close()
+				return nil, err
+			}
+		}
+		observations, err = observation.New(observation.Config{
+			Resolver:  resolver,
+			Collector: observation.PrometheusCollector{HTTPClient: http.DefaultClient},
+			Identity:  identityProvider,
+			Interval:  config.ObservationInterval,
+			MaxAge:    config.ObservationMaxAge,
+		})
+		if err != nil {
+			_ = resolver.Close()
+			return nil, err
+		}
 	}
 
 	inflight := make(map[string]*atomic.Int64, len(backends)+1)
@@ -90,9 +137,10 @@ func NewServer(config Config, logger *slog.Logger) (*Server, error) {
 	registry := prometheus.NewRegistry()
 	return &Server{
 		config: config, service: service, resolver: resolver, strategy: strategy,
-		backendURLs: backendURLs,
-		pool:        transport.NewPool(transport.Config{KeepAlive: config.KeepAlive, RequestTimeout: config.RequestTimeout}),
-		inflight:    inflight, metrics: newMetrics(registry), logger: logger,
+		backendURLs:  backendURLs,
+		pool:         transport.NewPool(transport.Config{KeepAlive: config.KeepAlive, RequestTimeout: config.RequestTimeout}),
+		observations: observations,
+		inflight:     inflight, metrics: newMetrics(registry), logger: logger,
 		registry: registry,
 	}, nil
 }
@@ -100,8 +148,20 @@ func NewServer(config Config, logger *slog.Logger) (*Server, error) {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(writer http.ResponseWriter, _ *http.Request) { writer.WriteHeader(http.StatusOK) })
-	mux.HandleFunc("GET /readyz", func(writer http.ResponseWriter, _ *http.Request) { writer.WriteHeader(http.StatusOK) })
-	mux.Handle("GET /metrics", promhttp.HandlerFor(s.registry, promhttp.HandlerOpts{}))
+	mux.HandleFunc("GET /readyz", func(writer http.ResponseWriter, _ *http.Request) {
+		if !s.ready() {
+			writer.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		writer.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("GET /metrics", func(writer http.ResponseWriter, request *http.Request) {
+		if s.observations != nil {
+			s.metrics.UpdateBackendObservations(s.observations.Snapshot())
+		}
+		s.metrics.UpdateEndpointDiscovery(s.resolver.Status())
+		promhttp.HandlerFor(s.registry, promhttp.HandlerOpts{}).ServeHTTP(writer, request)
+	})
 	mux.HandleFunc("/v1/", s.proxy)
 	return mux
 }
@@ -109,6 +169,12 @@ func (s *Server) Handler() http.Handler {
 // Close releases gateway-owned transport resources. In-flight requests are
 // still governed by http.Server.Shutdown; this method only closes idle pools.
 func (s *Server) Close() {
+	if s.observations != nil {
+		_ = s.observations.Close()
+	}
+	if s.resolver != nil {
+		_ = s.resolver.Close()
+	}
 	if s.pool != nil {
 		s.pool.Close()
 	}
@@ -173,31 +239,68 @@ func (s *Server) route(ctx context.Context, prefixKey string) routeDecision {
 	if err != nil {
 		backends = nil
 	}
-	snapshot := routing.Snapshot{Backends: backends, Inflight: make(map[string]int64, len(s.inflight))}
+	snapshot := routing.Snapshot{Backends: backends, Inflight: make(map[string]int64)}
+	if s.observations != nil {
+		snapshot.Observations = s.observations.Snapshot()
+		s.metrics.UpdateBackendObservations(snapshot.Observations)
+	}
+	s.metrics.UpdateEndpointDiscovery(s.resolver.Status())
+	s.inflightMu.RLock()
 	for id, value := range s.inflight {
 		snapshot.Inflight[id] = value.Load()
 	}
+	s.inflightMu.RUnlock()
 	decision, err := s.strategy.Select(prefixKey, snapshot)
 	if err != nil || decision.Backend.ID == "" {
 		decision = routing.Decision{Backend: s.service, Reason: "strategy-fallback"}
 		s.metrics.routeFallbacks.Inc()
 	}
 	upstream := s.backendURLs[decision.Backend.ID]
+	if upstream == nil && decision.Backend.URL != "" {
+		upstream, err = url.Parse(decision.Backend.URL)
+		if err != nil || (upstream.Scheme != "http" && upstream.Scheme != "https") || upstream.Host == "" {
+			upstream = nil
+		}
+	}
 	if upstream == nil {
 		decision = routing.Decision{Backend: s.service, Reason: "backend-fallback"}
 		upstream = s.backendURLs[s.service.ID]
 		s.metrics.routeFallbacks.Inc()
 	}
-	state := s.inflight[decision.Backend.ID]
-	if state == nil {
-		state = s.inflight[s.service.ID]
-	}
+	state := s.inflightCounter(decision.Backend.ID)
 	state.Add(1)
 	backend := decision.Backend
 	return routeDecision{
 		backend: backend, reason: decision.Reason, upstream: upstream, client: s.pool.ClientFor(backend),
 		release: func() { state.Add(-1) },
 	}
+}
+
+func (s *Server) ready() bool {
+	status := s.resolver.Status()
+	if status.Status == routing.ObservationUnavailable {
+		return false
+	}
+	if s.config.EndpointDiscovery == "endpointslice" && status.Freshness > s.config.EndpointMaxAge {
+		return false
+	}
+	return true
+}
+
+func (s *Server) inflightCounter(backendID string) *atomic.Int64 {
+	s.inflightMu.RLock()
+	counter := s.inflight[backendID]
+	s.inflightMu.RUnlock()
+	if counter != nil {
+		return counter
+	}
+	s.inflightMu.Lock()
+	defer s.inflightMu.Unlock()
+	if counter = s.inflight[backendID]; counter == nil {
+		counter = &atomic.Int64{}
+		s.inflight[backendID] = counter
+	}
+	return counter
 }
 
 func (s *Server) newUpstreamRequest(request *http.Request, requestID string, upstream *url.URL) (*http.Request, context.CancelFunc, error) {

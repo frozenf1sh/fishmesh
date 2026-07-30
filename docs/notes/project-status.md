@@ -18,7 +18,7 @@ OrbStack 内置的 Kubernetes 集群不是这个多节点 control plane。官方
 
 - `qwen-vllm` 有两个 Ready Pod，提供本地缓存的 Qwen2.5-0.5B-Instruct；
 - `qwen-vllm-baseline` 是普通 ClusterIP Service，负责随机的连接级 endpoint 选择；
-  `qwen-vllm` 仍然是 headless Service，为后续直接 endpoint routing 保留；
+  `qwen-vllm` 仍然是 headless Service，EndpointSlice 实验直接读取它的 Ready 地址；
 - `fishmesh-gateway` 是一个 Go streaming proxy，运行在 GPU 节点。它不申请 GPU，
   但因为第一个镜像是 amd64 而 control plane 是 ARM64，所以被放在该节点；
 - `fishmesh-analyst` 是同镜像中的只读慢速控制面，当前以 `observability` overlay 运行在
@@ -97,15 +97,25 @@ VM 的影响更大：Kubernetes API 和 reconciliation 也会停止，应按完�
 - N1 真实观测适配器：vLLM/GPU Prometheus、Kubernetes Events/Pod 状态和显式
   `insufficient_observability` 缺口诊断已完成单元测试；observability overlay 已在 K3s
   部署验证，vLLM 与 Kubernetes signals 返回 `ok`。
+- N2 EndpointSlice 第一版：Gateway 支持 namespace-scoped watch/list、Ready 过滤、稳定
+  backend ID、动态 in-flight counter 和 Service fallback；实验 overlay 已在 K3s 验证
+  `/v1/models` 返回 `prefix-affinity` 与 `endpoint-*`，验证后已恢复 baseline。
+- N3 Backend Snapshot 第一版：按 EndpointSlice backend ID 采集对应 vLLM `/metrics`，暴露
+  queue、running、Prefix Cache、TTFT、status 和 freshness；backend-snapshot overlay 已在
+  K3s 验证两个副本均为 `status=ok`，验证后已恢复 baseline。
+- N4 身份映射与故障状态：backend targetRef 已映射到 Pod、Node 和声明 GPU request；discovery
+  status/freshness/ready backend 已进入 Gateway metrics，EndpointSlice 缓存过期会让 `/readyz`
+  返回 503；临时撤销 RoleBinding 后状态变为 `degraded/503`，恢复权限后约一个刷新周期
+  自动回到 `ok/200`。
 
 ## 下一步待办
 
-1. 将 observability overlay 在 K3s 中实际运行，校验 vLLM metrics 和 namespace-scoped RBAC；
+1. 将 GPU exporter 的 node/device label 与 Pod→Node 身份链路对应，确认可以安全关联实时 GPU
+   指标；
 2. 在用户态实现 V1 prefix-aware routing：稳定的 prefix canonicalization、碰撞安全的
    key、带 TTL 的 endpoint registry、selected-endpoint/fallback 计数器，并与当前
    random-Service control group 做对照实验；
-3. 决定第一版 registry 使用进程内 controller，还是使用 watch EndpointSlices 的小型
-   Kubernetes controller；在测量需要持久化前，不引入数据库；
+3. 验证 GPU exporter 的 node/device label 是否能与 Pod→Node 身份链路可靠对应；
 4. 增加可重复的 benchmark manifest 和分析，比较 warm-prefix/cold-prefix TTFT、replica
    placement、错误率和 cache-hit evidence；
 5. 只有 V1 得到有意义的统计结果后，再实现 eBPF marked-socket data plane；
