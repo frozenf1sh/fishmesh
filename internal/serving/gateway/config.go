@@ -50,6 +50,34 @@ type Config struct {
 // LoadConfigFromEnvironment 从 FISHMESH_* 环境变量读取配置并校验。
 // 返回的 Config 保证已通过 Validate()，可以直接安全使用。
 func LoadConfigFromEnvironment() (Config, error) {
+	endpointRefresh, err := durationFromEnvironment("FISHMESH_ENDPOINT_REFRESH_INTERVAL", 30*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	endpointMaxAge, err := durationFromEnvironment("FISHMESH_ENDPOINT_MAX_AGE", 90*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	observationInterval, err := durationFromEnvironment("FISHMESH_BACKEND_OBSERVATION_INTERVAL", 15*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	observationMaxAge, err := durationFromEnvironment("FISHMESH_BACKEND_OBSERVATION_MAX_AGE", 45*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	keepAlive, err := boolFromEnvironment("FISHMESH_UPSTREAM_KEEPALIVE", false)
+	if err != nil {
+		return Config{}, err
+	}
+	requestTimeout, err := durationFromEnvironment("FISHMESH_REQUEST_TIMEOUT", 90*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	shutdownTimeout, err := durationFromEnvironment("FISHMESH_SHUTDOWN_TIMEOUT", 30*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
 	config := Config{
 		ListenAddress:       valueOrDefault("FISHMESH_LISTEN_ADDRESS", defaultListenAddress),
 		UpstreamURL:         valueOrDefault("FISHMESH_UPSTREAM_URL", defaultUpstreamURL),
@@ -61,14 +89,14 @@ func LoadConfigFromEnvironment() (Config, error) {
 		KubernetesAPIURL:    strings.TrimSpace(os.Getenv("FISHMESH_KUBERNETES_API_URL")),
 		KubernetesToken:     valueOrDefault("FISHMESH_KUBERNETES_TOKEN_FILE", "/var/run/secrets/kubernetes.io/serviceaccount/token"),
 		KubernetesCA:        valueOrDefault("FISHMESH_KUBERNETES_CA_FILE", "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"),
-		EndpointRefresh:     durationOrDefault("FISHMESH_ENDPOINT_REFRESH_INTERVAL", 30*time.Second),
-		EndpointMaxAge:      durationOrDefault("FISHMESH_ENDPOINT_MAX_AGE", 90*time.Second),
+		EndpointRefresh:     endpointRefresh,
+		EndpointMaxAge:      endpointMaxAge,
 		ObservationMode:     valueOrDefault("FISHMESH_BACKEND_OBSERVATION_MODE", "none"),
-		ObservationInterval: durationOrDefault("FISHMESH_BACKEND_OBSERVATION_INTERVAL", 15*time.Second),
-		ObservationMaxAge:   durationOrDefault("FISHMESH_BACKEND_OBSERVATION_MAX_AGE", 45*time.Second),
-		KeepAlive:           boolOrDefault("FISHMESH_UPSTREAM_KEEPALIVE", false),
-		RequestTimeout:      durationOrDefault("FISHMESH_REQUEST_TIMEOUT", 90*time.Second),
-		ShutdownTimeout:     durationOrDefault("FISHMESH_SHUTDOWN_TIMEOUT", 30*time.Second),
+		ObservationInterval: observationInterval,
+		ObservationMaxAge:   observationMaxAge,
+		KeepAlive:           keepAlive,
+		RequestTimeout:      requestTimeout,
+		ShutdownTimeout:     shutdownTimeout,
 	}
 	return config, config.Validate()
 }
@@ -140,32 +168,31 @@ func valueOrDefault(key, fallback string) string {
 	return fallback
 }
 
-// durationOrDefault 读取并解析 duration 类型环境变量（如 "90s"、"5m"）。
-// 与 valueOrDefault 不同，这里解析失败也是静默回退默认值，而不是报错：
-// 超时属于"可容忍的笔误"级别的问题，不值得让整个进程拒绝启动；
-// 真正致命的问题由 Validate() 负责拦截。
-func durationOrDefault(key string, fallback time.Duration) time.Duration {
+// durationFromEnvironment only uses the fallback when the variable is absent.
+// An explicitly configured but malformed value is a deployment error and must
+// fail startup instead of silently changing scheduler or timeout semantics.
+func durationFromEnvironment(key string, fallback time.Duration) (time.Duration, error) {
 	value := strings.TrimSpace(os.Getenv(key))
 	if value == "" {
-		return fallback
+		return fallback, nil
 	}
 	parsed, err := time.ParseDuration(value)
 	if err != nil {
-		return fallback
+		return 0, fmt.Errorf("%s must be a duration: %q: %w", key, value, err)
 	}
-	return parsed
+	return parsed, nil
 }
 
-func boolOrDefault(key string, fallback bool) bool {
+func boolFromEnvironment(key string, fallback bool) (bool, error) {
 	value := strings.TrimSpace(os.Getenv(key))
 	if value == "" {
-		return fallback
+		return fallback, nil
 	}
 	parsed, err := strconv.ParseBool(value)
 	if err != nil {
-		return fallback
+		return false, fmt.Errorf("%s must be a boolean: %q: %w", key, value, err)
 	}
-	return parsed
+	return parsed, nil
 }
 
 func csvValues(value string) []string {

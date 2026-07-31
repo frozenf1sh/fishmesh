@@ -10,6 +10,11 @@ import (
 // Config defines a deterministic workload. Prefix group membership is the only source
 // of shared prompt state, making later routing-policy comparisons reproducible.
 type Config struct {
+	RunID           string
+	GitSHA          string
+	GatewayImage    string
+	VLLMVersion     string
+	ClusterProfile  string
 	Endpoint        string
 	Model           string
 	Requests        int

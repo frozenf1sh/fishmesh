@@ -1,5 +1,8 @@
 # FishMesh 代码架构与下一阶段计划
 
+> 2026-08-09 P0 修订：项目从任意加权 Hybrid Scheduler 收敛为 bounded affinity
+> scheduler；GPU-aware、eBPF 和自动 Agent 均移出 MVP。
+
 ## 1. 架构决策
 
 当前项目不采用完整 DDD。它还没有复杂聚合生命周期、事务边界、持久化仓储或跨服务领域
@@ -41,7 +44,7 @@ Workload Context
 
 - `domain`：Incident、Signal、Diagnosis、Recommendation 和规则策略；不依赖基础设施。
 - `application`：Tool、Registry、Engine；编排一次诊断用例。
-- `adapters`：demo fixture、Gateway/vLLM/GPU Prometheus parser、Kubernetes Events/Pod collector；未来添加 eBPF collector。
+- `adapters`：demo fixture、Gateway/vLLM/GPU Prometheus parser、Kubernetes Events/Pod collector；网络 collector 只有在实验确认需求后才增加。
 - `delivery`：HTTP API；只负责输入校验、超时和 JSON 输出。
 - `config`：环境变量映射与启动时校验。
 
@@ -68,7 +71,7 @@ domain -> standard library only
 ## 4. 为什么不是进一步拆成更多服务
 
 当前 Gateway、Loadgen、Analyst 的运行时边界已经清晰，但 EndpointSlice watcher、指标
-聚合和 Agent actuator 尚未成熟。现在只收紧 Go 包边界，不增加进程、数据库、消息队列
+聚合和自动 actuator 尚未成熟。现在只收紧 Go 包边界，不增加进程、数据库、消息队列
 或 CRD。等出现独立扩缩容、独立权限或故障隔离需求时，再拆成服务或 Operator。
 
 ## 5. 下一阶段实施顺序
@@ -96,25 +99,28 @@ URL 不再依赖静态 Pod IP 映射，非法或缺失地址会回退到 Service
 通过 ServiceAccount 读取资源，`/v1/models` 返回 `X-FishMesh-Routing-Mode: prefix-affinity`
 和稳定的 `X-FishMesh-Backend-ID: endpoint-*`。验证后已恢复 baseline 并删除实验 RBAC。
 
-### N3：Hybrid Scheduler
+### N3：Bounded Affinity Scheduler
 
 Backend Snapshot 第一版已完成：EndpointSlice backend ID 与每个 vLLM `/metrics` 的 queue、
 running、Prefix Cache、TTFT 和 vLLM GPU cache usage 已对齐，并暴露 freshness/error；当前
 快照只作为观测，不改变 Prefix Affinity。Pod/Node 身份和 EndpointSlice 断连状态已具备；
-下一步验证 GPU exporter label 对齐，再把 Service、Prefix Affinity、Load-aware 三个策略
-统一成可解释 score policy。
-Agent 只能提出 Recommendation，不直接改策略。
+下一步不做 GPU exporter label 对齐或任意多指标加权。当前 time-slicing 环境不能把 device
+利用率可靠归因到单个 Pod。调度器先实现 eligibility filter、routing-key affinity、
+load threshold spillover 和 Service fallback；queue/running/local error 使用短 TTL，累计
+TTFT/Prefix Cache 和 node GPU metrics 留在慢速证据路径。
 
 阶段 04 已完成身份与故障状态基础：backend 保留 Pod targetRef，Pod list 映射 Node 和声明
 GPU request；EndpointSlice status/freshness 进入 Prometheus，缓存超过 max age 后 readiness
 返回 503；watch 之外增加周期性 relist，RBAC 恢复后可自动回到 `ok/200`。实时 GPU 利用率
-仍必须等待 exporter 的 Pod/device label 映射。
+在当前集群只作为 node-level health signal，不进入 per-backend score。
 
-### N4：诊断闭环
+### N4：可复现实验与证据路径
 
-规则策略先覆盖局部性退化、GPU 饱和、服务端排队、网络退化和 endpoint 故障；之后再增加
-LLM narrator，把结构化 Diagnosis 翻译为报告。LLM 不拥有工具执行权限。
+先完成 run metadata、失败/rerun artifact 保留、多轮随机化和开源 router 对照。规则诊断
+迁移到 Prometheus 时间窗口；LLM narrator 仅是可选报告层，不拥有工具执行权限。
 
-### N5：Shadow 与 guarded actuator（附加项）
+### N5：Gateway API EPP adapter（工业化附加项）
 
-只有 N1-N4 的证据链稳定后，才考虑 replay、策略 shadow 和带 TTL/审计/回滚的受控变更。
+只有 N1-N4 的证据链稳定后，才把 scheduler core 接到 Gateway API Inference Extension
+Endpoint Picker 边界，并与 llm-d/vLLM Router 做同环境对照。Replay、自动 actuator、eBPF
+和 CRD 继续延期。

@@ -18,8 +18,8 @@ flowchart LR
 
 - **Go 1.26**：Gateway 和 load generator 共用一个静态链接、可交叉编译的镜像；使用
   标准库 HTTP streaming，避免框架带来的缓冲行为。
-- **vLLM 0.11 + Qwen2.5-0.5B**：已经在 GPU 节点验证，并启用了 Automatic Prefix
-  Caching。它是本项目要研究的机制，不是 FishMesh 要替代的对象。
+- **vLLM 0.11 + Qwen2.5-0.5B**：这是 2026-08-06 历史数据使用的固定运行时。新实验
+  基线已升级到 vLLM 0.23；历史结果不会跨版本直接比较。
 - **Prometheus exposition format**：Gateway 直接暴露可抓取指标，第一轮实验不依赖
   Prometheus 服务本身。
 - **Kustomize**：`kubectl` 原生支持，适合当前双节点实验环境；在实验尚未稳定前，
@@ -73,6 +73,7 @@ Gateway 对应记录了 200 个 first-SSE-event 样本。完整 JSONL 证据在 
 
 - Prefix registry/controller 和 cache-hit feedback；
 - 根据 `X-FishMesh-Prefix-Key` 进行 Gateway endpoint selection；
-- eBPF socket marking 与 connect-hook rewrite；
+- eBPF socket marking 与 connect-hook rewrite；该方向现已移出 MVP，除非跨节点实验先证明
+  网络是主要瓶颈；
 - policy-capable CNI。当前 Flannel 不能执行 NetworkPolicy，因此清单只是声明式准备，
   尚未应用。

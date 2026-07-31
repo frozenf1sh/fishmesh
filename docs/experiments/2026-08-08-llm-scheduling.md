@@ -1,4 +1,8 @@
-# KubeLLM-Edge 实验报告（2026-08-08）
+# FishMesh 探索性实验报告（2026-08-08）
+
+> 证据等级：探索性。该批次用于修正开发方向，不是最终性能 benchmark。它使用 vLLM
+> `0.11.0` 和单张 RTX 4060 time-slicing 的两个进程；新版重复实验遵循
+> [`docs/experiments/plan.md`](plan.md)。
 
 ## 1. 实验目的
 
@@ -39,10 +43,13 @@ Hot prefix 分布由 Loadgen 的确定性 `--hot-prefix-ratio` 生成，不使�
 | 模式 | TTFT P50 | TTFT P95 | TTFT P99 | 成功率 |
 | --- | ---: | ---: | ---: | ---: |
 | Service + keep-alive | 50.53 ms | 88.41 ms | 249.99 ms | 200/200 |
-| Prefix-hash + keep-alive | **42.68 ms** | **62.64 ms** | **83.43 ms** | 200/200 |
+| Prefix-hash + keep-alive（rerun） | **42.68 ms** | **62.64 ms** | **83.43 ms** | 200/200 |
 | In-flight load-aware | 52.51 ms | 65.94 ms | 89.01 ms | 200/200 |
 
-在热点前缀下，Prefix Affinity 同时改善 P50/P95/P99。它把 150 个热点请求稳定分到同一后端，说明语义局部性在特定请求分布下确实有价值。
+第一次 hot-prefix prefix-hash attempt 为 196/200 成功，P50/P95/P99 分别为
+43.96/69.11/95.28ms；上表是随后相同参数的 200/200 rerun。两次数据都必须保留，不能只因
+rerun 更好就将其当作唯一结果。它们提示 affinity 在该合成热点分布中可能有价值，但需要按
+新实验方案进行多轮随机化复验。
 
 ### 3.3 Mixed skew（50% 请求共享 group 0）
 
@@ -79,6 +86,9 @@ Hot prefix 分布由 Loadgen 的确定性 `--hot-prefix-ratio` 生成，不使�
 - 本轮 artifact 没有对每个请求关联 vLLM Prefix Cache hit；
 - 每个条件的重复次数和模型规模仍有限；
 - Prefix-hash 使用的是 Pod IP 快照，故障恢复实验已证明其工程风险。
+- 两个 vLLM replica 共享同一张 time-sliced GPU，不是独立容量或故障域；
+- Service keep-alive 产生连接级 endpoint 粘性，可能包含偶然 locality；
+- 部分表格来自单次或选定 rerun，尚无跨轮区间。
 
 后续应优先补采 vLLM `/metrics` 中的 Prefix Cache、队列、running requests 和 TTFT 指标，而不是继续堆叠更多 hash 变体。
 
@@ -87,5 +97,5 @@ Hot prefix 分布由 Loadgen 的确定性 `--hot-prefix-ratio` 生成，不使�
 1. **Generic Keepalive 是默认基线和必须保留的优化。**
 2. **Prefix Affinity 是条件策略，不是所有负载下的默认策略。** 热点前缀明显受益，混合/热点不均时可能制造 tail latency。
 3. **简单 In-flight Load-aware 有研究价值，但还不是 GPU-aware Scheduler。** 它在混合负载中改善了尾延迟，却无法感知外部压力和 vLLM 队列。
-4. **正式调度器必须是 Hybrid Policy：Prefix Locality + Queue/GPU/Network Health + 故障 fallback。**
-5. **AI Agent 应在慢速控制环分析和推荐策略，不应进入每请求关键路径。**
+4. **下一步应验证 bounded affinity：硬 eligibility、局部性优先和过载 spillover，而不是直接实现多指标加权 score。**
+5. **GPU、累计 TTFT/Prefix Cache 和网络指标先作为慢速证据，不宣称 per-backend 快路径信号。**

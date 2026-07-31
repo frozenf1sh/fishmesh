@@ -1,24 +1,19 @@
-# Historical no-keepalive baseline. The V2 default is
-# deploy/baseline/jobs/service-keepalive-baseline.yaml; use the connection-matrix
-# overlay when this condition must be reproduced with Gateway keepalive disabled.
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: fishmesh-random-service-baseline
+  name: fishmesh-loadgen-smoke-test
   namespace: kubellm
   labels:
-    app.kubernetes.io/name: fishmesh-loadgen
-    app.kubernetes.io/component: baseline
-  annotations:
-    fishmesh.io/experiment: random-service-baseline
+    app.kubernetes.io/name: fishmesh-loadgen-smoke-test
+    app.kubernetes.io/part-of: fishmesh
 spec:
   backoffLimit: 0
   ttlSecondsAfterFinished: 3600
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: fishmesh-loadgen
-        app.kubernetes.io/component: baseline
+        app.kubernetes.io/name: fishmesh-loadgen-smoke-test
+        app.kubernetes.io/part-of: fishmesh
     spec:
       restartPolicy: Never
       serviceAccountName: fishmesh-loadgen
@@ -42,25 +37,23 @@ spec:
           imagePullPolicy: Never
           command: ["/usr/local/bin/fishmesh-loadgen"]
           env:
-            - {name: FISHMESH_RUN_ID, value: random-service-baseline-p0}
-            - {name: FISHMESH_GATEWAY_IMAGE, value: "fishmesh:0.1.0-p0"}
+            - {name: FISHMESH_RUN_ID, value: p0-loadgen-runtime-smoke}
+            - {name: FISHMESH_GIT_SHA, value: working-tree-p0-20260809}
+            - {name: FISHMESH_GATEWAY_IMAGE, value: "fishmesh:0.1.0-p0@sha256:4e9e242b9b0b19d2b10a58429d343dee69cbd7b18a5e45517396613178117cd9"}
             - {name: FISHMESH_VLLM_VERSION, value: "0.23.0"}
             - {name: FISHMESH_CLUSTER_PROFILE, value: k3s-rtx4060-timeslicing-v1}
           args:
-            - --requests=200
-            - --concurrency=4
-            - --prefix-groups=8
-            - --prefix-bytes=4096
-            - --max-tokens=32
+            - --requests=8
+            - --concurrency=2
+            - --prefix-groups=2
+            - --prefix-bytes=1024
+            - --prefix-namespace=p0-runtime-smoke
+            - --max-tokens=8
             - --request-timeout=90s
-            - --keep-alive=false
+            - --keep-alive=true
           resources:
-            requests:
-              cpu: 100m
-              memory: 128Mi
-            limits:
-              cpu: "1"
-              memory: 256Mi
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: 250m, memory: 128Mi}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

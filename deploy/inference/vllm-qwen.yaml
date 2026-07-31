@@ -35,8 +35,15 @@ metadata:
     app.kubernetes.io/part-of: fishmesh
 spec:
   replicas: 2
+  revisionHistoryLimit: 2
+  progressDeadlineSeconds: 1200
   strategy:
-    type: Recreate
+    type: RollingUpdate
+    rollingUpdate:
+      # This profile exposes one physical GPU as two time-sliced resources.
+      # Never create a third vLLM Pod during an upgrade.
+      maxSurge: 0
+      maxUnavailable: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: qwen-vllm
@@ -45,10 +52,18 @@ spec:
       labels:
         app.kubernetes.io/name: qwen-vllm
         app.kubernetes.io/part-of: fishmesh
+      annotations:
+        fishmesh.io/vllm-image-amd64-digest: sha256:3a1e7f5904e1a1192a02aa0086ceaffc33985d7044c7bb25b3a43d61bdbe3ac0
     spec:
       automountServiceAccountToken: false
       runtimeClassName: nvidia
       terminationGracePeriodSeconds: 120
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 2000
+        runAsGroup: 2000
+        seccompProfile:
+          type: RuntimeDefault
       nodeSelector:
         kubellm.io/gpu: "true"
       tolerations:
@@ -58,14 +73,12 @@ spec:
           effect: NoSchedule
       containers:
         - name: vllm
-          # Preload this pinned amd64 image on fishmesh-gpu before applying.
-          image: docker.io/vllm/vllm-openai:v0.11.0
+          # Offline K3s resolves this preloaded tag. The verified amd64 digest is
+          # recorded on the Pod template because NeverPull cannot resolve tag@digest
+          # unless that exact composite reference was imported into containerd.
+          image: docker.io/vllm/vllm-openai:v0.23.0
           imagePullPolicy: Never
           args:
-            # vLLM 0.11 treats the positional value as a model tag; pass the
-            # real local model path explicitly so it never falls back to its
-            # image default.
-            - --model
             - /models/Qwen2.5-0.5B-Instruct
             - --served-model-name=qwen2.5-0.5b-instruct
             - --host=0.0.0.0
@@ -73,6 +86,7 @@ spec:
             - --dtype=half
             - --gpu-memory-utilization=0.35
             - --max-model-len=4096
+            - --enable-prefix-caching
           env:
             - name: HF_HUB_OFFLINE
               value: "1"
@@ -128,3 +142,17 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: 1Gi
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: qwen-vllm
+  namespace: kubellm
+  labels:
+    app.kubernetes.io/name: qwen-vllm
+    app.kubernetes.io/part-of: fishmesh
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: qwen-vllm

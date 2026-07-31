@@ -23,6 +23,8 @@ vllm:num_requests_running 5
 vllm:prefix_cache_hits_total 7
 # TYPE vllm:prefix_cache_queries_total counter
 vllm:prefix_cache_queries_total 10
+# TYPE vllm:kv_cache_usage_perc gauge
+vllm:kv_cache_usage_perc 0.25
 # TYPE vllm:time_to_first_token_seconds histogram
 vllm:time_to_first_token_seconds_bucket{le="0.1"} 1
 vllm:time_to_first_token_seconds_bucket{le="0.5"} 10
@@ -43,6 +45,9 @@ vllm:time_to_first_token_seconds_sum 2
 	}
 	if signal.Values["ttft_p95_ms"] != 500 {
 		t.Fatalf("ttft_p95_ms = %v, want 500", signal.Values["ttft_p95_ms"])
+	}
+	if signal.Values["kv_cache_usage_percent"] != 25 {
+		t.Fatalf("kv_cache_usage_percent = %v, want 25", signal.Values["kv_cache_usage_percent"])
 	}
 }
 

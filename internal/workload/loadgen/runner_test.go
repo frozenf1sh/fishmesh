@@ -30,6 +30,9 @@ func TestRunRecordsStreamingTTFT(t *testing.T) {
 	if summary.Succeeded != 3 || summary.Failed != 0 || summary.TTFTP50Milliseconds <= 0 {
 		t.Fatalf("unexpected summary: %+v", summary)
 	}
+	if !bytes.Contains(output.Bytes(), []byte(`"record_type":"run_metadata"`)) {
+		t.Fatal("expected JSONL run metadata")
+	}
 	if !bytes.Contains(output.Bytes(), []byte(`"record_type":"summary"`)) {
 		t.Fatal("expected JSONL summary")
 	}

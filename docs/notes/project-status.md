@@ -1,7 +1,7 @@
 # FishMesh 项目当前状态
 
 最后验证时间：2026-08-09。仓库为 `frozenf1sh/fishmesh`（private），当前 `main` 分支
-包含完整基线实现和第一轮成功的 baseline 运行结果。
+包含 P0 方向收敛、完整基线实现和第一轮探索性运行结果。
 
 ## 当前运行拓扑
 
@@ -16,7 +16,10 @@ OrbStack 内置的 Kubernetes 集群不是这个多节点 control plane。官方
 
 当前推理状态：
 
-- `qwen-vllm` 有两个 Ready Pod，提供本地缓存的 Qwen2.5-0.5B-Instruct；
+- `qwen-vllm` 使用 digest-pinned vLLM 0.23.0，两个副本提供本地缓存的
+  Qwen2.5-0.5B-Instruct；
+- RTX 4060 通过 NVIDIA device plugin 0.19.2 暴露两个 time-sliced resource；它们不是
+  两块独立 GPU，也不提供显存或故障隔离；
 - `qwen-vllm-baseline` 是普通 ClusterIP Service，负责随机的连接级 endpoint 选择；
   `qwen-vllm` 仍然是 headless Service，EndpointSlice 实验直接读取它的 Ready 地址；
 - `fishmesh-gateway` 是一个 Go streaming proxy，运行在 GPU 节点。它不申请 GPU，
@@ -92,7 +95,7 @@ VM 的影响更大：Kubernetes API 和 reconciliation 也会停止，应按完�
   单元测试、镜像导入脚本、Kustomize 清单、GitHub Actions 和本地 `act` 入口；
 - 第一轮 random-Service baseline：200/200 成功，TTFT P50 77.26 ms、P95 122.01 ms、
   P99 312.67 ms；原始输出已归档在本地 `artifacts/`。
-- Cluster Analyst 骨架：`Incident -> 五个领域工具 -> rules-v1 -> Diagnosis/Evidence/
+- Evidence-based Diagnoser 骨架：`Incident -> 四个领域工具 -> rules-v1 -> Diagnosis/Evidence/
   Recommendation`，本地和 K3s demo API 均验证返回 `prefix_locality_degraded`。
 - N1 真实观测适配器：vLLM/GPU Prometheus、Kubernetes Events/Pod 状态和显式
   `insufficient_observability` 缺口诊断已完成单元测试；observability overlay 已在 K3s
@@ -107,17 +110,23 @@ VM 的影响更大：Kubernetes API 和 reconciliation 也会停止，应按完�
   status/freshness/ready backend 已进入 Gateway metrics，EndpointSlice 缓存过期会让 `/readyz`
   返回 503；临时撤销 RoleBinding 后状态变为 `degraded/503`，恢复权限后约一个刷新周期
   自动回到 `ok/200`。
+- P0 实验可信度：Loadgen 输出 `run_metadata -> request -> summary`；15 个仍存活的历史 Job
+  已恢复 exact Job YAML、原始压缩 JSONL 和 provenance manifest；新实验方案要求重复运行、
+  随机 treatment 顺序、失败 attempt 保留和开源 router 同环境对照。
+- P0 方向收敛：MVP 从任意 weighted hybrid score 改为 bounded affinity；GPU 指标只作为
+  节点级诊断证据，eBPF、自动 actuator 和 disaggregation 明确移出 MVP。
 
 ## 下一步待办
 
-1. 将 GPU exporter 的 node/device label 与 Pod→Node 身份链路对应，确认可以安全关联实时 GPU
-   指标；
-2. 在用户态实现 V1 prefix-aware routing：稳定的 prefix canonicalization、碰撞安全的
-   key、带 TTL 的 endpoint registry、selected-endpoint/fallback 计数器，并与当前
-   random-Service control group 做对照实验；
-3. 验证 GPU exporter 的 node/device label 是否能与 Pod→Node 身份链路可靠对应；
-4. 增加可重复的 benchmark manifest 和分析，比较 warm-prefix/cold-prefix TTFT、replica
-   placement、错误率和 cache-hit evidence；
-5. 只有 V1 得到有意义的统计结果后，再实现 eBPF marked-socket data plane；
-6. 在声称 NetworkPolicy 已生效前，迁移到支持 policy enforcement 的 CNI；当前 Flannel
-   不能执行声明式 NetworkPolicy。
+1. 实现 bounded affinity：稳定 prefix canonicalization、碰撞安全 key、带 TTL 的 endpoint
+   registry，以及可配置的 queue/in-flight spillover threshold；
+2. 为 workload matrix 增加 warmup、seed、token count、TPOT/ITL 和 bootstrap interval，至少
+   7 次重复而不是比较单轮 P95；
+3. 用可控 simulator 验证调度不变量、过载与故障恢复，再在当前真实 GPU profile 验证 SSE、
+   vLLM cache 和 EndpointSlice 行为；
+4. 在同版本 vLLM、同 workload 下加入 llm-d EPP 或 vLLM Router 对照，回答“为什么不直接用
+   开源方案”；
+5. 获得至少两个独立物理 GPU 的短时环境后再给出扩展性数字；当前单卡 time-slicing 结果只
+   能作为 correctness/profile 证据；
+6. 在声称 NetworkPolicy 已生效前迁移到支持 policy enforcement 的 CNI；当前 Flannel 不能
+   执行声明式 NetworkPolicy。

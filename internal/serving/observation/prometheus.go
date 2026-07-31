@@ -64,11 +64,11 @@ func (c PrometheusCollector) Collect(ctx context.Context, backend routing.Backen
 			state.TTFTP95Milliseconds, observed = value*1000, observed+1
 		}
 	}
-	if value, ok := average(families, "vllm:gpu_cache_usage_perc"); ok {
+	if value, ok := average(families, "vllm:kv_cache_usage_perc", "vllm:gpu_cache_usage_perc"); ok {
 		if value <= 1 {
 			value *= 100
 		}
-		state.GPUMemoryUsage, observed = value, observed+1
+		state.KVCacheUsagePercent, observed = value, observed+1
 	}
 	if observed == 0 {
 		state.Status = routing.ObservationDegraded

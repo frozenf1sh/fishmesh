@@ -27,5 +27,5 @@
 
 ## 边界
 
-EndpointSlice 只告诉我们“地址可用”，还没有把 vLLM queue、Prefix Cache 和 GPU headroom
-对齐到同一个 backend snapshot；这就是下一阶段的工作。
+EndpointSlice 只告诉我们“地址可用”。后续 Backend Snapshot 已对齐 vLLM queue/running；
+Prefix Cache/TTFT 用于慢速评估，node GPU 信号不伪装成 per-backend 指标。

@@ -36,7 +36,7 @@ metadata:
   namespace: kube-system
   labels:
     app.kubernetes.io/name: nvidia-device-plugin
-    app.kubernetes.io/version: v0.19.0
+    app.kubernetes.io/version: v0.19.2
     app.kubernetes.io/part-of: fishmesh
 spec:
   selector:
@@ -63,7 +63,7 @@ spec:
           effect: NoSchedule
       containers:
         - name: device-plugin
-          image: nvcr.io/nvidia/k8s-device-plugin:v0.19.0
+          image: nvcr.io/nvidia/k8s-device-plugin:v0.19.2
           imagePullPolicy: IfNotPresent
           args: ["--config-file=/config/config.yaml"]
           resources:

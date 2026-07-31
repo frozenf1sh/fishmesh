@@ -4,15 +4,15 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 kubeconfig="${KUBECONFIG:-$HOME/.kube/fishmesh.yaml}"
 remote="${FISHMESH_GPU_SSH_HOST:-ubuntu}"
-image="docker.io/vllm/vllm-openai:v0.11.0"
+image="docker.io/vllm/vllm-openai:v0.23.0"
 image_ready=false
 
 for attempt in $(seq 1 60); do
   state="$(ssh "$remote" 'sudo systemctl is-active fishmesh-vllm-image-preload || true')"
   if [[ "$state" == "inactive" ]]; then
     if ssh "$remote" \
-      "sudo /opt/kubellm/bin/k3s crictl --runtime-endpoint unix:///run/k3s/containerd/containerd.sock images" \
-      | grep -Fq "$image"; then
+      "sudo /opt/kubellm/bin/k3s ctr --namespace k8s.io images list --quiet" \
+      | grep -Fxq "$image"; then
       image_ready=true
       break
     fi

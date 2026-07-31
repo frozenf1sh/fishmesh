@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -14,6 +15,22 @@ func TestEndpointSliceConfigDoesNotRequireStaticEndpoints(t *testing.T) {
 	}
 	if err := config.Validate(); err != nil {
 		t.Fatalf("EndpointSlice configuration should not require static URLs: %v", err)
+	}
+}
+
+func TestLoadConfigRejectsMalformedDuration(t *testing.T) {
+	t.Setenv("FISHMESH_REQUEST_TIMEOUT", "ninety-seconds")
+	_, err := LoadConfigFromEnvironment()
+	if err == nil || !strings.Contains(err.Error(), "FISHMESH_REQUEST_TIMEOUT") {
+		t.Fatalf("expected named duration error, got %v", err)
+	}
+}
+
+func TestLoadConfigRejectsMalformedBoolean(t *testing.T) {
+	t.Setenv("FISHMESH_UPSTREAM_KEEPALIVE", "sometimes")
+	_, err := LoadConfigFromEnvironment()
+	if err == nil || !strings.Contains(err.Error(), "FISHMESH_UPSTREAM_KEEPALIVE") {
+		t.Fatalf("expected named boolean error, got %v", err)
 	}
 }
 

@@ -10,5 +10,6 @@
 | 02 | EndpointSlice 动态发现 | Ready 地址 watch、稳定 backend ID、Service fallback |
 | 03 | Backend Snapshot | 每个 vLLM endpoint 的指标、状态和 freshness 对齐 |
 | 04 | 身份映射与故障状态 | Pod→Node/GPU request 映射、discovery freshness 和 readiness 门控 |
+| 05 | P0 方向收敛与实验可信度 | bounded affinity 定位、run metadata、版本升级和可信实验规范 |
 
 每个阶段完成后都会补充独立中文说明，并在文末明确下一阶段边界。

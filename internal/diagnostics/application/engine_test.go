@@ -24,8 +24,8 @@ func TestDemoRegistryReportsPrefixLocalityDegraded(t *testing.T) {
 	if report.Diagnosis.Code != "prefix_locality_degraded" {
 		t.Fatalf("diagnosis code = %q, want prefix_locality_degraded", report.Diagnosis.Code)
 	}
-	if len(report.Tools) != 5 {
-		t.Fatalf("tool count = %d, want 5", len(report.Tools))
+	if len(report.Tools) != 4 {
+		t.Fatalf("tool count = %d, want 4", len(report.Tools))
 	}
 	if report.Diagnosis.Recommendation.Code != "enable_bounded_prefix_affinity" {
 		t.Fatalf("recommendation = %q", report.Diagnosis.Recommendation.Code)

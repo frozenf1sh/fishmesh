@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"flag"
-	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -16,6 +15,11 @@ import (
 
 func main() {
 	config := loadgen.Config{}
+	flag.StringVar(&config.RunID, "run-id", valueOrDefault("FISHMESH_RUN_ID", "manual"), "unique immutable experiment run identifier")
+	flag.StringVar(&config.GitSHA, "git-sha", valueOrDefault("FISHMESH_GIT_SHA", "unknown"), "FishMesh git revision")
+	flag.StringVar(&config.GatewayImage, "gateway-image", valueOrDefault("FISHMESH_GATEWAY_IMAGE", "unknown"), "Gateway image reference or digest")
+	flag.StringVar(&config.VLLMVersion, "vllm-version", valueOrDefault("FISHMESH_VLLM_VERSION", "unknown"), "vLLM runtime version")
+	flag.StringVar(&config.ClusterProfile, "cluster-profile", valueOrDefault("FISHMESH_CLUSTER_PROFILE", "unknown"), "benchmark cluster profile")
 	flag.StringVar(&config.Endpoint, "endpoint", "http://fishmesh-gateway.kubellm.svc.cluster.local:8080", "FishMesh Gateway base URL")
 	flag.StringVar(&config.Model, "model", "qwen2.5-0.5b-instruct", "OpenAI model name")
 	flag.IntVar(&config.Requests, "requests", 200, "total requests to send")
@@ -48,10 +52,16 @@ func main() {
 
 	contextWithSignal, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	summary, err := loadgen.Run(contextWithSignal, config, output)
+	_, err := loadgen.Run(contextWithSignal, config, output)
 	if err != nil {
 		logger.Error("benchmark failed", "error", err)
 		os.Exit(1)
 	}
-	fmt.Fprintf(os.Stderr, "completed=%d succeeded=%d failed=%d ttft_p50_ms=%.2f ttft_p95_ms=%.2f\\n", summary.Completed, summary.Succeeded, summary.Failed, summary.TTFTP50Milliseconds, summary.TTFTP95Milliseconds)
+}
+
+func valueOrDefault(key, fallback string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return fallback
 }

@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
         with:
           go-version: "1.26.x"
@@ -25,4 +25,4 @@ jobs:
           go vet ./...
           go build ./...
       - name: Render Kubernetes manifests
-        run: kubectl kustomize deploy/baseline/base >/tmp/fishmesh-baseline.yaml
+        run: make manifest

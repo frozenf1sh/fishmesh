@@ -1,3 +1,5 @@
+VERSION ?= 0.1.0-p0
+
 .PHONY: all build test vet ci manifest image act-list act
 
 all: test
@@ -18,11 +20,14 @@ manifest:
 	kubectl kustomize deploy/analyst/observability >/dev/null
 	kubectl kustomize deploy/experiments/endpoint-slice >/dev/null
 	kubectl kustomize deploy/experiments/backend-snapshot >/dev/null
+	kubectl kustomize deploy/inference >/dev/null
+	kubectl kustomize deploy/system >/dev/null
+	kubectl kustomize deploy/validation >/dev/null
 
 ci: test vet build manifest
 
 image:
-	./scripts/build-and-load-fishmesh-image.sh
+	./scripts/build-and-load-fishmesh-image.sh $(VERSION)
 
 # act does not automatically read Docker's active context. OrbStack exposes this socket
 # on macOS; an explicitly supplied DOCKER_HOST keeps local Action execution consistent.

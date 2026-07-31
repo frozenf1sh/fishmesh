@@ -65,7 +65,7 @@ func (t VLLMMetricsTool) Collect(ctx context.Context, _ domain.Incident) domain.
 				maxTTFTP95 = value * 1000
 			}
 		}
-		if value, ok := metricAverage(families, "vllm:gpu_cache_usage_perc"); ok {
+		if value, ok := metricAverage(families, "vllm:kv_cache_usage_perc", "vllm:gpu_cache_usage_perc"); ok {
 			if value <= 1 {
 				value *= 100
 			}
@@ -91,7 +91,7 @@ func (t VLLMMetricsTool) Collect(ctx context.Context, _ domain.Incident) domain.
 		signal.Values["ttft_p95_ms"] = maxTTFTP95
 	}
 	if maxGPUCache > 0 {
-		signal.Values["gpu_cache_usage_percent"] = maxGPUCache
+		signal.Values["kv_cache_usage_percent"] = maxGPUCache
 	}
 	signal.Summary = fmt.Sprintf("vLLM metrics collected from %d/%d endpoint(s)", successes, len(t.URLs))
 	return signal

@@ -14,6 +14,8 @@ spec:
       labels:
         app.kubernetes.io/name: model-cache-preload
         app.kubernetes.io/part-of: fishmesh
+      annotations:
+        fishmesh.io/vllm-image-amd64-digest: sha256:3a1e7f5904e1a1192a02aa0086ceaffc33985d7044c7bb25b3a43d61bdbe3ac0
     spec:
       hostNetwork: true
       dnsPolicy: ClusterFirstWithHostNet
@@ -28,7 +30,7 @@ spec:
           effect: NoSchedule
       containers:
         - name: download-models
-          image: docker.io/vllm/vllm-openai:v0.11.0
+          image: docker.io/vllm/vllm-openai:v0.23.0
           imagePullPolicy: Never
           command: ["python3", "-c"]
           args:

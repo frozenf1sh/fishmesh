@@ -1,4 +1,4 @@
-# Cluster Analyst 骨架
+# Evidence-based Diagnoser 骨架
 
 当前阶段实现的是一个慢速、只读的 Infra Analyst 控制面，不是聊天机器人，也不在
 Gateway 请求路径中调用 LLM。
@@ -70,12 +70,13 @@ kubectl apply -k deploy/analyst/observability
 ```
 
 `observability` 模式接入 `query_gateway_stats`、`query_llm_metrics` 和
-`query_kubernetes_events`；GPU/DCGM URL 和 eBPF collector 未配置时会返回
-`unavailable`。此时规则引擎会输出 `insufficient_observability`，不会把缺失数据误认为健康。
+`query_kubernetes_events`；未配置的 GPU/DCGM 数据源会返回 `unavailable`。此时规则引擎会
+输出 `insufficient_observability`，不会把缺失数据误认为健康。网络级 collector 不属于
+当前 MVP；只有新实验证明需要解释跨节点网络异常时才接入。
 
-当前 K3s 验证结果已经包含真实信号：vLLM `queue_length=0`、`running_requests=0`、
-Prefix Cache 命中率约 `0.83`，Kubernetes Events/Pod 状态为 `ok`；GPU 与 eBPF 因尚未部署
-对应 exporter，仍会明确标记为 `unavailable`。
+2026-08-08 的历史 K3s 验证曾观察到 vLLM `queue_length=0`、`running_requests=0`、Prefix
+Cache 命中率约 `0.83`，Kubernetes Events/Pod 状态为 `ok`。这些是 vLLM 0.11.0 环境下的
+一次性观测，不代表当前健康状态，也不进入升级后的性能结论。
 
 ## 安全和演进边界
 
@@ -83,5 +84,5 @@ Prefix Cache 命中率约 `0.83`，Kubernetes Events/Pod 状态为 `ok`；GPU �
 - Deployment 设置非 root、只读根文件系统、资源请求/限制和健康探针。
 - NetworkPolicy 文件暂不加入 base，因为当前 K3s Flannel 不执行 NetworkPolicy；迁移到
   支持策略的 CNI 后再启用并验证。
-- 当前 API 是同步单轮分析；长耗时异步任务、LLM tool-calling、Recommendation
+- 当前 API 是同步单轮诊断；长耗时异步任务、LLM tool-calling、Recommendation
   actuator 和 Incident Memory 都属于后续阶段。

@@ -67,8 +67,7 @@ type BackendObservation struct {
 	RunningRequests     float64
 	PrefixCacheHitRate  float64
 	TTFTP95Milliseconds float64
-	GPUUtilization      float64
-	GPUMemoryUsage      float64
+	KVCacheUsagePercent float64
 	Error               string
 }
 

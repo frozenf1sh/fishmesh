@@ -24,6 +24,8 @@ vllm:num_requests_running 4
 vllm:prefix_cache_hits_total 8
 # TYPE vllm:prefix_cache_queries_total counter
 vllm:prefix_cache_queries_total 10
+# TYPE vllm:kv_cache_usage_perc gauge
+vllm:kv_cache_usage_perc 0.25
 # TYPE vllm:time_to_first_token_seconds histogram
 vllm:time_to_first_token_seconds_bucket{le="0.1"} 1
 vllm:time_to_first_token_seconds_bucket{le="0.5"} 10
@@ -35,7 +37,7 @@ vllm:time_to_first_token_seconds_bucket{le="+Inf"} 10
 	if state.Status != routing.ObservationOK || state.ObservedAt != time.Unix(5, 0) {
 		t.Fatalf("unexpected state: %+v", state)
 	}
-	if state.QueueLength != 2 || state.RunningRequests != 4 || state.PrefixCacheHitRate != 0.8 || state.TTFTP95Milliseconds != 500 {
+	if state.QueueLength != 2 || state.RunningRequests != 4 || state.PrefixCacheHitRate != 0.8 || state.TTFTP95Milliseconds != 500 || state.KVCacheUsagePercent != 25 {
 		t.Fatalf("unexpected observations: %+v", state)
 	}
 }

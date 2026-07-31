@@ -29,9 +29,34 @@ type completionRequest struct {
 	Temperature float64   `json:"temperature"`
 }
 
+// RunMetadata is emitted as the first JSONL record. It makes every artifact
+// self-describing and prevents a successful rerun from silently replacing a
+// failed run without preserving the treatment and runtime provenance.
+type RunMetadata struct {
+	RecordType      string `json:"record_type"`
+	RunID           string `json:"run_id"`
+	StartedAt       string `json:"started_at"`
+	GitSHA          string `json:"git_sha"`
+	GatewayImage    string `json:"gateway_image"`
+	VLLMVersion     string `json:"vllm_version"`
+	ClusterProfile  string `json:"cluster_profile"`
+	Endpoint        string `json:"endpoint"`
+	Model           string `json:"model"`
+	Requests        int    `json:"requests"`
+	Concurrency     int    `json:"concurrency"`
+	PrefixGroups    int    `json:"prefix_groups"`
+	PrefixBytes     int    `json:"prefix_bytes"`
+	PrefixNamespace string `json:"prefix_namespace"`
+	HotPrefixRatio  int    `json:"hot_prefix_ratio"`
+	MaxTokens       int    `json:"max_tokens"`
+	RequestTimeout  string `json:"request_timeout"`
+	KeepAlive       bool   `json:"keep_alive"`
+}
+
 // Result is a single raw measurement. One JSON representation is emitted per request.
 type Result struct {
 	RecordType           string  `json:"record_type"`
+	RunID                string  `json:"run_id"`
 	RequestNumber        int     `json:"request_number"`
 	PrefixGroup          int     `json:"prefix_group"`
 	PrefixKey            string  `json:"prefix_key"`
@@ -48,6 +73,7 @@ type Result struct {
 
 type Summary struct {
 	RecordType          string  `json:"record_type"`
+	RunID               string  `json:"run_id"`
 	Requested           int     `json:"requested"`
 	Completed           int     `json:"completed"`
 	Succeeded           int     `json:"succeeded"`
@@ -97,6 +123,9 @@ func Run(ctx context.Context, config Config, output io.Writer) (Summary, error) 
 
 	writer := bufio.NewWriter(output)
 	defer writer.Flush()
+	if err := writeJSONL(writer, metadataFor(config)); err != nil {
+		return Summary{}, fmt.Errorf("write run metadata: %w", err)
+	}
 	allResults := make([]Result, 0, config.Requests)
 	for result := range results {
 		allResults = append(allResults, result)
@@ -118,7 +147,7 @@ func execute(ctx context.Context, client *http.Client, config Config, requestNum
 	prefixGroup := prefixGroupFor(config, requestNumber)
 	prefix := sharedPrefix(config.PrefixNamespace, prefixGroup, config.PrefixBytes)
 	prefixHash := sha256.Sum256([]byte(prefix))
-	result := Result{RecordType: "request", RequestNumber: requestNumber, PrefixGroup: prefixGroup, PrefixKey: hex.EncodeToString(prefixHash[:16]), StartedAt: time.Now().UTC().Format(time.RFC3339Nano)}
+	result := Result{RecordType: "request", RunID: runID(config), RequestNumber: requestNumber, PrefixGroup: prefixGroup, PrefixKey: hex.EncodeToString(prefixHash[:16]), StartedAt: time.Now().UTC().Format(time.RFC3339Nano)}
 	startedAt := time.Now()
 	payload, _ := json.Marshal(completionRequest{
 		Model:    config.Model,
@@ -222,7 +251,11 @@ func sharedPrefix(namespace string, group, targetBytes int) string {
 }
 
 func summarize(requested int, results []Result) Summary {
-	summary := Summary{RecordType: "summary", Requested: requested, Completed: len(results)}
+	run := "manual"
+	if len(results) > 0 && results[0].RunID != "" {
+		run = results[0].RunID
+	}
+	summary := Summary{RecordType: "summary", RunID: run, Requested: requested, Completed: len(results)}
 	ttfts := make([]float64, 0, len(results))
 	for _, result := range results {
 		if result.Error != "" || result.StatusCode < 200 || result.StatusCode >= 300 || result.TTFTMilliseconds == 0 {
@@ -237,6 +270,32 @@ func summarize(requested int, results []Result) Summary {
 	summary.TTFTP95Milliseconds = percentile(ttfts, 0.95)
 	summary.TTFTP99Milliseconds = percentile(ttfts, 0.99)
 	return summary
+}
+
+func metadataFor(config Config) RunMetadata {
+	return RunMetadata{
+		RecordType: "run_metadata", RunID: runID(config), StartedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		GitSHA: valueOrUnknown(config.GitSHA), GatewayImage: valueOrUnknown(config.GatewayImage),
+		VLLMVersion: valueOrUnknown(config.VLLMVersion), ClusterProfile: valueOrUnknown(config.ClusterProfile),
+		Endpoint: config.Endpoint, Model: config.Model, Requests: config.Requests, Concurrency: config.Concurrency,
+		PrefixGroups: config.PrefixGroups, PrefixBytes: config.PrefixBytes, PrefixNamespace: config.PrefixNamespace,
+		HotPrefixRatio: config.HotPrefixRatio, MaxTokens: config.MaxTokens,
+		RequestTimeout: config.RequestTimeout.String(), KeepAlive: config.KeepAlive,
+	}
+}
+
+func runID(config Config) string {
+	if value := strings.TrimSpace(config.RunID); value != "" {
+		return value
+	}
+	return "manual"
+}
+
+func valueOrUnknown(value string) string {
+	if value = strings.TrimSpace(value); value != "" {
+		return value
+	}
+	return "unknown"
 }
 
 func percentile(values []float64, quantile float64) float64 {

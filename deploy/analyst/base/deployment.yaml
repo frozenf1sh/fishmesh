@@ -19,6 +19,8 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: fishmesh-analyst
+      annotations:
+        fishmesh.io/image-amd64-digest: sha256:4e9e242b9b0b19d2b10a58429d343dee69cbd7b18a5e45517396613178117cd9
     spec:
       serviceAccountName: fishmesh-analyst
       automountServiceAccountToken: false
@@ -41,7 +43,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: analyst
-          image: fishmesh:dev
+          image: fishmesh:0.1.0-p0
           imagePullPolicy: Never
           command: ["/usr/local/bin/fishmesh-analyst"]
           envFrom:

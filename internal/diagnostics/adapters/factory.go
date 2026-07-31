@@ -14,7 +14,7 @@ import (
 
 // NewRegistryForConfig 负责组装运行模式，不让 cmd 包了解具体工具实现。
 // demo 模式用于本地和 CI 验证；gateway 模式接入第一条真实 Gateway 指标链路，
-// 其余数据源明确标记 unavailable，避免用样例数据掩盖生产缺口。
+// 其余 MVP 数据源明确标记 unavailable，避免用样例数据掩盖生产缺口。
 func NewRegistryForConfig(runtimeConfig config.Config, client *http.Client, clock application.Clock) (*application.Registry, error) {
 	if clock == nil {
 		clock = time.Now
@@ -22,7 +22,6 @@ func NewRegistryForConfig(runtimeConfig config.Config, client *http.Client, cloc
 	if runtimeConfig.Mode == "gateway" {
 		return application.NewRegistry(
 			GatewayMetricsTool{URL: runtimeConfig.GatewayMetricsURL, HTTPClient: client, Clock: clock},
-			UnavailableTool{DescriptorValue: domain.ToolDescriptor{Name: "query_ebpf_network", Description: "读取节点 TCP RTT、重传和 socket stall"}, Clock: clock},
 			UnavailableTool{DescriptorValue: domain.ToolDescriptor{Name: "query_gpu_status", Description: "读取 GPU 显存、利用率、温度和 OOM 状态"}, Clock: clock},
 			UnavailableTool{DescriptorValue: domain.ToolDescriptor{Name: "query_kubernetes_events", Description: "读取 namespace-scoped Kubernetes Warning 事件"}, Clock: clock},
 			UnavailableTool{DescriptorValue: domain.ToolDescriptor{Name: "query_llm_metrics", Description: "读取 vLLM queue、running、TTFT 和 Prefix Cache 指标"}, Clock: clock},
@@ -43,20 +42,18 @@ func NewRegistryForConfig(runtimeConfig config.Config, client *http.Client, cloc
 			VLLMMetricsTool{URLs: runtimeConfig.VLLMMetricsURLs, HTTPClient: client, Clock: clock},
 			GPUStatusTool{URL: runtimeConfig.GPUMetricsURL, HTTPClient: client, Clock: clock},
 			KubernetesEventsTool{Namespace: runtimeConfig.KubernetesNamespace, BaseURL: runtimeConfig.KubernetesAPIURL, TokenFile: runtimeConfig.KubernetesTokenFile, HTTPClient: kubernetesClient, Clock: clock},
-			UnavailableTool{DescriptorValue: domain.ToolDescriptor{Name: "query_ebpf_network", Description: "读取节点 TCP RTT、重传和 socket stall"}, Clock: clock},
 		)
 	}
 	return NewDemoRegistry(clock)
 }
 
 // NewDemoRegistry 返回一个可重复的故障场景：Prefix Cache 命中率下降，但
-// 网络、GPU 和队列正常。它对应最终方案中的第一个只读诊断 demo。
+// GPU 和队列正常。它对应最终方案中的第一个只读诊断 demo。
 func NewDemoRegistry(clock application.Clock) (*application.Registry, error) {
 	if clock == nil {
 		clock = time.Now
 	}
 	return application.NewRegistry(
-		StaticTool{DescriptorValue: domain.ToolDescriptor{Name: "query_ebpf_network", Description: "读取节点 TCP RTT、重传和 socket stall"}, SignalValue: domain.Signal{Name: "query_ebpf_network", Source: "demo-fixture", Status: domain.SignalOK, Values: map[string]float64{"tcp_rtt_ms": 12, "retransmission_rate": 0.001, "socket_stall": 0}, Summary: "network healthy"}, Clock: clock},
 		StaticTool{DescriptorValue: domain.ToolDescriptor{Name: "query_gpu_status", Description: "读取 GPU 显存、利用率、温度和 OOM 状态"}, SignalValue: domain.Signal{Name: "query_gpu_status", Source: "demo-fixture", Status: domain.SignalOK, Values: map[string]float64{"gpu_memory_percent": 68, "gpu_utilization_percent": 74, "gpu_temperature_celsius": 67}, Summary: "GPU has headroom"}, Clock: clock},
 		StaticTool{DescriptorValue: domain.ToolDescriptor{Name: "query_kubernetes_events", Description: "读取 namespace-scoped Kubernetes Warning 事件"}, SignalValue: domain.Signal{Name: "query_kubernetes_events", Source: "demo-fixture", Status: domain.SignalOK, Values: map[string]float64{"warning_events": 0}, Summary: "no warning events"}, Clock: clock},
 		StaticTool{DescriptorValue: domain.ToolDescriptor{Name: "query_llm_metrics", Description: "读取 vLLM queue、running、TTFT 和 Prefix Cache 指标"}, SignalValue: domain.Signal{Name: "query_llm_metrics", Source: "demo-fixture", Status: domain.SignalOK, Values: map[string]float64{"ttft_p95_ms": 2300, "queue_length": 2, "running_requests": 4, "prefix_cache_hit_rate": 0.35}, Summary: "prefix cache locality degraded"}, Clock: clock},

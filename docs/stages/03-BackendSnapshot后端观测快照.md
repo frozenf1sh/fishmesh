@@ -3,7 +3,7 @@
 ## 目标
 
 把动态 EndpointSlice 地址和每个 vLLM 副本的真实指标放进同一个结构化快照，为后续
-Hybrid Scheduler 提供输入，同时明确 freshness 和采集错误，避免把“没有数据”当成健康的
+bounded affinity scheduler 和慢速证据路径提供输入，同时明确 freshness 和采集错误，避免把“没有数据”当成健康的
 零负载。
 
 ## 为什么先做 vLLM，不直接做 GPU
@@ -31,6 +31,6 @@ K3s 实测中，两个 EndpointSlice backend 均返回 `backend_observation_stat
 
 ## 当前边界与下一步
 
-快照目前还没有参与调度决策，Prefix Affinity 仍保持确定性；下一阶段将补充 Pod/Node/GPU
-身份映射、EndpointSlice/API 断连的 readiness 与指标，再把 queue、TTFT、GPU headroom
-纳入可解释 Hybrid Scheduler score。
+快照目前还没有参与调度决策，Prefix Affinity 仍保持确定性；后续阶段已补充 Pod/Node
+身份映射和 EndpointSlice/API 断连门控。P0 复盘后，只有短 TTL 的 queue/running 会作为
+spillover 输入；累计 TTFT、Prefix Cache 和 node GPU 数据进入慢速评估，不直接线性加权。

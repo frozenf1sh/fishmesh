@@ -1,191 +1,225 @@
-# KubeLLM-Edge 最终项目方案
+# FishMesh 当前设计与实施路线
 
-> 面向 Kubernetes LLM Serving 的智能请求调度、可观测与集群诊断平台
->
-> 本文件基于 2026-08-08 实验结果形成，作为当前实施的最终决策版。
+> 状态：P0 方向收敛版，2026-08-09。
 
-## 1. 最终定位
+## 1. 项目定位
 
-KubeLLM-Edge 不是“用 eBPF 直接理解 LLM 状态”，也不是“重新实现一个 Kubernetes Scheduler”。它是一个面向多副本 vLLM Serving 的轻量控制平面：
+FishMesh 是 Kubernetes LLM Serving 的**可解释请求调度实验平台**。它通过真实 vLLM、
+动态 endpoint、流式请求和可归档 benchmark，研究连接复用、请求亲和、服务端负载和故障
+状态之间的取舍。
+
+它不与 llm-d、NVIDIA Dynamo、vLLM Production Stack 或 Gateway API Inference Extension
+竞争完整生产能力。当前 Go Gateway 是 scheduler core 的实验载体；成熟方向是把同一策略
+核心接到 Gateway API Inference Extension Endpoint Picker（EPP）边界，并与开源 EPP 做同
+环境对照。
+
+面试叙事应是：
+
+> 我没有先假设 cache-aware routing 一定更快，而是建立 Service/keep-alive 基线，发现纯
+> affinity 在热点下受益、在倾斜负载下放大尾延迟。因此我把策略收敛为 eligibility filter、
+> bounded affinity 和 load spillover，并用动态发现、freshness、故障回退和可复现实验验证
+> 每个设计选择；生产集成遵循 Kubernetes InferencePool/EPP 生态。
+
+## 2. 已确认和未确认的事实
+
+### 已确认
+
+- HTTP keep-alive 是默认传输基线；
+- 固定 Pod IP 无法承受 Pod 重建，EndpointSlice Ready discovery 是必要工程基础；
+- 纯 routing-key affinity 在热点合成负载中可能降低 TTFT；
+- 纯 affinity 在混合倾斜负载中可能显著恶化 P99；
+- Gateway 本地 in-flight 不能观察绕过 Gateway 的外部负载；
+- 缺失、过期和健康的观测必须可区分，不能把缺失数据解释为零负载；
+- 两个 vLLM replica 共享一张 time-sliced RTX 4060，不是两个独立 GPU 故障域。
+
+### 尚未确认
+
+- 现有 affinity 是否提高了 vLLM 的真实 token-block Prefix Cache 命中；
+- 不同大模型、长 prompt 和高并发下的收益能否复现；
+- bounded affinity 相对 least-loaded、llm-d 或 vLLM Router 的收益；
+- 当前集群能否提供可归因到单个 Pod 的 GPU telemetry；
+- 网络是否是当前同节点数据路径中的主要瓶颈。
+
+未经确认的结论不得进入 README 的能力声明或简历性能数字。
+
+## 3. 快路径架构
 
 ```text
-请求进入
-  -> 确定性的 LLM-aware Request Scheduler
-  -> vLLM backend
-  -> Gateway / vLLM / GPU / 网络指标
-  -> 慢速 Cluster Analyst Agent
-  -> 诊断、策略建议、受控变更
+request
+  -> RequestContext extractor
+       model / session-or-routing-key / estimated prompt cost
+  -> EligibilityFilter
+       Ready && discovery fresh && circuit closed
+  -> BoundedAffinityPolicy
+       preferred = consistent_hash(key)
+       if preferred load <= pool minimum + threshold: preferred
+       else: least-loaded spillover
+  -> selected backend transport
+  -> streaming response + local outcome
 ```
 
-一句话面试叙事：
+第一版不实现多指标线性加权。它使用“硬过滤 + 单一可解释决策 + 明确 fallback”：
 
-> 我先用真实基线证明 HTTP Keepalive 的收益，再验证 Prefix Affinity 只在热点前缀下有效；最终把两者收敛成可解释的混合调度器，并用 AI Agent 在慢速控制环分析集群状态、给出带证据的策略建议。
+1. discovery 不新鲜或没有 Ready endpoint 时回退 Kubernetes Service；
+2. 没有 routing key 时使用 least-loaded/P2C，而不是把空 key 固定到同一 Pod；
+3. preferred backend 没有超过负载阈值时保持亲和；
+4. 超过阈值后溢出到更空闲 backend；
+5. 近期 transport/backend error 打开短 TTL circuit；
+6. 每次决策记录 policy version、reason、preferred/selected backend 和 spillover 原因。
 
-## 2. 研究结论驱动的架构
+### 快路径允许使用的信号
 
-### 2.1 快速请求路径
+| 信号 | 用途 | 原因 |
+| --- | --- | --- |
+| Endpoint Ready/terminating | eligibility | endpoint 生命周期事实 |
+| discovery freshness | eligibility/fallback | 防止使用无限陈旧地址 |
+| Gateway local in-flight | 快速 load tie-break | 与请求生命周期同步 |
+| vLLM waiting/running | bounded spillover | 后端级即时状态，但必须有短 TTL |
+| recent local error EWMA | circuit breaker | Gateway 能准确归因到选中 backend |
+| session/routing key | affinity | 语义明确、计算便宜 |
 
-Gateway 内的 scheduler 必须是低延迟、确定性和可回滚的，不能在每个请求上调用 LLM。策略顺序建议：
+### 不进入第一版快路径 score 的信号
 
-1. 检查 endpoint Ready/健康状态；
-2. 对已知热点 `prefix_group` 提供有限 Prefix Affinity；
-3. 根据 vLLM queue/running、最近 TTFT、GPU headroom 和错误率计算 backend score；
-4. 对过热 prefix 做迁移或放宽 affinity；
-5. 失败时回退 Service 或剩余 Ready endpoint。
+- 进程生命周期累计 TTFT histogram；
+- 累计 Prefix Cache hits/queries；
+- 节点级 GPU utilization、温度和显存；
+- eBPF RTT、重传或 socket stall；
+- 固定的“AI 推荐权重”。
 
-一个可解释的分数模型：
+这些信号用于时间窗口分析、异常门控或实验评估。若未来消费 vLLM KV events 并建立
+token-block index，才能把 request-specific cache overlap 作为精确快路径信号。
+
+## 4. 状态模型
+
+`BackendObservation.Status` 是当前过渡契约。正式 scheduler 输入需要把每个字段改成独立
+sample：
 
 ```text
-score(backend, request) =
-    w_prefix * prefix_locality
-  + w_queue  * queue_headroom
-  + w_gpu    * gpu_headroom
-  + w_ttft   * recent_ttft_health
-  - w_error  * recent_error_rate
-  - w_net    * network_penalty
-```
-
-第一版权重由配置固定，并在响应头/日志中记录选择原因；后续由 Agent 推荐权重变化，但必须经过门控。
-
-### 2.2 慢速集群分析路径
-
-Cluster Analyst Agent 每 30–60 秒或在异常触发时运行，输入：
-
-- Gateway 请求、TTFT、fallback、连接复用和 backend 分布；
-- 每个 vLLM Pod 的 Prefix Cache、queue、running requests、TTFT 和错误；
-- GPU 显存、利用率、温度、OOM 和 device plugin 状态；
-- K3s Pod/EndpointSlice/事件；
-- 可选 eBPF RTT、重传、socket stall。
-
-输出固定 schema，而不是自由聊天：
-
-```json
-{
-  "diagnosis": "prefix_locality_degraded",
-  "confidence": 0.82,
-  "evidence": ["cache_hit_rate_down", "queue_normal", "network_normal"],
-  "recommendation": "enable_bounded_prefix_affinity",
-  "risk": "hot_backend_overload",
-  "expires_at": "..."
+Sample[T] {
+  value
+  valid
+  observed_at
+  source
+  error
 }
 ```
 
-默认只读。第二阶段在 Shadow/Simulation 中评估建议；第三阶段才允许通过受限 Controller 修改路由策略，所有变更有 TTL、审计和一键回滚。
+原因是“采到 queue 但没采到 TTFT”不能被一个 backend-level `ok` 隐藏；数值零也不能同时
+表示“观测到零”和“没有观测”。Scheduler 使用 immutable snapshot/atomic swap，后台采集
+和 Prometheus 指标更新不在请求决策临界区执行。
 
-## 3. 当前已实现的原型
+Endpoint 删除时必须同步回收：
 
-- `Service + no keep-alive`、`Service + keep-alive`、`Prefix-hash + keep-alive` 连接矩阵。
-- Loadgen 确定性 `--hot-prefix-ratio`，可生成热点和混合前缀分布。
-- Gateway `load-aware` 原型：按当前 Gateway in-flight 数选择较空闲 endpoint。
-- 完整 SSE 消费、TTFT、实际 upstream、错误分类和 JSONL artifact。
-- K3s 双节点、vLLM 双副本、NVIDIA device plugin、GPU 驱动/DKMS/CDI 恢复验证。
+- transport/client；
+- local in-flight counter；
+- circuit state；
+- observation state；
+- Prometheus backend label series。
 
-注意：当前 `BackendEndpoints` 仍是实验用静态地址，`load-aware` 只观测 Gateway 自身 in-flight，不应直接宣称为正式 GPU-aware scheduler。
+## 5. 慢速证据路径
 
-代码边界已经对应到以下限界上下文和包：
+当前 `fishmesh-analyst` 应称为 evidence-based diagnoser，而不是 autonomous Agent：
 
 ```text
-internal/serving/routing/   # Strategy、Backend、Snapshot、Decision
-internal/serving/endpoint/  # Resolver；Static + EndpointSlice watcher
-internal/serving/transport/ # 每个 backend 的 HTTP client/keepalive 生命周期
-internal/serving/gateway/    # HTTP/SSE 代理、请求生命周期和 metrics
-internal/workload/loadgen/   # 可重复工作负载与 JSONL artifact
-internal/diagnostics/        # domain/application/adapters/delivery/config
+Incident or alert
+  -> Prometheus time-window query + Kubernetes events
+  -> typed Signals with per-source availability
+  -> deterministic diagnosis rules
+  -> read-only Recommendation
 ```
 
-Gateway 只负责组合这些边界，不再在 HTTP handler 中直接实现 hash、连接池和 endpoint
-状态。这样后续接入 vLLM/GPU metrics 或 Hybrid policy 时，可以替换 resolver/snapshot，而不
-改变请求协议和 Loadgen。
+下一阶段应通过 Prometheus/PromQL 获取 counter rate、窗口 quantile 和趋势；不得通过一个
+keep-alive ClusterIP `/metrics` 连接假装聚合多个 vLLM Pod。硬编码 `confidence` 在校准前只
+能改称 evidence strength。
 
-## 4. MVP 最终边界
+LLM narrator 只能把结构化结果转为报告，不获取 Kubernetes 写权限、不执行 shell、不进入
+请求路径。自动 actuator 不属于 MVP。
 
-### MVP-1：Serving Baseline
+## 6. 开源技术边界
 
-- 默认 `Service + keep-alive`；
-- Gateway/Loadgen/vLLM 可用 Kustomize 复现；
-- JSONL 和 Prometheus 指标契约稳定；
-- 记录 request、prefix group、backend、TTFT、错误和版本 metadata。
+| 层 | 当前实验实现 | 生产/对照方向 |
+| --- | --- | --- |
+| Inference engine | vLLM `0.23.0` | 保持上游 vLLM，不自研 engine |
+| Proxy | Go streaming proxy | Envoy/Envoy Gateway |
+| Endpoint selection | FishMesh strategy | Gateway API Inference Extension EPP adapter |
+| Production scheduler comparator | Service/least-inflight | llm-d EPP、vLLM Router 或 Dynamo |
+| Discovery | EndpointSlice REST watch | InferencePool/EPP data layer |
+| Metrics | direct `/metrics` prototype | Prometheus time series + tracing |
+| GPU operations | device plugin time-slicing | GPU Operator/DCGM；仅做 node-level health |
 
-### MVP-2：可解释调度器
+“为什么不用开源”的答案不是 FishMesh 更完整，而是 FishMesh 提供了可控的因果实验和自定义
+策略核心；通用 ingress、认证、流控、精确 KV index 和大规模控制器优先复用开源。
 
-- `RouteStrategy`、`BackendResolver`、`TransportProvider` 三个接口；
-- Service、Prefix Affinity、In-flight Load-aware 三种策略；
-- EndpointSlice Ready watch，替代 Pod IP 快照；已完成第一版并保留 static fallback；
-- 健康检查、fallback、热点保护和连接池上限；
-- 通过 vLLM `/metrics` 接入 queue/running、TTFT、Prefix Cache 和 GPU 数据。
+## 7. MVP 验收边界
 
-### MVP-3：Cluster Analyst Agent
+### MVP-A：可信 Serving Baseline
 
-- 规则优先：局部性退化、GPU 饱和、推理排队、网络重传、endpoint 故障；
-- 输出证据、置信度、影响范围和建议；
-- 无 LLM 也能工作，LLM 只负责把结构化诊断翻译为可读报告；
-- 默认只读，不自动执行 `kubectl delete`、扩缩容或修改路由。
+- Service + keep-alive；
+- EndpointSlice 动态实验与 Service fallback；
+- SSE 完整消费，TTFT/TPOT/E2E/错误契约；
+- 每次实验首条 JSONL 为 `run_metadata`；
+- artifact 包含 Git SHA、image digest、vLLM 参数和集群 profile。
 
-## 5. 后续能力分层
+### MVP-B：Bounded Affinity Scheduler
 
-### Tier 1：正式 Hybrid Scheduler
+- request/session key 语义明确；
+- eligibility filter；
+- bounded affinity + overload spillover；
+- per-field presence/freshness；
+- error EWMA/circuit breaker；
+- endpoint 删除后的所有状态回收；
+- deterministic unit/race/fuzz tests。
 
-把当前三个策略统一为 score-based policy，使用 Backend Snapshot 中的 EWMA TTFT、queue
-headroom、GPU free memory、Prefix Cache hit 和错误率；对热点 prefix 设置 TTL 和最大并发，
-防止把所有请求压到一个 Pod。当前快照已完成 vLLM per-backend 对齐，GPU/node identity
-mapping 和 freshness 门控仍待补齐。
+### MVP-C：可复现实验与开源对照
 
-### Tier 2：Kernel Telemetry
+- cold/hot/mixed/skew、多个 prompt 长度和并发档位；
+- treatment 顺序随机，多轮重复，报告 effect size 和区间；
+- Pod 删除、telemetry stale、API 断连和 overload fault；
+- 同环境比较 Service、least-loaded、bounded affinity 和至少一个开源 router；
+- 单 GPU time-slicing 结果只声明行为正确性，最终核心结论用独立 GPU 或明确模拟器复验。
 
-eBPF 仅采集 TCP RTT、重传、socket lifecycle 和 stall，用来解释网络层原因；不解析 prompt、token 或 KV cache，不决定后端。
+## 8. 实施优先级
 
-### Tier 3：Guarded Agent Actuator
+### P0：方向和证据修复（本阶段）
 
-Agent 只提交 `Recommendation`，由策略门控和 Controller 决定是否应用。限制变更频率、影响范围和 TTL，保留旧策略快照和回滚按钮。
+- 统一 FishMesh 名称和新定位；
+- 更新 vLLM 及 NVIDIA device plugin 固定版本；
+- 保存失败运行、rerun 和原始 artifact；
+- 增加 run metadata 与历史 artifact provenance 标记；
+- 将环境变量解析从静默 fallback 改为启动失败；
+- 把 GPU-aware、weighted hybrid、Agent、eBPF 从下一步移出。
 
-### Tier 4：Gateway Replay Shadow
+### P1：调度器核心
 
-对幂等、脱敏、采样请求做应用层 replay；不使用 eBPF 克隆流式请求，不让 shadow 影响主请求。
+- RequestContext extractor；
+- per-field sample；
+- bounded affinity、spillover、circuit breaker；
+- transport/metric state garbage collection；
+- `MaxConnsPerHost` 和 admission limits。
 
-### Tier 5：CRD/Operator
+### P2：实验系统
 
-只有出现多个 Gateway、策略版本、灰度发布或租户隔离需求时才引入，不为当前单 Gateway 实验预先增加控制器复杂度。
+- 可声明 experiment matrix、随机顺序和重复次数；
+- 自动环境快照、raw artifact 和统计分析；
+- controlled backend simulator；
+- 独立 GPU 复验。
 
-## 6. 关键工程约束
+### P3：工业化集成
 
-- 不把 Gateway 的 prefix hash 叫作 vLLM Cache Key；Prefix Cache 以 vLLM 自身指标为准。参考 [Automatic Prefix Caching](https://docs.vllm.ai/en/latest/design/prefix_caching/) 和 [vLLM Metrics](https://docs.vllm.ai/en/v0.11.0/design/metrics.html)。
-- 不把 request routing 叫 Kubernetes scheduling。
-- 不使用静态 Pod IP 作为正式发现机制。
-- 不把 Agent 放进每请求路径。
-- 不因一次更好的 P95 就忽略 P50、P99、成功率和故障恢复。
-- 所有策略都必须有 Service fallback、超时、健康状态和资源上限。
-- 所有 GPU 实验前先验证内核、DKMS、NVML、CDI、device plugin 和 vLLM readiness。
+- Gateway API Inference Extension EPP adapter；
+- llm-d/vLLM Router 对照；
+- multi-arch、registry digest、SBOM、签名和 E2E CI；
+- Prometheus、Grafana、OpenTelemetry；
+- PDB、逐副本滚动和故障演练。
 
-## 7. 当前迭代记录（2026-08-09）
+## 9. 明确延期
 
-本轮完成了从动态地址到可审计 backend snapshot 的连续链路：
+以下方向在 MVP 数据证明需求前不实施：
 
-1. EndpointSlice resolver 保留 Pod `targetRef`，并记录最近成功时间、resourceVersion、
-   错误和 Ready backend 数；watch 之外增加周期性 relist，避免无事件长连接阻塞恢复；
-2. 新增 Kubernetes identity provider，以一次 namespace-scoped Pod list 建立
-   `backend ID -> Pod -> Node -> declared GPU request` 映射；
-3. Gateway `/metrics` 暴露 identity、GPU request、discovery status/freshness，缓存超过
-   `FISHMESH_ENDPOINT_MAX_AGE` 后 `/readyz` 返回 503；
-4. K3s 正常验证两个 backend 均映射到 `fishmesh-gpu`，GPU request 均为 1；临时撤销 RoleBinding
-   后状态变为 `degraded/503`，恢复权限后约一个刷新周期自动回到 `ok/200`；
-5. 验证完成后已恢复默认 Service + keep-alive baseline，删除实验 RBAC。
-
-当前边界：GPU request 是声明值，不是实时利用率；必须先把 DCGM/NVIDIA exporter 的
-   node/device label 与 Pod identity 对齐，才能把 GPU headroom 纳入调度分数。
-
-## 8. 最终实施顺序
-
-1. 完成 GPU exporter node/device label 与 Pod→Node 身份链路的对应验证；
-2. 实现 Hybrid Scheduler score，加入 queue、TTFT、Prefix Cache、GPU headroom 和 discovery
-   failure penalty，并保持 Service fallback；
-3. 用 hot/mixed/saturation 负载重新验证 P50/P95/P99、成功率和 backend 分布；
-4. 实现只读 Cluster Analyst Agent 和结构化 Recommendation；
-5. 在 Shadow/Simulation 中验证 Agent 建议，最后再考虑 guarded actuation。
-
-项目完成的标准不是“所有模块都存在”，而是能够用实验回答：何时 Keepalive 足够、何时 Prefix Affinity 值得付出复杂度、何时负载和故障信号必须覆盖语义局部性，以及 Agent 的建议是否有可审计证据。
-
-当前 Agent 骨架已落地在 `cmd/fishmesh-analyst` 与 `internal/diagnostics`：它以结构化
-`Incident -> Tool Signal -> RulePolicy -> Diagnosis` 验证控制面契约，默认 demo 模式
-可重复，`gateway-metrics` 与 `observability` overlay 可接入 Gateway、vLLM、GPU 和
-Kubernetes 只读信号。LLM narrator、eBPF collector 和 guarded actuator 仍按上面的分层
-顺序推进。
+- eBPF 请求路由或 socket rewrite；
+- per-backend GPU utilization score；
+- LLM tool-calling Agent 和自动 actuator；
+- FishMesh CRD/Operator；
+- prefill/decode disaggregation；
+- 请求 replay shadow；
+- 为展示技术栈而迁移 Service Mesh、Cilium 或 GitOps。
