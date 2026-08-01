@@ -5,7 +5,7 @@ metadata:
   annotations:
     fishmesh.io/routing-mode: service
     fishmesh.io/transport: keep-alive
-    fishmesh.io/config-version: v2-serving-baseline
+    fishmesh.io/config-version: v3-serving-reliability
 data:
   FISHMESH_LISTEN_ADDRESS: ":8080"
   FISHMESH_UPSTREAM_URL: http://qwen-vllm-baseline.kubellm.svc.cluster.local:8000
@@ -25,3 +25,13 @@ data:
   FISHMESH_UPSTREAM_KEEPALIVE: "true"
   FISHMESH_REQUEST_TIMEOUT: 90s
   FISHMESH_SHUTDOWN_TIMEOUT: 30s
+  FISHMESH_AFFINITY_TTL: 5m
+  FISHMESH_AFFINITY_MAX_ENTRIES: "10000"
+  FISHMESH_AFFINITY_INFLIGHT_DELTA: "2"
+  FISHMESH_AFFINITY_QUEUE_DEPTH_DELTA: "1"
+  FISHMESH_MAX_INFLIGHT_REQUESTS: "128"
+  FISHMESH_MAX_CONNS_PER_HOST: "32"
+  FISHMESH_CIRCUIT_EWMA_ALPHA: "0.5"
+  FISHMESH_CIRCUIT_ERROR_THRESHOLD: "0.6"
+  FISHMESH_CIRCUIT_MIN_REQUESTS: "3"
+  FISHMESH_CIRCUIT_OPEN_DURATION: 10s

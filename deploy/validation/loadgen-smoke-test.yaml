@@ -33,13 +33,13 @@ spec:
           type: RuntimeDefault
       containers:
         - name: loadgen
-          image: fishmesh:0.1.0-p0
+          image: fishmesh:0.3.0-p1
           imagePullPolicy: Never
           command: ["/usr/local/bin/fishmesh-loadgen"]
           env:
-            - {name: FISHMESH_RUN_ID, value: p0-loadgen-runtime-smoke}
-            - {name: FISHMESH_GIT_SHA, value: working-tree-p0-20260809}
-            - {name: FISHMESH_GATEWAY_IMAGE, value: "fishmesh:0.1.0-p0@sha256:4e9e242b9b0b19d2b10a58429d343dee69cbd7b18a5e45517396613178117cd9"}
+            - {name: FISHMESH_RUN_ID, value: 2026-08-09-request-path-reliability-smoke}
+            - {name: FISHMESH_GIT_SHA, value: bdada54de3e7d3533423a23cb9a1ff769fd1b0fb}
+            - {name: FISHMESH_GATEWAY_IMAGE, value: "fishmesh:0.3.0-p1@sha256:036149be62f706b5cc3580e1caf29714282a784bc21c56fc30f88a09d3bc0223"}
             - {name: FISHMESH_VLLM_VERSION, value: "0.23.0"}
             - {name: FISHMESH_CLUSTER_PROFILE, value: k3s-rtx4060-timeslicing-v1}
           args:
@@ -47,7 +47,7 @@ spec:
             - --concurrency=2
             - --prefix-groups=2
             - --prefix-bytes=1024
-            - --prefix-namespace=p0-runtime-smoke
+            - --prefix-namespace=request-path-reliability-smoke
             - --max-tokens=8
             - --request-timeout=90s
             - --keep-alive=true

@@ -65,6 +65,9 @@ type Result struct {
 	RoutingMode          string  `json:"routing_mode,omitempty"`
 	RouteReason          string  `json:"route_reason,omitempty"`
 	BackendID            string  `json:"backend_id,omitempty"`
+	PreferredBackendID   string  `json:"preferred_backend_id,omitempty"`
+	Policy               string  `json:"policy,omitempty"`
+	SpilloverReason      string  `json:"spillover_reason,omitempty"`
 	SelectedUpstream     string  `json:"selected_upstream,omitempty"`
 	TTFTMilliseconds     float64 `json:"ttft_ms,omitempty"`
 	DurationMilliseconds float64 `json:"duration_ms"`
@@ -178,6 +181,9 @@ func execute(ctx context.Context, client *http.Client, config Config, requestNum
 	result.RoutingMode = response.Header.Get("X-FishMesh-Routing-Mode")
 	result.RouteReason = response.Header.Get("X-FishMesh-Route-Reason")
 	result.BackendID = response.Header.Get("X-FishMesh-Backend-ID")
+	result.PreferredBackendID = response.Header.Get("X-FishMesh-Preferred-Backend-ID")
+	result.Policy = response.Header.Get("X-FishMesh-Policy")
+	result.SpilloverReason = response.Header.Get("X-FishMesh-Spillover-Reason")
 	result.SelectedUpstream = response.Header.Get("X-FishMesh-Upstream")
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		body, _ := io.ReadAll(io.LimitReader(response.Body, 4096))

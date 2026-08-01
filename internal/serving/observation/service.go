@@ -112,6 +112,8 @@ func (s *Service) Snapshot() map[string]routing.BackendObservation {
 				state.Error = "observation is stale"
 			}
 		}
+		state.QueueLength = freshSample(state.QueueLength, now, s.maxAge)
+		state.RunningRequests = freshSample(state.RunningRequests, now, s.maxAge)
 		result[id] = state
 	}
 	return result
@@ -179,6 +181,8 @@ func (s *Service) refresh(ctx context.Context) {
 			if state.ObservedAt.IsZero() {
 				state.ObservedAt = s.clock()
 			}
+			state.QueueLength = normalizeSample(state.QueueLength, state.ObservedAt, state.Source)
+			state.RunningRequests = normalizeSample(state.RunningRequests, state.ObservedAt, state.Source)
 			mu.Lock()
 			next[backend.ID] = state
 			mu.Unlock()
@@ -188,6 +192,32 @@ func (s *Service) refresh(ctx context.Context) {
 	s.mu.Lock()
 	s.states = next
 	s.mu.Unlock()
+}
+
+func normalizeSample[T any](sample routing.Sample[T], fallbackTime time.Time, fallbackSource string) routing.Sample[T] {
+	if !sample.Valid {
+		return sample
+	}
+	if sample.ObservedAt.IsZero() {
+		sample.ObservedAt = fallbackTime
+	}
+	if sample.Source == "" {
+		sample.Source = fallbackSource
+	}
+	return sample
+}
+
+func freshSample[T any](sample routing.Sample[T], now time.Time, maxAge time.Duration) routing.Sample[T] {
+	if !sample.Valid || sample.ObservedAt.IsZero() {
+		return sample
+	}
+	if now.Sub(sample.ObservedAt) > maxAge {
+		sample.Valid = false
+		if sample.Error == "" {
+			sample.Error = "sample is stale"
+		}
+	}
+	return sample
 }
 
 func joinErrors(first, second string) string {

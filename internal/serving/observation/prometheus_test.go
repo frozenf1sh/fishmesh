@@ -37,7 +37,7 @@ vllm:time_to_first_token_seconds_bucket{le="+Inf"} 10
 	if state.Status != routing.ObservationOK || state.ObservedAt != time.Unix(5, 0) {
 		t.Fatalf("unexpected state: %+v", state)
 	}
-	if state.QueueLength != 2 || state.RunningRequests != 4 || state.PrefixCacheHitRate != 0.8 || state.TTFTP95Milliseconds != 500 || state.KVCacheUsagePercent != 25 {
+	if !state.QueueLength.Valid || state.QueueLength.Value != 2 || !state.RunningRequests.Valid || state.RunningRequests.Value != 4 || state.PrefixCacheHitRate != 0.8 || state.TTFTP95Milliseconds != 500 || state.KVCacheUsagePercent != 25 {
 		t.Fatalf("unexpected observations: %+v", state)
 	}
 }
@@ -47,7 +47,7 @@ type fakeCollector struct {
 }
 
 func (c fakeCollector) Collect(context.Context, routing.Backend) routing.BackendObservation {
-	return routing.BackendObservation{Status: routing.ObservationOK, ObservedAt: c.clock, QueueLength: 3}
+	return routing.BackendObservation{Status: routing.ObservationOK, ObservedAt: c.clock, QueueLength: routing.Sample[float64]{Value: 3, Valid: true, ObservedAt: c.clock}}
 }
 
 func TestServiceMarksStaleObservationDegraded(t *testing.T) {
@@ -72,7 +72,21 @@ func TestServiceMarksStaleObservationDegraded(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 	state := snapshot["endpoint-a"]
-	if state.Status != routing.ObservationDegraded || state.Error != "observation is stale" || state.Freshness != 10*time.Second {
+	if state.Status != routing.ObservationDegraded || state.Error != "observation is stale" || state.Freshness != 10*time.Second || state.QueueLength.Valid || state.QueueLength.Error != "sample is stale" {
 		t.Fatalf("unexpected stale state: %+v", state)
+	}
+}
+
+func TestPrometheusCollectorPreservesObservedZero(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_, _ = writer.Write([]byte("# TYPE vllm:num_requests_waiting gauge\nvllm:num_requests_waiting 0\n"))
+	}))
+	defer server.Close()
+	state := (PrometheusCollector{HTTPClient: server.Client()}).Collect(context.Background(), routing.Backend{ID: "a", URL: server.URL})
+	if !state.QueueLength.Valid || state.QueueLength.Value != 0 {
+		t.Fatalf("observed zero was treated as missing: %+v", state.QueueLength)
+	}
+	if state.RunningRequests.Valid {
+		t.Fatalf("missing running metric was treated as observed: %+v", state.RunningRequests)
 	}
 }

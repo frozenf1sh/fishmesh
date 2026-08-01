@@ -52,12 +52,12 @@ spec:
               drop: ["ALL"]
       containers:
         - name: loadgen
-          image: fishmesh:0.1.0-p0
+          image: fishmesh:0.2.0-p1
           imagePullPolicy: Never
           command: ["/usr/local/bin/fishmesh-loadgen"]
           env:
             - {name: FISHMESH_RUN_ID, value: service-keepalive-baseline-p0}
-            - {name: FISHMESH_GATEWAY_IMAGE, value: "fishmesh:0.1.0-p0"}
+            - {name: FISHMESH_GATEWAY_IMAGE, value: "fishmesh:0.2.0-p1"}
             - {name: FISHMESH_VLLM_VERSION, value: "0.23.0"}
             - {name: FISHMESH_CLUSTER_PROFILE, value: k3s-rtx4060-timeslicing-v1}
           args:

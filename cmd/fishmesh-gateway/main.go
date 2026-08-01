@@ -59,7 +59,24 @@ func main() {
 	defer stop()
 
 	go func() {
-		logger.Info("gateway listening", "address", config.ListenAddress, "upstream", config.UpstreamURL)
+		logger.Info("gateway listening",
+			"address", config.ListenAddress,
+			"upstream", config.UpstreamURL,
+			"routing_mode", config.RoutingMode,
+			"endpoint_discovery", config.EndpointDiscovery,
+			"observation_mode", config.ObservationMode,
+			"upstream_keepalive", config.KeepAlive,
+			"affinity_ttl", config.AffinityTTL,
+			"affinity_max_entries", config.AffinityMaxEntries,
+			"affinity_inflight_delta", config.AffinityInflightDelta,
+			"affinity_queue_depth_delta", config.AffinityQueueDepthDelta,
+			"max_inflight_requests", config.MaxInflightRequests,
+			"max_conns_per_host", config.MaxConnsPerHost,
+			"circuit_ewma_alpha", config.CircuitEWMAAlpha,
+			"circuit_error_threshold", config.CircuitErrorThreshold,
+			"circuit_min_requests", config.CircuitMinimumRequests,
+			"circuit_open_duration", config.CircuitOpenDuration,
+		)
 		if serveErr := httpServer.ListenAndServe(); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 			// http.ErrServerClosed 是 Shutdown() 被调用后 ListenAndServe 的正常
 			// 返回，不是错误；只有其他错误才需要记录并主动触发关停流程。

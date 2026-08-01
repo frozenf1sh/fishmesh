@@ -1,8 +1,40 @@
 # FishMesh 可复现实验方案
 
-> 本文件取代“每个策略跑一次并比较单个 P95”的方式。历史报告保留，但只作为探索性证据。
+> 实验服务于工程决策、验收和回归防护，不是独立产品路线。本文件取代“每个策略跑一次并
+> 比较单个 P95”的方式；历史报告保留，但只作为探索性证据。
 
-## 1. 要回答的问题
+## 1. 实验准入与退出
+
+### 1.1 准入条件
+
+创建 experiment manifest 或占用真实 GPU 前，必须先写明：
+
+1. **工程决策**：结果要决定哪个实现、默认值或风险是否可接受；
+2. **候选方案**：至少一个 baseline 和一个 treatment；
+3. **判定标准**：运行前确定行为或性能阈值，不能看完结果再修改；
+4. **后续动作**：不同结果分别会触发实现、回退、延期还是删除；
+5. **最低环境**：能用 unit/fault test 或 simulator 回答时，不先占用真实 GPU。
+
+不能指向一个工程动作的实验不进入当前里程碑。为了增加技术名词、图表或 workload 维度的
+探索默认放入 backlog，不能阻塞 reliability、standard integration 和 operability。
+
+### 1.2 三类验证
+
+| 类型 | 用途 | 产物 | 是否需要统计区间 |
+| --- | --- | --- | --- |
+| Behavior/conformance | 验证状态机、不变量和故障语义 | 自动测试、reason、状态转换 | 否 |
+| Performance decision | 在候选实现或默认值间选择 | 多轮 raw data、区间、决策 | 是 |
+| Exploratory profile | 发现可能的问题 | 明确标注的本地记录 | 不形成能力声明 |
+
+单次 K3s smoke 属于 behavior/conformance。它可以证明请求成功经过 affinity、spillover 或
+fallback，不能证明策略性能更优。
+
+### 1.3 停止条件
+
+达到预定义精度或足以做工程选择后停止扩展矩阵。若结果不稳定，先检查环境、实现或测量
+契约；不能无限增加重复次数掩盖不可复现的系统。结论写入设计/阶段文档后，实验任务才完成。
+
+## 2. 当前要回答的问题
 
 实验只验证四个独立假设：
 
@@ -16,7 +48,10 @@
 
 GPU-aware、eBPF 网络优化、LLM Agent 和 disaggregated serving 不属于本轮假设。
 
-## 2. 对照策略
+这些问题分别服务于 keep-alive 默认值、bounded-affinity 默认策略、过载保护和故障恢复
+验收，不用于证明 FishMesh 在所有 workload 下优于开源 scheduler。
+
+## 3. 对照策略
 
 每个 workload 至少比较：
 
@@ -28,9 +63,9 @@ GPU-aware、eBPF 网络优化、LLM Agent 和 disaggregated serving 不属于本
 
 `service-no-keepalive` 只用于 transport 假设，不参加后续 scheduler 排名。
 
-## 3. 工作负载矩阵
+## 4. 工作负载矩阵
 
-### 3.1 基础维度
+### 4.1 基础维度
 
 | 维度 | 建议取值 |
 | --- | --- |
@@ -45,17 +80,17 @@ GPU-aware、eBPF 网络优化、LLM Agent 和 disaggregated serving 不属于本
 不能用 byte 数冒充 token 数。Loadgen 后续应记录 tokenizer/version 和最终 prompt token count；
 完成前继续记录 byte 数，但报告必须显式标注近似值。
 
-### 3.2 两类运行环境
+### 4.2 两类运行环境
 
 1. **Real GPU correctness profile**：当前 RTX 4060 time-slicing，用来验证真实 vLLM、SSE、
    EndpointSlice、cache 行为和故障恢复，不宣称独立 GPU 扩展性。
 2. **Controlled simulator profile**：多个可控 backend，注入 queue、cache、延迟和故障，用来
    验证策略不变量、阈值和恢复时间。
 
-最终简历性能数字必须在至少两个独立物理 GPU/backend 上复验；可以使用短时云 GPU，不要求
-长期保留集群。
+简历若使用性能数字，必须在至少两个独立物理 GPU/backend 上复验；没有满足该条件时，项目
+仍可凭可靠性、标准集成和故障 E2E 完成工程 MVP，不应为了制造数字阻塞交付。
 
-## 4. 运行规程
+## 5. 运行规程
 
 每个 experiment block：
 
@@ -71,7 +106,7 @@ GPU-aware、eBPF 网络优化、LLM Agent 和 disaggregated serving 不属于本
    混入性能统计；
 10. 分析脚本只读取 immutable artifact，不从文档手工抄数字。
 
-## 5. Artifact 契约
+## 6. Artifact 契约
 
 JSONL 顺序：
 
@@ -92,12 +127,13 @@ summary
 - random seed 和 treatment order；
 - warmup/measurement 标记。
 
-仓库保留 failed attempt 和 rerun。报告若选择某轮，必须给出预先定义的排除原因，不能因为
-结果更好而选择 rerun。
+本地或外部 artifact 存储保留 failed attempt 和 rerun。Git 只保存生成器、声明式配置、
+分析代码、schema 和经过评审的结论；raw JSONL、压缩日志、节点转储和集群快照不提交。
+报告若选择某轮，必须给出预先定义的排除原因，不能因为结果更好而选择 rerun。
 
-## 6. 指标
+## 7. 指标
 
-### 6.1 主要指标
+### 7.1 主要指标
 
 - success/error/timeout rate；
 - TTFT P50/P95/P99；
@@ -108,7 +144,7 @@ summary
 - cache hit tokens/query tokens 的窗口 delta；
 - fault detection、traffic removal 和 recovery time。
 
-### 6.2 诊断指标
+### 7.2 诊断指标
 
 - per-backend waiting/running；
 - local in-flight 和 error EWMA；
@@ -119,7 +155,7 @@ summary
 
 节点 GPU 指标不得写成 backend A/B 各自的利用率。
 
-## 7. 统计和结论门槛
+## 8. 统计和结论门槛
 
 - 报告每轮分布和跨轮中位数，不只报告表现最好的一轮；
 - 对主要差异给出 bootstrap 95% interval 或等价不确定性区间；
@@ -129,7 +165,7 @@ summary
 - saturation/failure treatment 不与正常稳态 treatment 混合；
 - 单 GPU profile 的结论限定为该硬件和版本。
 
-Bounded affinity 的 MVP 验收条件：
+Bounded affinity 的性能决策条件：
 
 1. hot workload 下相对 least-loaded 保留可重复的 locality 收益；
 2. skew/saturation 下相对 pure affinity 显著降低 P99 或失败率；
@@ -137,7 +173,10 @@ Bounded affinity 的 MVP 验收条件：
 4. 恢复后无需重启 Gateway 即回到正常 selection；
 5. 所有决策能由 reason/metrics/artifact 解释。
 
-## 8. 历史 2026-08-08 数据处理
+这些条件决定策略默认值和适用范围，不替代 circuit、GC、admission、E2E 和标准集成等工程
+MVP 验收项。
+
+## 9. 历史 2026-08-08 数据处理
 
 历史结果不删除，也不重新包装为严格实验：
 

@@ -44,10 +44,10 @@ func (c PrometheusCollector) Collect(ctx context.Context, backend routing.Backen
 	}
 	observed := 0
 	if value, ok := sum(families, "vllm:num_requests_waiting", "vllm:request_queue_size"); ok {
-		state.QueueLength, observed = value, observed+1
+		state.QueueLength, observed = metricSample(value, now, backend.URL), observed+1
 	}
 	if value, ok := sum(families, "vllm:num_requests_running"); ok {
-		state.RunningRequests, observed = value, observed+1
+		state.RunningRequests, observed = metricSample(value, now, backend.URL), observed+1
 	}
 	var cacheHits, cacheQueries float64
 	if value, ok := sum(families, "vllm:prefix_cache_hits_total"); ok {
@@ -77,6 +77,10 @@ func (c PrometheusCollector) Collect(ctx context.Context, backend routing.Backen
 	}
 	state.Status = routing.ObservationOK
 	return state
+}
+
+func metricSample(value float64, observedAt time.Time, source string) routing.Sample[float64] {
+	return routing.Sample[float64]{Value: value, Valid: true, ObservedAt: observedAt, Source: source}
 }
 
 func (c PrometheusCollector) clock() time.Time {

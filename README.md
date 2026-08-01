@@ -1,153 +1,175 @@
 # FishMesh
 
-> An experiment-driven, explainable request scheduler for Kubernetes-hosted LLM inference.
+> A Kubernetes-native traffic scheduler for self-hosted LLM inference.
 
-FishMesh is not another production AI Gateway and does not try to replace vLLM,
-Envoy, llm-d, NVIDIA Dynamo, or Kubernetes Gateway API Inference Extension. It is
-a compact systems project for answering a narrower question with reproducible
-evidence:
+FishMesh routes OpenAI-compatible streaming requests across dynamic vLLM
+replicas. It preserves request affinity while a preferred backend has capacity,
+spills traffic to a less-loaded backend under pressure, and falls back safely
+when endpoint discovery becomes unavailable or stale.
 
-> When does connection reuse suffice, when is request affinity beneficial, and
-> when must load and failure signals override locality?
+The project focuses on the request-serving problems that sit between a generic
+Kubernetes Service and a model server: long-lived streaming requests, dynamic
+backend membership, overload isolation, routing state lifecycle and observable
+failure semantics.
 
-The project deliberately separates a deterministic request path from a slow,
-read-only evidence path. The current Go gateway is an experimental carrier for
-the scheduler core. The intended production integration boundary is a future
-Gateway API Inference Extension Endpoint Picker (EPP) adapter, so mature open
-source software can continue to own ingress, authentication, rate limiting and
-general proxy behavior.
+## Why FishMesh
 
-## What FishMesh is—and is not
+A Kubernetes Service can distribute connections, but it does not understand
+request affinity, model-server queue state or the lifecycle of a long-running
+LLM stream. Pure affinity can improve reuse for repeated sessions, but it can
+also overload one replica and amplify tail latency.
 
-FishMesh currently provides:
+FishMesh implements a bounded policy instead:
 
-- an OpenAI-compatible streaming proxy with correct SSE draining and TTFT
-  measurement;
-- Kubernetes EndpointSlice discovery with Ready filtering, bounded relist,
-  freshness and Service fallback;
-- per-backend vLLM observation snapshots with explicit unavailable/degraded
-  states;
-- deterministic Service, routing-key affinity and least-inflight experiment
-  policies;
-- a reproducible load generator whose JSONL output records run provenance;
-- a read-only evidence-based diagnoser for validating signal contracts.
+1. discover only Ready vLLM endpoints and reject stale discovery state;
+2. select a stable preferred backend from a cooperative request/session key;
+3. keep affinity while queue and local in-flight limits remain within bounds;
+4. spill to a less-loaded backend when the preferred backend crosses a bound;
+5. record why every request was kept, spilled or sent through the Service
+   fallback.
 
-FishMesh does **not** currently claim:
+## Current capabilities
 
-- exact KV-cache awareness—the affinity experiment consumes a cooperative
-  routing key, not vLLM token-block cache events;
-- per-backend GPU utilization—the two replicas share one time-sliced RTX 4060,
-  so device metrics cannot be attributed reliably to one Pod;
-- production high availability—the current cluster has one physical GPU and one
-  Gateway replica;
-- an autonomous AI agent—the diagnoser is deterministic rules, and an LLM
-  narrator remains optional;
-- a statistically conclusive performance result—the 2026-08-08 runs are
-  exploratory evidence and are being replaced by a repeated, randomized plan.
+- OpenAI-compatible HTTP/SSE proxying with cancellation, complete stream
+  draining and TTFT metrics;
+- namespace-scoped EndpointSlice watch/list with Ready filtering, periodic
+  relist, freshness and Kubernetes Service fallback;
+- per-backend vLLM queue/running observations with explicit availability and
+  age;
+- `bounded-affinity-v1`: SHA-256 routing-key storage, Rendezvous Hash, bounded
+  TTL registry and independent queue/local-inflight spillover thresholds;
+- non-blocking admission, per-backend connection limits, transport-error EWMA
+  circuits and endpoint-scoped state garbage collection;
+- Prometheus metrics and response provenance for routing decisions, discovery
+  state, backend observations and spillover reasons;
+- bounded configuration parsing, readiness/liveness probes, graceful shutdown,
+  least-privilege RBAC and race-tested scheduler/discovery paths;
+- a deterministic load generator and K3s validation workloads used to verify
+  system behavior.
 
-## Current architecture
+## Runtime architecture
 
 ```text
 OpenAI client
-  -> FishMesh experimental Gateway
-       -> request/session routing key
-       -> eligibility filter
-       -> bounded affinity + load spillover (next scheduler milestone)
-       -> vLLM backend
+  -> FishMesh request lifecycle
+       -> endpoint eligibility
+       -> bounded-affinity scheduler
+       -> per-backend transport
+       -> vLLM replica
 
-EndpointSlice + vLLM metrics + local outcomes
-  -> immutable backend snapshot
-  -> request scheduler
+EndpointSlice -----> immutable endpoint snapshot ----+
+vLLM metrics ------> backend observation snapshot ---+-> scheduler
+local outcomes ----> in-flight / error state --------+
 
-Prometheus windows + Kubernetes events + node GPU health (planned)
-  -> evidence-based diagnoser
-  -> read-only recommendation
+Prometheus <-------- decisions, failures and latency
 ```
 
-Fast-path signals and slow-path evidence are intentionally different. Queue,
-running requests, local in-flight requests and recent transport errors may
-participate in routing. Cumulative TTFT histograms, prefix-cache hit-rate trends,
-node GPU telemetry and network telemetry are evaluation or safety signals; they
-are not mixed into an arbitrary weighted score.
+The current standalone Go Gateway owns the complete request lifecycle so the
+scheduler can be developed and tested without an external proxy. It is the
+implemented development and demonstration mode, not an attempt to replace a
+production gateway.
 
-## Verified environment
+The production-shaped integration target is an Endpoint Picker/scheduler
+extension behind an Envoy-compatible Gateway. Gateway API Inference Extension
+now keeps the InferencePool and lightweight EPP APIs, while the full EPP
+scheduler has moved to llm-d. FishMesh will therefore validate an llm-d
+scheduler plugin or protocol-compatible integration before growing the custom
+proxy further:
 
-The local research cluster uses:
+- [Gateway API Inference Extension](https://github.com/kubernetes-sigs/gateway-api-inference-extension)
+- [llm-d Request Scheduler](https://llm-d.ai/docs/architecture/core/router/epp/scheduling)
 
-| Layer | Pinned baseline |
-| --- | --- |
-| Kubernetes | K3s `v1.36.3+k3s1`, two nodes over Tailscale |
-| Inference runtime | vLLM `0.23.0` OpenAI server |
-| Model fixture | Qwen2.5-0.5B-Instruct, offline local PV |
-| GPU runtime | NVIDIA driver `610.43.02`, device plugin `v0.19.2` |
-| Application | Go `1.26`, standard-library HTTP/SSE, Prometheus client |
-| Packaging | Kustomize, multi-stage Docker, distroless runtime |
+## Failure contract
 
-The inference node has one RTX 4060 Laptop GPU. Kubernetes advertises two GPU
-shares through NVIDIA time-slicing so that two vLLM processes can be used for
-routing experiments. These shares are not independent GPUs and provide neither
-VRAM nor failure isolation. Results from this profile validate routing behavior,
-not production multi-GPU scalability.
+| Condition | Current behavior | Next hardening step |
+| --- | --- | --- |
+| EndpointSlice unavailable but snapshot fresh | continue from bounded snapshot | fault-duration E2E test |
+| Snapshot stale or no Ready endpoint | use Kubernetes Service fallback | explicit alert and recovery SLO |
+| Preferred backend crosses a load bound | spill without rewriting affinity | admission and saturation tests |
+| Partial/missing queue observations | exclude queue from the decision | per-field sample contract |
+| Upstream transport errors | short-TTL EWMA circuit; client cancellation excluded | simulator fault E2E |
+| Endpoint removed | stop selection; reclaim transport, counters, circuit and metrics | churn soak test |
 
-vLLM `0.11.0` remains locally available only as the historical
-`2026-08-08` experiment runtime. New manifests target `0.23.0`; reports must
-always state which version produced their artifacts.
+## Run locally against the K3s cluster
 
-## Repository guide
-
-- [`docs/design/plan.md`](docs/design/plan.md): current architecture decisions,
-  MVP boundary and roadmap;
-- [`docs/experiments/plan.md`](docs/experiments/plan.md): experiment matrix,
-  provenance contract and statistical acceptance rules;
-- [`docs/experiments/2026-08-08-llm-scheduling.md`](docs/experiments/2026-08-08-llm-scheduling.md):
-  exploratory historical results and their limitations;
-- [`docs/stages/`](docs/stages/): implementation-stage records;
-- [`artifacts/`](artifacts/): retained raw evidence, including failed runs and
-  reruns;
-- [`deploy/`](deploy/): Kustomize baselines, isolated experiments and validation
-  workloads.
-
-## Local verification
+Verify the repository first:
 
 ```bash
 make ci
 ```
 
-`make ci` runs race-enabled tests, `go vet`, builds all binaries, and renders
-the supported Kubernetes overlays.
-
-To inspect the cluster without changing it:
+Inspect the configured cluster:
 
 ```bash
 kubectl --kubeconfig ~/.kube/fishmesh.yaml get nodes
-kubectl --kubeconfig ~/.kube/fishmesh.yaml -n kubellm get deploy,pod,svc,endpointslice
+kubectl --kubeconfig ~/.kube/fishmesh.yaml \
+  -n kubellm get deploy,pod,svc,endpointslice
 ```
 
-To publish a completed Job that still exists in the cluster:
+Forward the Gateway and send a streaming request:
 
 ```bash
-scripts/archive-live-experiment.sh \
-  fishmesh-exp-hot-prefix-hash \
-  2026-08-08-hot-prefix-hash-attempt-1
+kubectl --kubeconfig ~/.kube/fishmesh.yaml \
+  -n kubellm port-forward svc/fishmesh-gateway 8080:8080
+
+curl -N http://127.0.0.1:8080/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -H 'X-FishMesh-Prefix-Key: demo-session' \
+  -d '{
+    "model": "qwen2.5-0.5b-instruct",
+    "messages": [{"role": "user", "content": "Introduce FishMesh briefly."}],
+    "stream": true,
+    "max_tokens": 64
+  }'
 ```
 
-Historical recovery is explicitly marked as partial provenance. New benchmark
-runs emit a `run_metadata` JSONL record and must capture image digests, Git SHA,
-runtime arguments, cluster profile and treatment order before execution.
+The response exposes the selected policy, preferred backend, selected backend
+and spillover reason through `X-FishMesh-*` headers.
 
-## Project success criteria
+## Engineering scope
 
-FishMesh is complete as a portfolio MVP when it can reproducibly demonstrate:
+FishMesh owns:
 
-1. the transport-only effect of keep-alive;
-2. the workload conditions under which affinity helps;
-3. the overload point where bounded affinity spills traffic safely;
-4. recovery behavior under Pod deletion, stale telemetry and Kubernetes API
-   interruption;
-5. a same-environment comparison with a mainstream open-source inference
-   router;
-6. a clean integration path to the Gateway API Inference Extension EPP model.
+- endpoint eligibility and routing-state lifecycle;
+- bounded, explainable endpoint selection;
+- overload and failure behavior on the request path;
+- the observable contract needed to operate and test those components.
 
-eBPF request routing, per-backend GPU scoring, autonomous actuation, CRDs and
-prefill/decode disaggregation are intentionally outside the MVP until an
-experiment proves they solve a measured problem.
+FishMesh reuses upstream vLLM for inference and will reuse Gateway API/Envoy or
+llm-d for production ingress and request-control integration. Authentication,
+tenant billing, general API-gateway features, exact token-block cache indexing,
+GPU kernels and model execution are not reimplemented here.
+
+The read-only `fishmesh-analyst` remains a secondary diagnostic prototype. Its
+scope is frozen until request-path reliability, standard integration and E2E
+operations are complete.
+
+## Roadmap
+
+1. **Request-path reliability:** admission, circuits, state GC and connection
+   bounds are implemented; simulator soak coverage remains.
+2. **Standard integration:** controlled backend simulator, EPP/llm-d integration
+   spike, then one supported integrated runtime path.
+3. **Operability:** automated fault E2E tests, dashboards, tracing, multi-arch
+   release image and supply-chain metadata.
+4. **Comparative validation:** a bounded workload matrix against Service,
+   least-loaded and one open-source scheduler.
+
+Experiments may change an engineering decision or validate an acceptance
+criterion; they are not an independent product track. See the durable
+[project charter](docs/design/project-charter.md), the
+[implementation plan](docs/design/plan.md) and the
+[experiment policy](docs/experiments/plan.md).
+
+## Verified environment and limitations
+
+The current cluster is K3s `v1.36.3+k3s1` with vLLM `0.23.0` and two vLLM
+processes sharing one time-sliced RTX 4060 Laptop GPU. It validates request
+lifecycle, discovery, routing and recovery behavior. It does not represent two
+independent GPU failure domains and is not used to claim production-scale
+performance.
+
+The latest bounded-affinity K3s smoke completed 24/24 requests and exercised
+both affinity and local-inflight spillover. Raw benchmark output and cluster
+snapshots are retained outside Git; only code, reproducible configuration and
+reviewed conclusions belong in repository history.

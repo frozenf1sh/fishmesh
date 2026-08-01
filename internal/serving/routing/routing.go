@@ -13,10 +13,11 @@ import (
 )
 
 const (
-	ModeService        = "service"
-	ModePrefixHash     = "prefix-hash" // Deprecated alias kept for old experiments.
-	ModePrefixAffinity = "prefix-affinity"
-	ModeLoadAware      = "load-aware"
+	ModeService         = "service"
+	ModePrefixHash      = "prefix-hash" // Deprecated alias kept for old experiments.
+	ModePrefixAffinity  = "prefix-affinity"
+	ModeLoadAware       = "load-aware"
+	ModeBoundedAffinity = "bounded-affinity"
 )
 
 // Backend is the stable identity and address used by a routing policy.
@@ -53,18 +54,30 @@ const (
 	ObservationUnavailable ObservationStatus = "unavailable"
 )
 
+// Sample distinguishes an observed zero from a missing value. Adapters fill
+// one sample per signal; the observation service invalidates stale samples
+// before a scheduler sees them.
+type Sample[T any] struct {
+	Value      T
+	Valid      bool
+	ObservedAt time.Time
+	Source     string
+	Error      string
+}
+
 // BackendObservation is the low-cardinality, per-backend telemetry contract.
 // The routing package owns the shape; infrastructure adapters own how values
-// are collected. Zero-valued numeric fields mean "not observed", not zero
-// load, and Status/Error make that distinction explicit.
+// are collected. Queue/running use per-field samples so an observed zero is
+// not confused with a missing or stale value. Status remains an aggregate
+// health summary for diagnostics and backwards-compatible metrics.
 type BackendObservation struct {
 	Identity            BackendIdentity
 	Status              ObservationStatus
 	Source              string
 	ObservedAt          time.Time
 	Freshness           time.Duration
-	QueueLength         float64
-	RunningRequests     float64
+	QueueLength         Sample[float64]
+	RunningRequests     Sample[float64]
 	PrefixCacheHitRate  float64
 	TTFTP95Milliseconds float64
 	KVCacheUsagePercent float64
@@ -79,12 +92,19 @@ type Snapshot struct {
 	Backends     []Backend
 	Inflight     map[string]int64
 	Observations map[string]BackendObservation
+	// Ineligible keeps lifecycle and circuit state separate from membership.
+	// Policies can preserve a stable affinity preference while spilling around
+	// a temporarily unavailable backend.
+	Ineligible map[string]string
 }
 
 // Decision records the selected backend and an explainable reason.
 type Decision struct {
-	Backend Backend
-	Reason  string
+	Backend            Backend
+	PreferredBackendID string
+	Reason             string
+	SpilloverReason    string
+	Policy             string
 }
 
 // Strategy selects one backend for a request. It is synchronous by design so
@@ -93,6 +113,13 @@ type Decision struct {
 type Strategy interface {
 	Name() string
 	Select(prefixKey string, snapshot Snapshot) (Decision, error)
+}
+
+// BackendReconciler is implemented by stateful strategies. The gateway calls
+// it with the discovery membership so state for deleted endpoints is reclaimed
+// without treating a temporary circuit as permanent membership removal.
+type BackendReconciler interface {
+	ReconcileBackends([]Backend)
 }
 
 type serviceStrategy struct{ backend Backend }
@@ -106,7 +133,7 @@ func (s serviceStrategy) Select(_ string, _ Snapshot) (Decision, error) {
 	if s.backend.ID == "" || s.backend.URL == "" {
 		return Decision{}, fmt.Errorf("service backend is incomplete")
 	}
-	return Decision{Backend: s.backend, Reason: "service-default"}, nil
+	return Decision{Backend: s.backend, PreferredBackendID: s.backend.ID, Reason: "service-default", Policy: "service-v1"}, nil
 }
 
 type prefixAffinityStrategy struct{}
@@ -119,12 +146,13 @@ func NewPrefixAffinity() Strategy { return prefixAffinityStrategy{} }
 func (prefixAffinityStrategy) Name() string { return ModePrefixAffinity }
 
 func (prefixAffinityStrategy) Select(prefixKey string, snapshot Snapshot) (Decision, error) {
-	if len(snapshot.Backends) == 0 {
+	backends := EligibleBackends(snapshot)
+	if len(backends) == 0 {
 		return Decision{}, fmt.Errorf("prefix affinity requires at least one backend")
 	}
 	hash := sha256.Sum256([]byte(prefixKey))
-	index := int(binary.BigEndian.Uint32(hash[:4]) % uint32(len(snapshot.Backends)))
-	return Decision{Backend: snapshot.Backends[index], Reason: "prefix-affinity"}, nil
+	index := int(binary.BigEndian.Uint32(hash[:4]) % uint32(len(backends)))
+	return Decision{Backend: backends[index], PreferredBackendID: backends[index].ID, Reason: "prefix-affinity", Policy: "pure-affinity-v1"}, nil
 }
 
 type loadAwareStrategy struct{}
@@ -137,21 +165,34 @@ func NewLoadAware() Strategy { return loadAwareStrategy{} }
 func (loadAwareStrategy) Name() string { return ModeLoadAware }
 
 func (loadAwareStrategy) Select(prefixKey string, snapshot Snapshot) (Decision, error) {
-	if len(snapshot.Backends) == 0 {
+	backends := EligibleBackends(snapshot)
+	if len(backends) == 0 {
 		return Decision{}, fmt.Errorf("load-aware routing requires at least one backend")
 	}
 	hash := sha256.Sum256([]byte(prefixKey))
-	start := int(binary.BigEndian.Uint32(hash[:4]) % uint32(len(snapshot.Backends)))
-	best := snapshot.Backends[start]
+	start := int(binary.BigEndian.Uint32(hash[:4]) % uint32(len(backends)))
+	best := backends[start]
 	bestInflight := snapshot.Inflight[best.ID]
-	for offset := 1; offset < len(snapshot.Backends); offset++ {
-		candidate := snapshot.Backends[(start+offset)%len(snapshot.Backends)]
+	for offset := 1; offset < len(backends); offset++ {
+		candidate := backends[(start+offset)%len(backends)]
 		candidateInflight := snapshot.Inflight[candidate.ID]
 		if candidateInflight < bestInflight {
 			best, bestInflight = candidate, candidateInflight
 		}
 	}
-	return Decision{Backend: best, Reason: "least-inflight"}, nil
+	return Decision{Backend: best, PreferredBackendID: best.ID, Reason: "least-inflight", Policy: "least-inflight-v1"}, nil
+}
+
+// EligibleBackends returns a copy containing only endpoints that are not
+// excluded by lifecycle or circuit state.
+func EligibleBackends(snapshot Snapshot) []Backend {
+	result := make([]Backend, 0, len(snapshot.Backends))
+	for _, backend := range snapshot.Backends {
+		if _, blocked := snapshot.Ineligible[backend.ID]; !blocked {
+			result = append(result, backend)
+		}
+	}
+	return result
 }
 
 // New returns a strategy for a configured mode. prefix-hash is accepted as a
@@ -164,6 +205,8 @@ func New(mode string, service Backend) (Strategy, error) {
 		return NewPrefixAffinity(), nil
 	case ModeLoadAware:
 		return NewLoadAware(), nil
+	case ModeBoundedAffinity:
+		return NewBoundedAffinity(DefaultBoundedAffinityConfig())
 	default:
 		return nil, fmt.Errorf("unsupported routing mode %q", mode)
 	}

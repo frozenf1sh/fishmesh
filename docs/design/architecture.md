@@ -1,7 +1,7 @@
-# FishMesh 代码架构与下一阶段计划
+# FishMesh 代码架构
 
-> 2026-08-09 P0 修订：项目从任意加权 Hybrid Scheduler 收敛为 bounded affinity
-> scheduler；GPU-aware、eBPF 和自动 Agent 均移出 MVP。
+> 方向与验收边界见 [`project-charter.md`](project-charter.md)。本文件只描述代码依赖和运行时
+> 演进方式。
 
 ## 1. 架构决策
 
@@ -48,6 +48,9 @@ Workload Context
 - `delivery`：HTTP API；只负责输入校验、超时和 JSON 输出。
 - `config`：环境变量映射与启动时校验。
 
+Diagnostics Context 是冻结的次要组件。request-path reliability、EPP/llm-d 集成和自动 E2E
+完成前，不增加新的 collector、Agent 或执行权限。
+
 ## 3. 依赖规则
 
 允许的方向：
@@ -68,15 +71,26 @@ domain -> standard library only
 - Loadgen 依赖 Gateway 的内部包；
 - 每请求调用 LLM。
 
-## 4. 为什么不是进一步拆成更多服务
+## 4. 运行时边界
 
-当前 Gateway、Loadgen、Analyst 的运行时边界已经清晰，但 EndpointSlice watcher、指标
-聚合和自动 actuator 尚未成熟。现在只收紧 Go 包边界，不增加进程、数据库、消息队列
-或 CRD。等出现独立扩缩容、独立权限或故障隔离需求时，再拆成服务或 Operator。
+当前 standalone Gateway 同时拥有 HTTP/SSE 生命周期和 endpoint selection，便于开发、故障
+注入和策略测试。它不是长期生产入口，不扩展 TLS、认证、tenant、通用 rate limit 或
+Gateway API 控制面。
 
-## 5. 下一阶段实施顺序
+目标 integrated runtime 复用 Envoy-compatible Gateway 和 EPP/llm-d 扩展边界。两种运行时
+共享 `internal/serving/routing` 及其状态契约，不复制策略实现：
 
-### N1：完成真实观测适配器
+```text
+standalone: client -> gateway delivery -> scheduler core -> transport -> backend
+integrated: client -> external gateway -> EPP adapter -> scheduler core -> backend
+```
+
+只有出现独立扩缩容、独立权限或故障隔离需求时才增加进程。当前不引入数据库、消息队列、
+CRD 或 Operator。
+
+## 5. 已完成的架构基础
+
+### N1：真实观测适配器
 
 当前已在 `internal/diagnostics/adapters` 实现三个只读 collector：
 
@@ -102,25 +116,44 @@ URL 不再依赖静态 Pod IP 映射，非法或缺失地址会回退到 Service
 ### N3：Bounded Affinity Scheduler
 
 Backend Snapshot 第一版已完成：EndpointSlice backend ID 与每个 vLLM `/metrics` 的 queue、
-running、Prefix Cache、TTFT 和 vLLM GPU cache usage 已对齐，并暴露 freshness/error；当前
-快照只作为观测，不改变 Prefix Affinity。Pod/Node 身份和 EndpointSlice 断连状态已具备；
+running、Prefix Cache、TTFT 和 vLLM GPU cache usage 已对齐，并暴露 freshness/error。
+bounded-affinity-v1 也已实现并通过真实 K3s smoke：只保存 cooperative routing key 的
+SHA-256，通过 Rendezvous Hash 选择 preferred backend，以独立 queue/local-inflight delta
+执行 spillover；缺失或不完整 queue snapshot 不参与决策，discovery 不可用、无 Ready backend
+或过期时回退 Service。spillover 不改写 preferred，因此压力恢复后能恢复亲和。
+
 下一步不做 GPU exporter label 对齐或任意多指标加权。当前 time-slicing 环境不能把 device
-利用率可靠归因到单个 Pod。调度器先实现 eligibility filter、routing-key affinity、
-load threshold spillover 和 Service fallback；queue/running/local error 使用短 TTL，累计
-TTFT/Prefix Cache 和 node GPU metrics 留在慢速证据路径。
+利用率可靠归因到单个 Pod。N3 剩余工作是 recent transport error circuit、endpoint 状态和
+transport GC、admission/connection 上限，以及把 backend-level status 拆成 per-field sample。
+累计 TTFT/Prefix Cache 和 node GPU metrics 继续留在慢速证据路径。
 
 阶段 04 已完成身份与故障状态基础：backend 保留 Pod targetRef，Pod list 映射 Node 和声明
 GPU request；EndpointSlice status/freshness 进入 Prometheus，缓存超过 max age 后 readiness
 返回 503；watch 之外增加周期性 relist，RBAC 恢复后可自动回到 `ok/200`。实时 GPU 利用率
 在当前集群只作为 node-level health signal，不进入 per-backend score。
 
-### N4：可复现实验与证据路径
+## 6. 下一阶段架构演进
 
-先完成 run metadata、失败/rerun artifact 保留、多轮随机化和开源 router 对照。规则诊断
-迁移到 Prometheus 时间窗口；LLM narrator 仅是可选报告层，不拥有工具执行权限。
+### N4：可靠性状态机（已完成）
 
-### N5：Gateway API EPP adapter（工业化附加项）
+已补齐 transport error circuit、endpoint state GC、admission/connection bounds 和用于
+queue/running 的 per-field sample。endpoint lifecycle 统一回收 client、counter、affinity、
+circuit、observation 和 Prometheus label；client cancellation 不计为 backend failure，响应头
+发出后的 stream failure 不重试。
 
-只有 N1-N4 的证据链稳定后，才把 scheduler core 接到 Gateway API Inference Extension
-Endpoint Picker 边界，并与 llm-d/vLLM Router 做同环境对照。Replay、自动 actuator、eBPF
-和 CRD 继续延期。
+### N5：无 GPU conformance harness
+
+controlled backend simulator 提供 delay、queue、stream、error、disconnect 和 endpoint churn。
+它用于 CI 中验证 scheduler/transport/fallback 状态机；真实 vLLM 集群只承担集成验证。
+
+### N6：EPP/llm-d 集成
+
+先用 ADR 记录当前上游协议、插件接口、失败模式和版本约束，再选择 lightweight EPP、llm-d
+scheduler plugin 或协议兼容 adapter。集成层只翻译请求和 endpoint snapshot，不重新实现
+scheduler core。
+
+### N7：可操作性
+
+增加请求到路由决策再到 upstream outcome 的 trace/log correlation、dashboard、alerts 和
+runbook；之后才执行有限的开源 scheduler 性能对照。Replay、自动 actuator、eBPF 和 CRD
+继续延期。

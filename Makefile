@@ -1,4 +1,4 @@
-VERSION ?= 0.1.0-p0
+VERSION ?= 0.3.0-p1
 
 .PHONY: all build test vet ci manifest image act-list act
 
@@ -20,6 +20,9 @@ manifest:
 	kubectl kustomize deploy/analyst/observability >/dev/null
 	kubectl kustomize deploy/experiments/endpoint-slice >/dev/null
 	kubectl kustomize deploy/experiments/backend-snapshot >/dev/null
+	kubectl kustomize deploy/experiments/bounded-affinity >/dev/null
+	kubectl kustomize deploy/experiments/bounded-affinity-smoke-config >/dev/null
+	kubectl kustomize deploy/experiments/bounded-affinity-smoke >/dev/null
 	kubectl kustomize deploy/inference >/dev/null
 	kubectl kustomize deploy/system >/dev/null
 	kubectl kustomize deploy/validation >/dev/null

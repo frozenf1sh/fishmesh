@@ -1,7 +1,12 @@
 # FishMesh 项目当前状态
 
 最后验证时间：2026-08-09。仓库为 `frozenf1sh/fishmesh`（private），当前 `main` 分支
-包含 P0 方向收敛、完整基线实现和第一轮探索性运行结果。
+包含可信 serving baseline、bounded-affinity-v1、request-path reliability 和工程优先的项目
+章程。
+
+request-path reliability 已完成，当前主线是无 GPU simulator E2E 和标准网关集成。实验只用于
+工程决策、验收和回归防护；不会作为独立路线扩展。方向基准见
+`docs/design/project-charter.md`。
 
 ## 当前运行拓扑
 
@@ -24,6 +29,9 @@ OrbStack 内置的 Kubernetes 集群不是这个多节点 control plane。官方
   `qwen-vllm` 仍然是 headless Service，EndpointSlice 实验直接读取它的 Ready 地址；
 - `fishmesh-gateway` 是一个 Go streaming proxy，运行在 GPU 节点。它不申请 GPU，
   但因为第一个镜像是 amd64 而 control plane 是 ARM64，所以被放在该节点；
+- Gateway 当前运行 `fishmesh:0.3.0-p1` 的 bounded-affinity overlay；默认阈值为 local
+  in-flight delta 2、queue-depth delta 1，EndpointSlice 不可用、无 Ready backend 或过期时
+  回退 Kubernetes Service；
 - `fishmesh-analyst` 是同镜像中的只读慢速控制面，当前以 `observability` overlay 运行在
   GPU 节点，不在请求路径中，仅通过 namespace-scoped Role 读取 Events/Pods；
 - 模型持久化于 GPU 笔记本的 `/var/lib/fishmesh/models`，通过 retained local PV/PVC
@@ -115,18 +123,31 @@ VM 的影响更大：Kubernetes API 和 reconciliation 也会停止，应按完�
   随机 treatment 顺序、失败 attempt 保留和开源 router 同环境对照。
 - P0 方向收敛：MVP 从任意 weighted hybrid score 改为 bounded affinity；GPU 指标只作为
   节点级诊断证据，eBPF、自动 actuator 和 disaggregation 明确移出 MVP。
+- P1 bounded-affinity-v1：仅保存 routing key 的 SHA-256，以 Rendezvous Hash 选择 preferred
+  backend，使用独立 queue/local-inflight threshold 溢出，具备 TTL/容量回收、Service
+  fallback、决策 provenance 和 race/integration tests。
+- P1 K3s 行为 smoke attempt 2：24/24 成功，1 次 miss、11 次 hit、12 次
+  local-inflight spillover，两个 backend 各选择 12 次；完整运行配置、镜像 digest、Job、
+  EndpointSlice、日志和 JSONL 已归档。该结果只证明行为正确性，不是性能 benchmark。
+- 工程方向章程：standalone Gateway 定位为开发/conformance 载体，生产形态提前为
+  EPP/llm-d 集成；Analyst 冻结扩展，实验系统不再与可靠性和交付能力并列为产品主线。
+- P1 request-path reliability：全局 admission 128、每 backend 连接上限 32、transport error
+  EWMA circuit、endpoint state GC、queue/running per-field sample、client cancellation 和
+  no-retry-after-headers 边界均有 race/fault tests。
+- P1 K3s 验证：`fishmesh:0.3.0-p1` manifest digest
+  `sha256:036149be62f706b5cc3580e1caf29714282a784bc21c56fc30f88a09d3bc0223`；Gateway/Analyst
+  rollout Ready 且零重启，启动日志确认全部 reliability 参数；真实 vLLM smoke 8/8 成功，
+  两个 routing key 保持 affinity，新 metrics 正常暴露。该 smoke 是兼容性验证，不是性能结论。
 
 ## 下一步待办
 
-1. 实现 bounded affinity：稳定 prefix canonicalization、碰撞安全 key、带 TTL 的 endpoint
-   registry，以及可配置的 queue/in-flight spillover threshold；
-2. 为 workload matrix 增加 warmup、seed、token count、TPOT/ITL 和 bootstrap interval，至少
-   7 次重复而不是比较单轮 P95；
-3. 用可控 simulator 验证调度不变量、过载与故障恢复，再在当前真实 GPU profile 验证 SSE、
-   vLLM cache 和 EndpointSlice 行为；
-4. 在同版本 vLLM、同 workload 下加入 llm-d EPP 或 vLLM Router 对照，回答“为什么不直接用
-   开源方案”；
-5. 获得至少两个独立物理 GPU 的短时环境后再给出扩展性数字；当前单卡 time-slicing 结果只
+1. 用可控 simulator 把 slow/error/removed backend、discovery stale、overload 和 cancellation
+   变成不依赖 GPU 的自动 E2E；
+2. 完成 EPP/llm-d integration spike，记录协议、插件扩展点、失败模式和版本约束，再选择一个
+   integrated runtime path；
+3. 增加 dashboard、trace/log correlation、runbook、multi-arch release 和 supply-chain metadata；
+4. 工程闭环后再运行有限 workload matrix，并加入一个开源 scheduler 对照；只有简历使用
+   性能数字时才要求至少两个独立物理 GPU；当前单卡 time-slicing 结果只
    能作为 correctness/profile 证据；
-6. 在声称 NetworkPolicy 已生效前迁移到支持 policy enforcement 的 CNI；当前 Flannel 不能
+5. 在声称 NetworkPolicy 已生效前迁移到支持 policy enforcement 的 CNI；当前 Flannel 不能
    执行声明式 NetworkPolicy。

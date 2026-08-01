@@ -22,7 +22,13 @@ type metrics struct {
 	requestSeconds       *prometheus.HistogramVec // 端到端请求耗时，按 method/status 分桶
 	ttftSeconds          prometheus.Histogram     // 首 token 延迟（TTFT），项目的核心测量指标
 	upstreamErrors       prometheus.Counter       // 上游传输层失败次数（区别于业务层 4xx/5xx）
+	streamErrors         prometheus.Counter       // response headers 之后的 upstream stream 读取失败
+	admissionRejections  prometheus.Counter       // Gateway 达到并发硬上限后拒绝的请求
+	circuitOpen          *prometheus.GaugeVec     // endpoint transport circuit 当前是否打开
+	circuitOpens         *prometheus.CounterVec   // endpoint transport circuit 打开次数
 	routingDecisions     *prometheus.CounterVec   // 路由模式和有限 backend ID 维度
+	routingReasons       *prometheus.CounterVec   // 固定枚举 reason，不使用请求 key 作为 label
+	affinitySpillovers   *prometheus.CounterVec   // bounded affinity spillover trigger
 	routeFallbacks       prometheus.Counter       // 路由策略失败后的 Service fallback
 	observationStatus    *prometheus.GaugeVec
 	observationFreshness *prometheus.GaugeVec
@@ -61,9 +67,27 @@ func newMetrics(registry *prometheus.Registry) *metrics {
 		upstreamErrors: prometheus.NewCounter(prometheus.CounterOpts{
 			Namespace: "fishmesh", Subsystem: "gateway", Name: "upstream_errors_total", Help: "Upstream transport failures.",
 		}),
+		streamErrors: prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace: "fishmesh", Subsystem: "gateway", Name: "upstream_stream_errors_total", Help: "Upstream response-body failures after headers were received.",
+		}),
+		admissionRejections: prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace: "fishmesh", Subsystem: "gateway", Name: "admission_rejections_total", Help: "Requests rejected because the gateway reached its in-flight limit.",
+		}),
+		circuitOpen: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: "fishmesh", Subsystem: "gateway", Name: "backend_circuit_open", Help: "Whether a backend transport-error circuit is currently open.",
+		}, []string{"backend_id"}),
+		circuitOpens: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "fishmesh", Subsystem: "gateway", Name: "backend_circuit_opens_total", Help: "Number of times a backend transport-error circuit opened.",
+		}, []string{"backend_id"}),
 		routingDecisions: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "fishmesh", Subsystem: "gateway", Name: "routing_decisions_total", Help: "Routing decisions by mode and bounded backend identity.",
 		}, []string{"mode", "backend_id"}),
+		routingReasons: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "fishmesh", Subsystem: "gateway", Name: "routing_reasons_total", Help: "Routing decisions by bounded reason enum.",
+		}, []string{"reason"}),
+		affinitySpillovers: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "fishmesh", Subsystem: "gateway", Name: "affinity_spillovers_total", Help: "Bounded affinity spillovers by pressure signal.",
+		}, []string{"reason"}),
 		routeFallbacks: prometheus.NewCounter(prometheus.CounterOpts{
 			Namespace: "fishmesh", Subsystem: "gateway", Name: "route_fallbacks_total", Help: "Routing decisions that fell back to the Service backend.",
 		}),
@@ -99,7 +123,7 @@ func newMetrics(registry *prometheus.Registry) *metrics {
 	}
 	// MustRegister：注册冲突会 panic。对运行时指标注册来说这是正确的行为——
 	// 指标定义错误属于编程错误，应当立即暴露而不是静默吞掉。
-	registry.MustRegister(m.inflight, m.requests, m.requestSeconds, m.ttftSeconds, m.upstreamErrors, m.routingDecisions, m.routeFallbacks, m.observationStatus, m.observationFreshness, m.observationQueue, m.observationRunning, m.observationIdentity, m.observationGPU, m.discoveryStatus, m.discoveryFreshness, m.discoveryReady)
+	registry.MustRegister(m.inflight, m.requests, m.requestSeconds, m.ttftSeconds, m.upstreamErrors, m.streamErrors, m.admissionRejections, m.circuitOpen, m.circuitOpens, m.routingDecisions, m.routingReasons, m.affinitySpillovers, m.routeFallbacks, m.observationStatus, m.observationFreshness, m.observationQueue, m.observationRunning, m.observationIdentity, m.observationGPU, m.discoveryStatus, m.discoveryFreshness, m.discoveryReady)
 	return m
 }
 
@@ -123,8 +147,16 @@ func (m *metrics) UpdateBackendObservations(states map[string]routing.BackendObs
 			}
 		}
 		m.observationFreshness.WithLabelValues(id).Set(state.Freshness.Seconds())
-		m.observationQueue.WithLabelValues(id).Set(state.QueueLength)
-		m.observationRunning.WithLabelValues(id).Set(state.RunningRequests)
+		if state.QueueLength.Valid {
+			m.observationQueue.WithLabelValues(id).Set(state.QueueLength.Value)
+		} else {
+			m.observationQueue.DeleteLabelValues(id)
+		}
+		if state.RunningRequests.Valid {
+			m.observationRunning.WithLabelValues(id).Set(state.RunningRequests.Value)
+		} else {
+			m.observationRunning.DeleteLabelValues(id)
+		}
 		labels := [2]string{state.Identity.PodName, state.Identity.NodeName}
 		if previous, ok := m.identityLabels[id]; ok && previous != labels {
 			m.observationIdentity.DeleteLabelValues(id, previous[0], previous[1])
@@ -143,11 +175,35 @@ func (m *metrics) deleteObservation(id string) {
 	m.observationFreshness.DeleteLabelValues(id)
 	m.observationQueue.DeleteLabelValues(id)
 	m.observationRunning.DeleteLabelValues(id)
+	m.observationGPU.DeleteLabelValues(id)
 	if labels, ok := m.identityLabels[id]; ok {
 		m.observationIdentity.DeleteLabelValues(id, labels[0], labels[1])
 		delete(m.identityLabels, id)
 	}
 	delete(m.observationIDs, id)
+}
+
+func (m *metrics) UpdateCircuit(backendID string, open bool) {
+	value := 0.0
+	if open {
+		value = 1
+	}
+	m.circuitOpen.WithLabelValues(backendID).Set(value)
+}
+
+func (m *metrics) CircuitOpened(backendID string) {
+	m.circuitOpens.WithLabelValues(backendID).Inc()
+	m.circuitOpen.WithLabelValues(backendID).Set(1)
+}
+
+func (m *metrics) DeleteBackend(backendID, routingMode string) {
+	m.routingDecisions.DeleteLabelValues(routingMode, backendID)
+	m.circuitOpen.DeleteLabelValues(backendID)
+	m.circuitOpens.DeleteLabelValues(backendID)
+	// Observation deletion also handles identity label tuples.
+	m.observationMu.Lock()
+	defer m.observationMu.Unlock()
+	m.deleteObservation(backendID)
 }
 
 func (m *metrics) UpdateEndpointDiscovery(status endpoint.ResolverStatus) {

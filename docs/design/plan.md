@@ -1,98 +1,105 @@
-# FishMesh 当前设计与实施路线
+# FishMesh 设计与实施路线
 
-> 状态：P0 方向收敛版，2026-08-09。
+> 状态：工程优先路线，2026-08-09。方向约束以
+> [`project-charter.md`](project-charter.md) 为准。
 
-## 1. 项目定位
+## 1. 交付目标
 
-FishMesh 是 Kubernetes LLM Serving 的**可解释请求调度实验平台**。它通过真实 vLLM、
-动态 endpoint、流式请求和可归档 benchmark，研究连接复用、请求亲和、服务端负载和故障
-状态之间的取舍。
+FishMesh 要交付一个 Kubernetes-native LLM 请求流量调度组件，而不是一篇调度策略研究：
 
-它不与 llm-d、NVIDIA Dynamo、vLLM Production Stack 或 Gateway API Inference Extension
-竞争完整生产能力。当前 Go Gateway 是 scheduler core 的实验载体；成熟方向是把同一策略
-核心接到 Gateway API Inference Extension Endpoint Picker（EPP）边界，并与开源 EPP 做同
-环境对照。
+- 正确代理 OpenAI-compatible HTTP/SSE 请求；
+- 从 Kubernetes 动态维护可用 backend；
+- 在 affinity、负载和故障之间做有界、可解释的 endpoint selection；
+- 在过载、endpoint 删除、观测过期和上游错误时提供明确的降级行为；
+- 以 standalone Gateway 支持开发和测试，以 EPP/llm-d 集成形成生产形态；
+- 通过自动化测试、故障演练和有限 benchmark 验证工程结果。
 
-面试叙事应是：
+实验不单独形成产品路线。只有当实验决定实现方案、验证验收条件或防止回归时，才进入当前
+里程碑。
 
-> 我没有先假设 cache-aware routing 一定更快，而是建立 Service/keep-alive 基线，发现纯
-> affinity 在热点下受益、在倾斜负载下放大尾延迟。因此我把策略收敛为 eligibility filter、
-> bounded affinity 和 load spillover，并用动态发现、freshness、故障回退和可复现实验验证
-> 每个设计选择；生产集成遵循 Kubernetes InferencePool/EPP 生态。
+## 2. 当前系统基线
 
-## 2. 已确认和未确认的事实
+### 已完成
 
-### 已确认
+- Go streaming proxy、SSE 完整消费、TTFT 和 request provenance；
+- EndpointSlice Ready discovery、watch/relist、freshness/readiness 和 Service fallback；
+- per-backend vLLM queue/running observation，区分 ok/degraded/unavailable；
+- bounded-affinity-v1：Rendezvous Hash、SHA-256 routing key、TTL/容量上限、独立
+  queue/local-inflight spillover；
+- Prometheus routing/discovery/backend metrics；
+- 严格启动配置、graceful shutdown、最小 RBAC、Kustomize、CI 和 race tests；
+- 真实 K3s + vLLM 的行为 smoke 和可追溯运行元数据。
 
-- HTTP keep-alive 是默认传输基线；
-- 固定 Pod IP 无法承受 Pod 重建，EndpointSlice Ready discovery 是必要工程基础；
-- 纯 routing-key affinity 在热点合成负载中可能降低 TTFT；
-- 纯 affinity 在混合倾斜负载中可能显著恶化 P99；
-- Gateway 本地 in-flight 不能观察绕过 Gateway 的外部负载；
-- 缺失、过期和健康的观测必须可区分，不能把缺失数据解释为零负载；
-- 两个 vLLM replica 共享一张 time-sliced RTX 4060，不是两个独立 GPU 故障域。
+### 尚未闭环
 
-### 尚未确认
+- 标准 EPP/llm-d 集成尚未验证；
+- fault E2E 主要依赖真实集群手工执行，缺少无 GPU simulator；
+- dashboard、trace、release/supply-chain 工程尚未完成。
 
-- 现有 affinity 是否提高了 vLLM 的真实 token-block Prefix Cache 命中；
-- 不同大模型、长 prompt 和高并发下的收益能否复现；
-- bounded affinity 相对 least-loaded、llm-d 或 vLLM Router 的收益；
-- 当前集群能否提供可归因到单个 Pod 的 GPU telemetry；
-- 网络是否是当前同节点数据路径中的主要瓶颈。
+## 3. 目标运行时
 
-未经确认的结论不得进入 README 的能力声明或简历性能数字。
+```text
+Development / conformance
+  client -> FishMesh standalone Gateway -> scheduler core -> simulated/vLLM backends
 
-## 3. 快路径架构
+Production-shaped integration
+  client -> Envoy-compatible Gateway -> EPP/llm-d boundary
+                                      -> FishMesh scheduler core
+                                      -> vLLM backends
+
+Shared state inputs
+  EndpointSlice / InferencePool + backend metrics + local outcomes
+```
+
+standalone 与 integrated mode 必须共享：
+
+- `RequestContext` 和 backend snapshot 契约；
+- eligibility、bounded affinity、circuit 和 fallback 语义；
+- routing reason、metrics 和结构化日志字段；
+- deterministic/race/fault tests。
+
+独立 Gateway 不继续扩展认证、租户、通用限流和 Gateway API 能力。进入集成实现前，先针对
+当前上游做短期 spike，确认 llm-d scheduler plugin、lightweight EPP 或协议兼容服务中哪个是
+最小且可维护的扩展点。
+
+## 4. 快路径设计
 
 ```text
 request
-  -> RequestContext extractor
-       model / session-or-routing-key / estimated prompt cost
-  -> EligibilityFilter
-       Ready && discovery fresh && circuit closed
-  -> BoundedAffinityPolicy
-       preferred = consistent_hash(key)
-       if preferred load <= pool minimum + threshold: preferred
-       else: least-loaded spillover
-  -> selected backend transport
-  -> streaming response + local outcome
+  -> validate + RequestContext
+  -> admission
+  -> eligibility
+       Ready && fresh && circuit closed
+  -> bounded affinity
+       preferred within queue/inflight bounds ? preferred : least-loaded
+  -> bounded transport
+  -> stream response + record local outcome
 ```
 
-第一版不实现多指标线性加权。它使用“硬过滤 + 单一可解释决策 + 明确 fallback”：
+### 快路径允许的输入
 
-1. discovery 不新鲜或没有 Ready endpoint 时回退 Kubernetes Service；
-2. 没有 routing key 时使用 least-loaded/P2C，而不是把空 key 固定到同一 Pod；
-3. preferred backend 没有超过负载阈值时保持亲和；
-4. 超过阈值后溢出到更空闲 backend；
-5. 近期 transport/backend error 打开短 TTL circuit；
-6. 每次决策记录 policy version、reason、preferred/selected backend 和 spillover 原因。
-
-### 快路径允许使用的信号
-
-| 信号 | 用途 | 原因 |
+| 信号 | 用途 | 约束 |
 | --- | --- | --- |
-| Endpoint Ready/terminating | eligibility | endpoint 生命周期事实 |
-| discovery freshness | eligibility/fallback | 防止使用无限陈旧地址 |
-| Gateway local in-flight | 快速 load tie-break | 与请求生命周期同步 |
-| vLLM waiting/running | bounded spillover | 后端级即时状态，但必须有短 TTL |
-| recent local error EWMA | circuit breaker | Gateway 能准确归因到选中 backend |
-| session/routing key | affinity | 语义明确、计算便宜 |
+| Endpoint Ready/terminating | eligibility | Kubernetes 生命周期事实 |
+| discovery freshness | fallback | 超时后不继续使用无限陈旧地址 |
+| local in-flight | spillover/admission | 与 Gateway 请求生命周期同步 |
+| vLLM waiting/running | spillover | 只使用存在且足够新的字段 |
+| recent local transport errors | circuit | 只归因到实际选中的 backend |
+| session/routing key | affinity | 只保存摘要，不进入 metric label |
 
-### 不进入第一版快路径 score 的信号
+### 不进入快路径 score
 
 - 进程生命周期累计 TTFT histogram；
 - 累计 Prefix Cache hits/queries；
 - 节点级 GPU utilization、温度和显存；
 - eBPF RTT、重传或 socket stall；
-- 固定的“AI 推荐权重”。
+- LLM 或固定权重生成的综合分数。
 
-这些信号用于时间窗口分析、异常门控或实验评估。若未来消费 vLLM KV events 并建立
-token-block index，才能把 request-specific cache overlap 作为精确快路径信号。
+这些数据可以用于告警、时间窗口分析和方案验证，但不能把观测缺口伪装成精确调度信号。
 
-## 4. 状态模型
+## 5. 状态与资源不变量
 
-`BackendObservation.Status` 是当前过渡契约。正式 scheduler 输入需要把每个字段改成独立
-sample：
+正式 scheduler 输入逐步改为独立 sample：
 
 ```text
 Sample[T] {
@@ -104,122 +111,98 @@ Sample[T] {
 }
 ```
 
-原因是“采到 queue 但没采到 TTFT”不能被一个 backend-level `ok` 隐藏；数值零也不能同时
-表示“观测到零”和“没有观测”。Scheduler 使用 immutable snapshot/atomic swap，后台采集
-和 Prometheus 指标更新不在请求决策临界区执行。
+必须始终成立：
 
-Endpoint 删除时必须同步回收：
+1. 空 routing key 不形成全局热点；
+2. partial/stale observation 不等于零负载；
+3. spillover 不重写 affinity preference；
+4. terminating、stale 或 open-circuit backend 不进入候选集；
+5. 请求取消能传播到 upstream，请求完成后计数必定释放；
+6. affinity、connections、waiting requests、observations、circuits 和 metric labels 都有
+   上限或 GC；
+7. fallback、reject 和 retry 均有固定 reason，不发生静默策略变化；
+8. 流响应开始后不进行透明 retry。
 
-- transport/client；
-- local in-flight counter；
-- circuit state；
-- observation state；
-- Prometheus backend label series。
+## 6. 实施里程碑
 
-## 5. 慢速证据路径
+### P0：可信 serving baseline（已完成）
 
-当前 `fishmesh-analyst` 应称为 evidence-based diagnoser，而不是 autonomous Agent：
+- keep-alive baseline、动态 discovery 和 SSE 生命周期；
+- 明确观测 availability/freshness；
+- 配置失败关闭和实验 provenance；
+- 移除 weighted GPU score、eBPF 和 Agent 主线。
 
-```text
-Incident or alert
-  -> Prometheus time-window query + Kubernetes events
-  -> typed Signals with per-source availability
-  -> deterministic diagnosis rules
-  -> read-only Recommendation
-```
+### P1：request-path reliability（已完成）
 
-下一阶段应通过 Prometheus/PromQL 获取 counter rate、窗口 quantile 和趋势；不得通过一个
-keep-alive ClusterIP `/metrics` 连接假装聚合多个 vLLM Pod。硬编码 `confidence` 在校准前只
-能改称 evidence strength。
+- transport error EWMA/短 TTL circuit；
+- endpoint-scoped transport/in-flight/observation/circuit/metric GC；
+- admission limit、`MaxConnsPerHost` 和明确 429/503；
+- cancellation、deadline 和 retry boundary tests；
+- per-field sample 契约。
 
-LLM narrator 只能把结构化结果转为报告，不获取 Kubernetes 写权限、不执行 shell、不进入
-请求路径。自动 actuator 不属于 MVP。
+验收：在 simulator 中重复注入 slow/error/removed backend，内存状态保持有界，请求不继续发送
+到被隔离 endpoint，恢复无需重启 Gateway。
 
-## 6. 开源技术边界
+当前 unit/race fault tests 已覆盖上述状态机，真实 K3s 已验证新镜像、配置、metrics 和 vLLM
+请求兼容性；更长时间的 churn/soak 被纳入 P2 simulator E2E。
 
-| 层 | 当前实验实现 | 生产/对照方向 |
-| --- | --- | --- |
-| Inference engine | vLLM `0.23.0` | 保持上游 vLLM，不自研 engine |
-| Proxy | Go streaming proxy | Envoy/Envoy Gateway |
-| Endpoint selection | FishMesh strategy | Gateway API Inference Extension EPP adapter |
-| Production scheduler comparator | Service/least-inflight | llm-d EPP、vLLM Router 或 Dynamo |
-| Discovery | EndpointSlice REST watch | InferencePool/EPP data layer |
-| Metrics | direct `/metrics` prototype | Prometheus time series + tracing |
-| GPU operations | device plugin time-slicing | GPU Operator/DCGM；仅做 node-level health |
+### P2：标准集成与自动 E2E（当前）
 
-“为什么不用开源”的答案不是 FishMesh 更完整，而是 FishMesh 提供了可控的因果实验和自定义
-策略核心；通用 ingress、认证、流控、精确 KV index 和大规模控制器优先复用开源。
-
-## 7. MVP 验收边界
-
-### MVP-A：可信 Serving Baseline
-
-- Service + keep-alive；
-- EndpointSlice 动态实验与 Service fallback；
-- SSE 完整消费，TTFT/TPOT/E2E/错误契约；
-- 每次实验首条 JSONL 为 `run_metadata`；
-- artifact 包含 Git SHA、image digest、vLLM 参数和集群 profile。
-
-### MVP-B：Bounded Affinity Scheduler
-
-- request/session key 语义明确；
-- eligibility filter；
-- bounded affinity + overload spillover；
-- per-field presence/freshness；
-- error EWMA/circuit breaker；
-- endpoint 删除后的所有状态回收；
-- deterministic unit/race/fuzz tests。
-
-### MVP-C：可复现实验与开源对照
-
-- cold/hot/mixed/skew、多个 prompt 长度和并发档位；
-- treatment 顺序随机，多轮重复，报告 effect size 和区间；
-- Pod 删除、telemetry stale、API 断连和 overload fault；
-- 同环境比较 Service、least-loaded、bounded affinity 和至少一个开源 router；
-- 单 GPU time-slicing 结果只声明行为正确性，最终核心结论用独立 GPU 或明确模拟器复验。
-
-## 8. 实施优先级
-
-### P0：方向和证据修复（本阶段）
-
-- 统一 FishMesh 名称和新定位；
-- 更新 vLLM 及 NVIDIA device plugin 固定版本；
-- 保存失败运行、rerun 和原始 artifact；
-- 增加 run metadata 与历史 artifact provenance 标记；
-- 将环境变量解析从静默 fallback 改为启动失败；
-- 把 GPU-aware、weighted hybrid、Agent、eBPF 从下一步移出。
-
-### P1：调度器核心
-
-- RequestContext extractor；
-- per-field sample；
-- bounded affinity、spillover、circuit breaker；
-- transport/metric state garbage collection；
-- `MaxConnsPerHost` 和 admission limits。
-
-### P2：实验系统
-
-- 可声明 experiment matrix、随机顺序和重复次数；
-- 自动环境快照、raw artifact 和统计分析；
 - controlled backend simulator；
-- 独立 GPU 复验。
+- EPP/llm-d integration spike 和 ADR；
+- 选择并实现一个 integrated runtime path；
+- standalone/integrated conformance tests；
+- Pod 删除、discovery stale、overload、transport failure 自动化。
 
-### P3：工业化集成
+验收：同一 scheduler policy 在两种运行模式下产生一致选择和 reason；CI 不依赖 GPU 即可覆盖
+关键故障状态机。
 
-- Gateway API Inference Extension EPP adapter；
-- llm-d/vLLM Router 对照；
-- multi-arch、registry digest、SBOM、签名和 E2E CI；
-- Prometheus、Grafana、OpenTelemetry；
-- PDB、逐副本滚动和故障演练。
+### P3：可操作与可交付
+
+- Prometheus dashboard、结构化日志关联和 OpenTelemetry trace；
+- runbook、告警与 rollout/rollback 演练；
+- multi-arch、registry digest、SBOM、签名和版本化 release；
+- 资源 requests/limits、PDB 和安全清单复核。
+
+验收：从一次请求 ID 能定位 endpoint selection、upstream 结果和 fallback/circuit 原因；新环境
+可按文档部署、验证并回滚。
+
+### P4：有限对照验证
+
+- Service、least-loaded、bounded affinity 和一个开源 scheduler；
+- hot/skew/overload/failure 四组工程场景；
+- 多轮重复、固定版本和环境边界；
+- 输出决策结论、适用范围和已知代价。
+
+验收：结果用于确认默认策略和阈值，不以扩展实验矩阵作为项目完成标准。
+
+## 7. 慢速诊断路径
+
+`fishmesh-analyst` 已验证只读 collector 和确定性规则结构，但目前不是主产品。P1-P3 期间冻结
+功能扩展，只允许安全修复。若未来恢复，必须直接消费真实 Prometheus 时间窗口和 Kubernetes
+事件，并服务于现有故障 runbook；不引入 LLM 自动执行或集群写权限。
+
+## 8. 开源边界
+
+| 层 | FishMesh 当前实现 | 长期边界 |
+| --- | --- | --- |
+| Model server | vLLM 0.23.0 | 复用上游 engine |
+| Standalone proxy | Go HTTP/SSE | 开发、测试和演示 |
+| Production gateway | 未实现 | 复用 Envoy-compatible Gateway |
+| Endpoint selection | FishMesh scheduler core | EPP/llm-d 扩展点 |
+| Discovery | EndpointSlice REST watch | 兼容 InferencePool/EPP data layer |
+| Observability | Prometheus metrics | Prometheus + OTel + Grafana |
+| GPU operations | device plugin time-slicing | 不自研 GPU 管理平台 |
+
+“为什么不用开源”的工程答案是：FishMesh 不替代成熟入口和推理引擎；它实现并验证一个边界
+清晰的 selection/state/failure 模块，然后通过标准扩展点接入开源运行时。
 
 ## 9. 明确延期
-
-以下方向在 MVP 数据证明需求前不实施：
 
 - eBPF 请求路由或 socket rewrite；
 - per-backend GPU utilization score；
 - LLM tool-calling Agent 和自动 actuator；
 - FishMesh CRD/Operator；
 - prefill/decode disaggregation；
-- 请求 replay shadow；
-- 为展示技术栈而迁移 Service Mesh、Cilium 或 GitOps。
+- 通用 AI Gateway、认证计费或多租户控制面；
+- 仅为展示技术栈而迁移 Service Mesh、Cilium、数据库或消息队列。

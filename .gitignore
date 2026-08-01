@@ -4,3 +4,7 @@
 bin/
 *.oci.tar
 *.test
+artifacts/published/
+artifacts/connection-matrix/
+artifacts/*.jsonl
+*.jsonl.gz

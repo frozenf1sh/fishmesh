@@ -38,6 +38,20 @@ func TestLoadAwareSelectsLeastInflight(t *testing.T) {
 	}
 }
 
+func TestLoadAwareExcludesIneligibleBackend(t *testing.T) {
+	strategy := NewLoadAware()
+	decision, err := strategy.Select("same-prefix", Snapshot{
+		Backends: testBackends(), Inflight: map[string]int64{"a": 0, "b": 3},
+		Ineligible: map[string]string{"a": "circuit-open"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Backend.ID != "b" {
+		t.Fatalf("decision = %+v, want eligible backend b", decision)
+	}
+}
+
 func TestNewAcceptsLegacyPrefixHashAlias(t *testing.T) {
 	strategy, err := New(ModePrefixHash, Backend{ID: "service", URL: "http://service:8000"})
 	if err != nil {

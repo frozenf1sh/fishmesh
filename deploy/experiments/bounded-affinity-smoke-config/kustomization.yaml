@@ -1,0 +1,23 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: kubellm
+resources:
+  - ../bounded-affinity
+patches:
+  - target:
+      kind: ConfigMap
+      name: fishmesh-gateway-config
+    patch: |-
+      - op: replace
+        path: /data/FISHMESH_AFFINITY_INFLIGHT_DELTA
+        value: "0"
+      - op: replace
+        path: /metadata/annotations/fishmesh.io~1config-version
+        value: v5-bounded-affinity-reliability-smoke
+  - target:
+      kind: Deployment
+      name: fishmesh-gateway
+    patch: |-
+      - op: replace
+        path: /spec/template/metadata/annotations/fishmesh.io~1runtime-config-version
+        value: v5-bounded-affinity-reliability-smoke

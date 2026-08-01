@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -31,29 +32,39 @@ import (
 // transport reuse and metrics are separate boundaries so future EndpointSlice,
 // vLLM-metrics and hybrid policies do not require rewriting the proxy.
 type Server struct {
-	config       Config
-	service      routing.Backend
-	resolver     endpoint.Resolver
-	strategy     routing.Strategy
-	backendURLs  map[string]*url.URL
-	pool         *transport.Pool
-	observations *observation.Service
-	inflight     map[string]*atomic.Int64
-	inflightMu   sync.RWMutex
-	metrics      *metrics
-	logger       *slog.Logger
-	registry     *prometheus.Registry
+	config          Config
+	service         routing.Backend
+	resolver        endpoint.Resolver
+	strategy        routing.Strategy
+	backendURLs     map[string]*url.URL
+	pool            *transport.Pool
+	observations    *observation.Service
+	inflight        map[string]*atomic.Int64
+	inflightMu      sync.RWMutex
+	metrics         *metrics
+	logger          *slog.Logger
+	registry        *prometheus.Registry
+	circuits        *routing.CircuitRegistry
+	admission       chan struct{}
+	active          map[string]struct{}
+	lifecycleCancel context.CancelFunc
+	lifecycleDone   chan struct{}
+	close           sync.Once
 }
 
 type routeDecision struct {
-	backend  routing.Backend
-	reason   string
-	upstream *url.URL
-	client   *http.Client
-	release  func()
+	backend            routing.Backend
+	preferredBackendID string
+	reason             string
+	spilloverReason    string
+	policy             string
+	upstream           *url.URL
+	client             *http.Client
+	release            func()
 }
 
 func NewServer(config Config, logger *slog.Logger) (*Server, error) {
+	config = config.withReliabilityDefaults()
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
@@ -62,7 +73,16 @@ func NewServer(config Config, logger *slog.Logger) (*Server, error) {
 		return nil, fmt.Errorf("parse upstream URL: %w", err)
 	}
 	service := routing.Backend{ID: "service", URL: upstream.String()}
-	strategy, err := routing.New(config.RoutingMode, service)
+	var strategy routing.Strategy
+	if config.RoutingMode == routing.ModeBoundedAffinity {
+		strategy, err = routing.NewBoundedAffinity(routing.BoundedAffinityConfig{
+			TTL: config.AffinityTTL, MaxEntries: config.AffinityMaxEntries,
+			InflightDelta:   config.AffinityInflightDelta,
+			QueueDepthDelta: config.AffinityQueueDepthDelta,
+		})
+	} else {
+		strategy, err = routing.New(config.RoutingMode, service)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -102,6 +122,14 @@ func NewServer(config Config, logger *slog.Logger) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	circuits, err := routing.NewCircuitRegistry(routing.CircuitConfig{
+		EWMAAlpha: config.CircuitEWMAAlpha, ErrorThreshold: config.CircuitErrorThreshold,
+		MinimumRequests: config.CircuitMinimumRequests, OpenDuration: config.CircuitOpenDuration,
+	})
+	if err != nil {
+		_ = resolver.Close()
+		return nil, err
+	}
 	var observations *observation.Service
 	if config.ObservationMode == "prometheus" {
 		var identityProvider observation.IdentityProvider
@@ -135,14 +163,17 @@ func NewServer(config Config, logger *slog.Logger) (*Server, error) {
 		inflight[backend.ID] = &atomic.Int64{}
 	}
 	registry := prometheus.NewRegistry()
-	return &Server{
+	server := &Server{
 		config: config, service: service, resolver: resolver, strategy: strategy,
 		backendURLs:  backendURLs,
-		pool:         transport.NewPool(transport.Config{KeepAlive: config.KeepAlive, RequestTimeout: config.RequestTimeout}),
+		pool:         transport.NewPool(transport.Config{KeepAlive: config.KeepAlive, RequestTimeout: config.RequestTimeout, MaxConnsPerHost: config.MaxConnsPerHost}),
 		observations: observations,
 		inflight:     inflight, metrics: newMetrics(registry), logger: logger,
-		registry: registry,
-	}, nil
+		registry: registry, circuits: circuits, admission: make(chan struct{}, config.MaxInflightRequests),
+		active: map[string]struct{}{service.ID: {}}, lifecycleDone: make(chan struct{}),
+	}
+	server.startLifecycle()
+	return server, nil
 }
 
 func (s *Server) Handler() http.Handler {
@@ -157,7 +188,12 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.HandleFunc("GET /metrics", func(writer http.ResponseWriter, request *http.Request) {
 		if s.observations != nil {
-			s.metrics.UpdateBackendObservations(s.observations.Snapshot())
+			states := s.observations.Snapshot()
+			if backends, err := s.resolver.Snapshot(request.Context()); err == nil {
+				s.reconcileBackendState(backends)
+				states = observationsForBackends(states, backends)
+			}
+			s.metrics.UpdateBackendObservations(states)
 		}
 		s.metrics.UpdateEndpointDiscovery(s.resolver.Status())
 		promhttp.HandlerFor(s.registry, promhttp.HandlerOpts{}).ServeHTTP(writer, request)
@@ -169,21 +205,55 @@ func (s *Server) Handler() http.Handler {
 // Close releases gateway-owned transport resources. In-flight requests are
 // still governed by http.Server.Shutdown; this method only closes idle pools.
 func (s *Server) Close() {
-	if s.observations != nil {
-		_ = s.observations.Close()
+	s.close.Do(func() {
+		if s.lifecycleCancel != nil {
+			s.lifecycleCancel()
+			<-s.lifecycleDone
+		}
+		if s.observations != nil {
+			_ = s.observations.Close()
+		}
+		if s.resolver != nil {
+			_ = s.resolver.Close()
+		}
+		if s.pool != nil {
+			s.pool.Close()
+		}
+	})
+}
+
+func (s *Server) startLifecycle() {
+	if s.config.EndpointDiscovery != "endpointslice" {
+		close(s.lifecycleDone)
+		return
 	}
-	if s.resolver != nil {
-		_ = s.resolver.Close()
-	}
-	if s.pool != nil {
-		s.pool.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	s.lifecycleCancel = cancel
+	go func() {
+		defer close(s.lifecycleDone)
+		s.reconcileFromResolver(ctx)
+		ticker := time.NewTicker(s.config.EndpointRefresh)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				s.reconcileFromResolver(ctx)
+			}
+		}
+	}()
+}
+
+func (s *Server) reconcileFromResolver(ctx context.Context) {
+	backends, err := s.resolver.Snapshot(ctx)
+	if err == nil {
+		s.reconcileBackendState(backends)
 	}
 }
 
 func (s *Server) proxy(writer http.ResponseWriter, request *http.Request) {
 	startedAt := time.Now()
-	s.metrics.inflight.Inc()
-	defer s.metrics.inflight.Dec()
 	status := http.StatusBadGateway
 	defer func() {
 		statusLabel := strconv.Itoa(status)
@@ -195,9 +265,26 @@ func (s *Server) proxy(writer http.ResponseWriter, request *http.Request) {
 	if requestID == "" {
 		requestID = newRequestID()
 	}
+	if !s.tryAdmit() {
+		status = http.StatusTooManyRequests
+		s.metrics.admissionRejections.Inc()
+		writer.Header().Set("Retry-After", "1")
+		writer.Header().Set("X-Request-ID", requestID)
+		writer.Header().Set("X-FishMesh-Route-Reason", "admission-capacity")
+		http.Error(writer, "gateway concurrency limit reached", status)
+		return
+	}
+	defer s.releaseAdmission()
+	s.metrics.inflight.Inc()
+	defer s.metrics.inflight.Dec()
+
 	decision := s.route(request.Context(), request.Header.Get("X-FishMesh-Prefix-Key"))
 	defer decision.release()
 	s.metrics.routingDecisions.WithLabelValues(s.config.RoutingMode, decision.backend.ID).Inc()
+	s.metrics.routingReasons.WithLabelValues(decision.reason).Inc()
+	if decision.spilloverReason != "" {
+		s.metrics.affinitySpillovers.WithLabelValues(decision.spilloverReason).Inc()
+	}
 
 	upstreamRequest, cancel, err := s.newUpstreamRequest(request, requestID, decision.upstream)
 	if err != nil {
@@ -210,7 +297,20 @@ func (s *Server) proxy(writer http.ResponseWriter, request *http.Request) {
 	if err != nil {
 		s.metrics.upstreamErrors.Inc()
 		s.logger.Warn("upstream request failed", "request_id", requestID, "backend_id", decision.backend.ID, "error", err)
-		http.Error(writer, "inference upstream unavailable", http.StatusBadGateway)
+		if request.Context().Err() != nil {
+			// Client cancellation is a downstream outcome. It must release all
+			// state but must not poison the selected backend's circuit.
+			status = 499
+			return
+		}
+		s.recordTransportOutcome(decision.backend.ID, true)
+		if errors.Is(err, context.DeadlineExceeded) {
+			status = http.StatusGatewayTimeout
+			http.Error(writer, "inference upstream timed out", status)
+			return
+		}
+		status = http.StatusBadGateway
+		http.Error(writer, "inference upstream unavailable", status)
 		return
 	}
 	defer response.Body.Close()
@@ -220,28 +320,63 @@ func (s *Server) proxy(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("X-FishMesh-Routing-Mode", s.config.RoutingMode)
 	writer.Header().Set("X-FishMesh-Route-Reason", decision.reason)
 	writer.Header().Set("X-FishMesh-Backend-ID", decision.backend.ID)
+	writer.Header().Set("X-FishMesh-Preferred-Backend-ID", decision.preferredBackendID)
+	writer.Header().Set("X-FishMesh-Policy", decision.policy)
+	if decision.spilloverReason != "" {
+		writer.Header().Set("X-FishMesh-Spillover-Reason", decision.spilloverReason)
+	}
 	writer.Header().Set("X-FishMesh-Upstream", decision.upstream.Host)
 	status = response.StatusCode
 	writer.WriteHeader(status)
 
 	detector := &sseDetector{}
 	firstEventRecorded := false
-	copyResponseBody(writer, response.Body, func() {
+	copyResult := copyResponseBody(writer, response.Body, func() {
 		if !firstEventRecorded {
 			firstEventRecorded = true
 			s.metrics.ttftSeconds.Observe(time.Since(startedAt).Seconds())
 		}
 	}, detector)
+	if copyResult.upstreamError != nil && request.Context().Err() == nil {
+		s.metrics.streamErrors.Inc()
+		s.recordTransportOutcome(decision.backend.ID, true)
+		s.logger.Warn("upstream stream failed after response headers",
+			"request_id", requestID, "backend_id", decision.backend.ID, "error", copyResult.upstreamError)
+	} else if copyResult.downstreamError == nil {
+		s.recordTransportOutcome(decision.backend.ID, false)
+	}
 }
+
+func (s *Server) tryAdmit() bool {
+	select {
+	case s.admission <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Server) releaseAdmission() { <-s.admission }
 
 func (s *Server) route(ctx context.Context, prefixKey string) routeDecision {
 	backends, err := s.resolver.Snapshot(ctx)
 	if err != nil {
 		backends = nil
+	} else {
+		s.reconcileBackendState(backends)
 	}
-	snapshot := routing.Snapshot{Backends: backends, Inflight: make(map[string]int64)}
+	snapshot := routing.Snapshot{
+		Backends: backends, Inflight: make(map[string]int64), Ineligible: make(map[string]string),
+	}
+	for _, backend := range backends {
+		open := s.circuits.IsOpen(backend.ID)
+		s.metrics.UpdateCircuit(backend.ID, open)
+		if open {
+			snapshot.Ineligible[backend.ID] = "circuit-open"
+		}
+	}
 	if s.observations != nil {
-		snapshot.Observations = s.observations.Snapshot()
+		snapshot.Observations = observationsForBackends(s.observations.Snapshot(), backends)
 		s.metrics.UpdateBackendObservations(snapshot.Observations)
 	}
 	s.metrics.UpdateEndpointDiscovery(s.resolver.Status())
@@ -250,9 +385,27 @@ func (s *Server) route(ctx context.Context, prefixKey string) routeDecision {
 		snapshot.Inflight[id] = value.Load()
 	}
 	s.inflightMu.RUnlock()
-	decision, err := s.strategy.Select(prefixKey, snapshot)
-	if err != nil || decision.Backend.ID == "" {
-		decision = routing.Decision{Backend: s.service, Reason: "strategy-fallback"}
+	var decision routing.Decision
+	strategyErr := err
+	if !s.directRoutingEligible() {
+		decision = routing.Decision{
+			Backend: s.service, PreferredBackendID: s.service.ID,
+			Reason: "discovery-fallback", Policy: "service-fallback-v1",
+		}
+		s.metrics.routeFallbacks.Inc()
+		strategyErr = nil
+	} else if len(routing.EligibleBackends(snapshot)) == 0 {
+		decision = routing.Decision{
+			Backend: s.service, PreferredBackendID: s.service.ID,
+			Reason: "circuit-fallback", Policy: "service-fallback-v1",
+		}
+		s.metrics.routeFallbacks.Inc()
+		strategyErr = nil
+	} else {
+		decision, strategyErr = s.strategy.Select(prefixKey, snapshot)
+	}
+	if strategyErr != nil || decision.Backend.ID == "" {
+		decision = routing.Decision{Backend: s.service, PreferredBackendID: s.service.ID, Reason: "strategy-fallback", Policy: "service-fallback-v1"}
 		s.metrics.routeFallbacks.Inc()
 	}
 	upstream := s.backendURLs[decision.Backend.ID]
@@ -263,7 +416,7 @@ func (s *Server) route(ctx context.Context, prefixKey string) routeDecision {
 		}
 	}
 	if upstream == nil {
-		decision = routing.Decision{Backend: s.service, Reason: "backend-fallback"}
+		decision = routing.Decision{Backend: s.service, PreferredBackendID: s.service.ID, Reason: "backend-fallback", Policy: "service-fallback-v1"}
 		upstream = s.backendURLs[s.service.ID]
 		s.metrics.routeFallbacks.Inc()
 	}
@@ -271,9 +424,92 @@ func (s *Server) route(ctx context.Context, prefixKey string) routeDecision {
 	state.Add(1)
 	backend := decision.Backend
 	return routeDecision{
-		backend: backend, reason: decision.Reason, upstream: upstream, client: s.pool.ClientFor(backend),
-		release: func() { state.Add(-1) },
+		backend: backend, preferredBackendID: decision.PreferredBackendID,
+		reason: decision.Reason, spilloverReason: decision.SpilloverReason, policy: decision.Policy,
+		upstream: upstream, client: s.pool.ClientFor(backend),
+		release: func() { s.releaseBackend(backend.ID, state) },
 	}
+}
+
+func observationsForBackends(states map[string]routing.BackendObservation, backends []routing.Backend) map[string]routing.BackendObservation {
+	active := make(map[string]struct{}, len(backends))
+	for _, backend := range backends {
+		active[backend.ID] = struct{}{}
+	}
+	result := make(map[string]routing.BackendObservation, len(active))
+	for id, state := range states {
+		if _, ok := active[id]; ok {
+			result[id] = state
+		}
+	}
+	return result
+}
+
+func (s *Server) reconcileBackendState(backends []routing.Backend) {
+	if reconciler, ok := s.strategy.(routing.BackendReconciler); ok {
+		reconciler.ReconcileBackends(backends)
+	}
+	s.circuits.Reconcile(backends)
+	active := make(map[string]struct{}, len(backends)+1)
+	active[s.service.ID] = struct{}{}
+	for _, backend := range backends {
+		active[backend.ID] = struct{}{}
+	}
+	var removed []string
+	s.inflightMu.Lock()
+	s.active = active
+	for id, counter := range s.inflight {
+		if _, ok := active[id]; ok || counter.Load() != 0 {
+			continue
+		}
+		delete(s.inflight, id)
+		removed = append(removed, id)
+	}
+	s.inflightMu.Unlock()
+	for _, id := range removed {
+		s.cleanupBackend(id)
+	}
+}
+
+func (s *Server) releaseBackend(backendID string, counter *atomic.Int64) {
+	if counter.Add(-1) != 0 {
+		return
+	}
+	removed := false
+	s.inflightMu.Lock()
+	if _, active := s.active[backendID]; !active && s.inflight[backendID] == counter {
+		delete(s.inflight, backendID)
+		removed = true
+	}
+	s.inflightMu.Unlock()
+	if removed {
+		s.cleanupBackend(backendID)
+	}
+}
+
+func (s *Server) cleanupBackend(backendID string) {
+	s.pool.Remove(backendID)
+	s.circuits.Remove(backendID)
+	s.metrics.DeleteBackend(backendID, s.config.RoutingMode)
+}
+
+func (s *Server) recordTransportOutcome(backendID string, failed bool) {
+	if backendID == "" || backendID == s.service.ID {
+		return
+	}
+	if opened := s.circuits.Record(backendID, failed); opened {
+		s.metrics.CircuitOpened(backendID)
+	} else {
+		s.metrics.UpdateCircuit(backendID, s.circuits.IsOpen(backendID))
+	}
+}
+
+func (s *Server) directRoutingEligible() bool {
+	if s.config.EndpointDiscovery != "endpointslice" {
+		return true
+	}
+	status := s.resolver.Status()
+	return status.Status != routing.ObservationUnavailable && status.ReadyBackends > 0 && status.Freshness <= s.config.EndpointMaxAge
 }
 
 func (s *Server) ready() bool {
@@ -327,7 +563,12 @@ func joinURLPath(basePath, requestPath string) string {
 	return path.Join(basePath, requestPath)
 }
 
-func copyResponseBody(writer http.ResponseWriter, body io.Reader, onFirstEvent func(), detector *sseDetector) {
+type bodyCopyResult struct {
+	upstreamError   error
+	downstreamError error
+}
+
+func copyResponseBody(writer http.ResponseWriter, body io.Reader, onFirstEvent func(), detector *sseDetector) bodyCopyResult {
 	bufferedWriter := bufio.NewWriterSize(writer, 32*1024)
 	defer bufferedWriter.Flush()
 	buffer := make([]byte, 32*1024)
@@ -338,15 +579,20 @@ func copyResponseBody(writer http.ResponseWriter, body io.Reader, onFirstEvent f
 				onFirstEvent()
 			}
 			if _, writeErr := bufferedWriter.Write(buffer[:read]); writeErr != nil {
-				return
+				return bodyCopyResult{downstreamError: writeErr}
 			}
 			if flusher, ok := writer.(http.Flusher); ok {
-				bufferedWriter.Flush()
+				if flushErr := bufferedWriter.Flush(); flushErr != nil {
+					return bodyCopyResult{downstreamError: flushErr}
+				}
 				flusher.Flush()
 			}
 		}
 		if readErr != nil {
-			return
+			if errors.Is(readErr, io.EOF) {
+				return bodyCopyResult{}
+			}
+			return bodyCopyResult{upstreamError: readErr}
 		}
 	}
 }

@@ -23,12 +23,12 @@ spec:
       securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
       containers:
         - name: loadgen
-          image: fishmesh:0.1.0-p0
+          image: fishmesh:0.2.0-p1
           imagePullPolicy: Never
           command: ["/usr/local/bin/fishmesh-loadgen"]
           env:
             - {name: FISHMESH_RUN_ID, value: connection-load-aware-p0}
-            - {name: FISHMESH_GATEWAY_IMAGE, value: "fishmesh:0.1.0-p0"}
+            - {name: FISHMESH_GATEWAY_IMAGE, value: "fishmesh:0.2.0-p1"}
             - {name: FISHMESH_VLLM_VERSION, value: "0.23.0"}
             - {name: FISHMESH_CLUSTER_PROFILE, value: k3s-rtx4060-timeslicing-v1}
           args: ["--requests=200", "--concurrency=4", "--prefix-groups=8", "--prefix-bytes=4096", "--prefix-namespace=matrix-load-aware-v1", "--max-tokens=32", "--request-timeout=90s", "--keep-alive=true"]

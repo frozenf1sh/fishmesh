@@ -1,8 +1,19 @@
 # Experiment artifacts
 
-This directory is evidence, not a scratch directory. Raw JSONL, failed runs and
-reruns are retained together so reports cannot silently select only the best
-execution.
+This directory documents the evidence contract; it is not a Git-backed artifact
+store. Raw JSONL, failed runs and reruns are retained together locally or in an
+external immutable store so reports cannot silently select only the best
+execution. `artifacts/published/`, raw JSONL, compressed logs and cluster dumps
+are ignored by Git.
+
+Repository history may contain only the generator, schemas, declarative
+experiment configuration, analysis code and reviewed conclusions. Never commit
+kubeconfigs, tokens, model files, node dumps containing sensitive inventory,
+container images or generated binaries.
+
+Runs invalidated by environment or rollout drift are also retained. Their
+`manifest.json` contains `valid: false` and an explicit `exclusion_reason`;
+they must never be silently replaced by a successful rerun.
 
 The historical `connection-matrix/` files predate the run metadata contract.
 Recovered cluster logs are stored under `published/` with a `manifest.json`
@@ -14,7 +25,7 @@ because Kubernetes combines stdout and stderr, analysis must use the validated
 `records.jsonl.gz` beside it. New recoveries name the exact stream
 `container.log.gz` and the validated stream `records.jsonl.gz`.
 
-New loadgen output begins with a `run_metadata` record. A publishable experiment
+New loadgen output begins with a `run_metadata` record. A reviewable experiment
 must additionally retain:
 
 - Git revision and image digests;

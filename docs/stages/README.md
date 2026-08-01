@@ -11,5 +11,8 @@
 | 03 | Backend Snapshot | 每个 vLLM endpoint 的指标、状态和 freshness 对齐 |
 | 04 | 身份映射与故障状态 | Pod→Node/GPU request 映射、discovery freshness 和 readiness 门控 |
 | 05 | P0 方向收敛与实验可信度 | bounded affinity 定位、run metadata、版本升级和可信实验规范 |
+| 06 | Bounded Affinity 调度核心 | TTL affinity registry、可解释 spillover 与 freshness fallback |
+| 07 | 工程优先方向章程 | 可靠性与标准集成为主线，实验降为决策和验收工具 |
+| 08 | 请求路径可靠性 | admission、transport circuit、endpoint state GC 和 per-field sample |
 
 每个阶段完成后都会补充独立中文说明，并在文末明确下一阶段边界。

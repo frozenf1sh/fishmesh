@@ -17,6 +17,8 @@ func TestRunRecordsStreamingTTFT(t *testing.T) {
 		writer.Header().Set("Content-Type", "text/event-stream")
 		writer.Header().Set("X-FishMesh-Route-Reason", "service-default")
 		writer.Header().Set("X-FishMesh-Backend-ID", "service")
+		writer.Header().Set("X-FishMesh-Preferred-Backend-ID", "service")
+		writer.Header().Set("X-FishMesh-Policy", "service-v1")
 		_, _ = writer.Write([]byte("data: {\"choices\":[{}]}\n\n"))
 		_, _ = writer.Write([]byte("data: [DONE]\n\n"))
 	}))
@@ -38,6 +40,9 @@ func TestRunRecordsStreamingTTFT(t *testing.T) {
 	}
 	if !bytes.Contains(output.Bytes(), []byte(`"route_reason":"service-default"`)) {
 		t.Fatal("expected route reason in request record")
+	}
+	if !bytes.Contains(output.Bytes(), []byte(`"policy":"service-v1"`)) {
+		t.Fatal("expected policy in request record")
 	}
 }
 
