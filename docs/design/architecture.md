@@ -12,15 +12,23 @@
 
 > **限界上下文（Bounded Context）+ 轻量整洁架构（Clean Architecture）+ 组合根（Composition Root）**
 
-每个可运行服务的 `cmd/*/main.go` 是组合根，负责注入配置、时钟、HTTP client、策略和
-适配器。业务包不读取环境变量、不创建全局 HTTP client、不直接调用 Kubernetes 或 LLM API。
+每个可运行服务的 `cmd/*` 是组合根，负责注入配置、时钟、HTTP client、策略和适配器。
+`cmd/fishmesh-gateway/composition.go` 已显式创建全部 Serving 实现；Gateway 不再隐藏装配逻辑。
+迁移记录见 [`serving-domain-redesign.md`](serving-domain-redesign.md)。
 
 ## 2. 当前上下文
 
 ```text
-Serving Context
-  gateway -> serving/routing -> serving/endpoint
-                    \\-> serving/transport
+Serving Context（当前）
+  cmd/composition -> config + gateway + all concrete implementations
+  gateway --------> admission + requestpath + transport
+  requestpath ----> discovery + observation + routing + circuit
+  discovery ------> backend
+  identity -------> backend
+  observation ----> backend + identity
+  routing --------> backend + observation
+  circuit --------> backend
+  transport ------> backend
 
 Diagnostics Context
   delivery -> application -> domain
@@ -30,15 +38,32 @@ Diagnostics Context
 
 Workload Context
   workload/loadgen（独立实验客户端，不依赖 gateway 内部实现）
+
+Simulator Context
+  cmd/fishmesh-simulator -> internal/simulator -> standard library only
 ```
 
 ### Serving Context
 
-- `internal/serving/gateway`：请求路径应用服务和 HTTP/SSE 交付；负责生命周期、fallback、metrics。
-- `internal/serving/routing`：纯函数式策略；只认识 `Backend` 和 `Snapshot`。
-- `internal/serving/endpoint`：后端发现端口；提供静态 resolver 和 namespace-scoped
+- `internal/serving/gateway`：standalone HTTP/SSE delivery 与 Prometheus 投影，不创建具体 domain。
+- `internal/serving/config`：一次性解析环境变量，并按 owner 输出各 domain Config。
+- `internal/serving/admission`：进程内非阻塞请求许可，不建立等待队列。
+- `internal/serving/requestpath`：fallback、选择 lease、local in-flight、circuit outcome 和成员回收。
+- `internal/serving/backend`：最原子的 backend ID、地址和稳定 metadata 值对象。
+- `internal/serving/routing`：纯策略；只解释 backend/observation snapshot 并返回 typed decision。
+- `internal/serving/circuit`：per-backend transport outcome EWMA 和临时 open state。
+- `internal/serving/discovery`：后端发现端口；提供静态 resolver 和 namespace-scoped
   EndpointSlice watcher，二者由 Gateway 配置选择。
+- `internal/serving/identity`：backend 到 Pod/Node/声明资源的映射。
+- `internal/serving/observation`：per-field sample、freshness 和慢速 Prometheus 采集循环。
 - `internal/serving/transport`：HTTP client/keep-alive 生命周期，不参与路由决策。
+
+R1–R4 已完成：类型 owner、I/O contract、requestpath 编排、Gateway delivery 和组合根均已分离，
+自动测试会约束上述 import。后续 simulator/EPP adapter 直接复用 requestpath，不复制 standalone
+Gateway 的 HTTP 代码。
+强制文件布局、字面量规则和完整依赖矩阵见
+[`code-organization.md`](code-organization.md) 与
+[`serving-domain-redesign.md`](serving-domain-redesign.md)。
 
 ### Diagnostics Context
 
@@ -51,9 +76,32 @@ Workload Context
 Diagnostics Context 是冻结的次要组件。request-path reliability、EPP/llm-d 集成和自动 E2E
 完成前，不增加新的 collector、Agent 或执行权限。
 
+### Simulator Context
+
+`internal/simulator` 拥有可控 upstream 行为和请求计数，只实现 OpenAI HTTP/SSE、最小 vLLM
+Prometheus 指标以及测试控制 API。它不 import Serving，因此不会为迁就 Gateway 内部类型而失真。
+`cmd/fishmesh-simulator` 只负责监听、信号和优雅关闭。控制 API 仅用于本地/CI，不属于生产面。
+
 ## 3. 依赖规则
 
-允许的方向：
+Serving 的原子 domain 依赖由 `internal/serving/architecture` 自动检查，当前为：
+
+```text
+backend     -> standard library only
+admission   -> standard library only
+circuit     -> backend
+routing     -> backend + observation
+identity    -> backend + platform/kubernetes
+observation -> backend + identity
+transport   -> backend
+discovery   -> backend + platform/kubernetes
+requestpath -> backend + discovery + observation + routing + circuit
+gateway     -> admission + requestpath + transport（metrics 只投影 typed state）
+config      -> 各 domain Config（不创建运行时资源）
+simulator   -> standard library only
+```
+
+Diagnostics Context 允许的方向：
 
 ```text
 cmd -> delivery/application/adapters/config
@@ -73,9 +121,9 @@ domain -> standard library only
 
 ## 4. 运行时边界
 
-当前 standalone Gateway 同时拥有 HTTP/SSE 生命周期和 endpoint selection，便于开发、故障
-注入和策略测试。它不是长期生产入口，不扩展 TLS、认证、tenant、通用 rate limit 或
-Gateway API 控制面。
+当前 standalone Gateway 只拥有 HTTP/SSE delivery；endpoint selection 由可复用 requestpath
+完成。该运行时便于开发、故障注入和策略测试，但不是长期生产入口，不扩展 TLS、认证、tenant、
+通用 rate limit 或 Gateway API 控制面。
 
 目标 integrated runtime 复用 Envoy-compatible Gateway 和 EPP/llm-d 扩展边界。两种运行时
 共享 `internal/serving/routing` 及其状态契约，不复制策略实现：
@@ -141,10 +189,22 @@ queue/running 的 per-field sample。endpoint lifecycle 统一回收 client、co
 circuit、observation 和 Prometheus label；client cancellation 不计为 backend failure，响应头
 发出后的 stream failure 不重试。
 
-### N5：无 GPU conformance harness
+### N4.5：Serving Domain 边界整理（已完成）
 
-controlled backend simulator 提供 delay、queue、stream、error、disconnect 和 endpoint churn。
-它用于 CI 中验证 scheduler/transport/fallback 状态机；真实 vLLM 集群只承担集成验证。
+在 simulator 和 EPP adapter 扩展请求路径之前，按 R1–R4 渐进迁移现有代码。R1 已拆出
+backend/identity/observation 类型 owner、纯 routing contract、独立 circuit 和自动 import 门禁；
+R2 已完成 discovery 与其他 I/O 能力整理，R3 已提取 requestpath lease、fallback、成员同步和
+circuit outcome，R4 已拆分 Gateway/admission/config，并把实现创建移到显式组合根。
+迁移只改变代码组织，不改变已验证的 route reason、fallback、timeout、connection 或 circuit
+语义。
+
+### N5：无 GPU conformance harness（基础已完成）
+
+controlled backend simulator 已提供 delay、queue/running、HTTP error、stream abort、held stream
+和运行时控制 API。进程级 E2E 已覆盖 slow SSE、admission、cancellation、circuit fallback、
+EndpointSlice removal/stale，并验证 observation collector 能解析 simulator 指标。真实 vLLM 集群
+只承担集成验证；N5 剩余工作是长时间 churn/soak，以及 integrated adapter 落地后的共享
+selection/reason conformance suite。
 
 ### N6：EPP/llm-d 集成
 

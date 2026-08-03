@@ -148,7 +148,8 @@ Sample[T] {
 
 ### P2：标准集成与自动 E2E（当前）
 
-- controlled backend simulator；
+- `serving-domain-redesign.md` 的 R1–R4 已完成，可复用 requestpath 与显式组合根已经落地；
+- controlled backend simulator 与第一组无 GPU fault E2E 已完成；
 - EPP/llm-d integration spike 和 ADR；
 - 选择并实现一个 integrated runtime path；
 - standalone/integrated conformance tests；
@@ -156,6 +157,10 @@ Sample[T] {
 
 验收：同一 scheduler policy 在两种运行模式下产生一致选择和 reason；CI 不依赖 GPU 即可覆盖
 关键故障状态机。
+
+代码重构不是新的产品路线，而是 P2 的入口条件：如果 simulator 和 EPP adapter 继续直接依赖
+当前大 Gateway，它们会复制或绑死 standalone 运行时。R1–R4 必须保持行为不变，并按独立阶段
+提交、验证和推送。
 
 ### P3：可操作与可交付
 

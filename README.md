@@ -2,6 +2,8 @@
 
 > A Kubernetes-native traffic scheduler for self-hosted LLM inference.
 
+[简体中文](README_CN.md)
+
 FishMesh routes OpenAI-compatible streaming requests across dynamic vLLM
 replicas. It preserves request affinity while a preferred backend has capacity,
 spills traffic to a less-loaded backend under pressure, and falls back safely
@@ -45,7 +47,9 @@ FishMesh implements a bounded policy instead:
 - bounded configuration parsing, readiness/liveness probes, graceful shutdown,
   least-privilege RBAC and race-tested scheduler/discovery paths;
 - a deterministic load generator and K3s validation workloads used to verify
-  system behavior.
+  system behavior;
+- a GPU-free controlled backend simulator for delay, HTTP error, stream abort,
+  held-stream and vLLM-observation fault injection.
 
 ## Runtime architecture
 
@@ -64,10 +68,11 @@ local outcomes ----> in-flight / error state --------+
 Prometheus <-------- decisions, failures and latency
 ```
 
-The current standalone Go Gateway owns the complete request lifecycle so the
-scheduler can be developed and tested without an external proxy. It is the
-implemented development and demonstration mode, not an attempt to replace a
-production gateway.
+The current standalone Go Gateway is an HTTP/SSE delivery adapter; the reusable
+`requestpath` owns selection and lease lifecycle. This keeps local development
+independent of an external proxy without binding the scheduler to the custom
+Gateway. It is the implemented development and demonstration mode, not an
+attempt to replace a production gateway.
 
 The production-shaped integration target is an Endpoint Picker/scheduler
 extension behind an Envoy-compatible Gateway. Gateway API Inference Extension
@@ -83,12 +88,39 @@ proxy further:
 
 | Condition | Current behavior | Next hardening step |
 | --- | --- | --- |
-| EndpointSlice unavailable but snapshot fresh | continue from bounded snapshot | fault-duration E2E test |
-| Snapshot stale or no Ready endpoint | use Kubernetes Service fallback | explicit alert and recovery SLO |
-| Preferred backend crosses a load bound | spill without rewriting affinity | admission and saturation tests |
-| Partial/missing queue observations | exclude queue from the decision | per-field sample contract |
-| Upstream transport errors | short-TTL EWMA circuit; client cancellation excluded | simulator fault E2E |
-| Endpoint removed | stop selection; reclaim transport, counters, circuit and metrics | churn soak test |
+| EndpointSlice unavailable but snapshot fresh | continue from bounded snapshot; process E2E covered | recovery SLO and soak |
+| Snapshot stale or no Ready endpoint | Service fallback; automated E2E covered | explicit alert and recovery SLO |
+| Preferred backend crosses a load bound | spill without rewriting affinity | sustained saturation soak |
+| Partial/missing queue observations | exclude queue; per-field sample contract | observation recovery E2E |
+| Upstream transport errors | short-TTL EWMA circuit; cancellation remains neutral; fault E2E covered | circuit recovery soak |
+| Endpoint removed | stop selection and reclaim state; dynamic-discovery E2E covered | high-frequency churn soak |
+
+## GPU-free local fault validation
+
+Start the controlled backend:
+
+```bash
+go run ./cmd/fishmesh-simulator --listen :8090 --events 2
+```
+
+Point the standalone Gateway at it from another terminal:
+
+```bash
+FISHMESH_UPSTREAM_URL=http://127.0.0.1:8090 \
+  go run ./cmd/fishmesh-gateway
+```
+
+`PUT /control/behavior` atomically changes subsequent requests without mutating
+streams already in progress. For example, inject HTTP 503 responses:
+
+```bash
+curl -X PUT http://127.0.0.1:8090/control/behavior \
+  -H 'Content-Type: application/json' \
+  -d '{"status_code":503,"events":1}'
+```
+
+The control API is for local/CI validation and must not be exposed on a
+production network.
 
 ## Run locally against the K3s cluster
 
@@ -146,10 +178,10 @@ operations are complete.
 
 ## Roadmap
 
-1. **Request-path reliability:** admission, circuits, state GC and connection
-   bounds are implemented; simulator soak coverage remains.
-2. **Standard integration:** controlled backend simulator, EPP/llm-d integration
-   spike, then one supported integrated runtime path.
+1. **Request-path reliability:** admission, circuits, state GC, connection
+   bounds and simulator fault E2E are implemented; soak coverage remains.
+2. **Standard integration:** the controlled backend simulator is implemented;
+   the EPP/llm-d spike and one supported integrated runtime path are next.
 3. **Operability:** automated fault E2E tests, dashboards, tracing, multi-arch
    release image and supply-chain metadata.
 4. **Comparative validation:** a bounded workload matrix against Service,
@@ -160,6 +192,13 @@ criterion; they are not an independent product track. See the durable
 [project charter](docs/design/project-charter.md), the
 [implementation plan](docs/design/plan.md) and the
 [experiment policy](docs/experiments/plan.md).
+
+Go changes follow the mandatory [code organization rules](docs/design/code-organization.md).
+The four [domain redesign](docs/design/serving-domain-redesign.md) stages are
+complete: core types and I/O capabilities have explicit owners, request
+selection is an idempotent lease, imports are automatically constrained, and
+the command is the explicit composition root. The Gateway now contains only
+standalone HTTP/SSE delivery and metrics projection.
 
 ## Verified environment and limitations
 

@@ -3,14 +3,14 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
-	"github.com/frozenf1sh/fishmesh/internal/serving/gateway"
+	servingconfig "github.com/frozenf1sh/fishmesh/internal/serving/config"
 )
 
 // main 是 fishmesh-gateway 的入口，只做四件事：
@@ -23,78 +23,74 @@ import (
 // "透明的流式代理"，框架自带的中间件、路由和缓冲行为会干扰对字节流的精确
 // 控制；标准库的行为完全可预期，也避免了额外的依赖。
 func main() {
-	// 使用 JSON 格式的 slog logger：输出到容器 stdout 后，日志采集器
-	// （Loki/ELK 等）可以直接结构化解析，默认的 text 格式在 K8s 里很难查询。
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-
-	// 配置全部来自环境变量（见 internal/serving/gateway/config.go）：
-	// 这样同一个镜像无需重新编译就能在本地进程和 Kubernetes 两种环境运行，
-	// 镜像构建一次、运行参数由部署方注入。
-	config, err := gateway.LoadConfigFromEnvironment()
-	if err != nil {
-		logger.Error("invalid configuration", "error", err)
+	if err := run(logger); err != nil {
+		logger.Error("gateway exited", "error", err)
 		os.Exit(1)
 	}
+}
 
-	server, err := gateway.NewServer(config, logger)
+func run(logger *slog.Logger) error {
+	// 1. 环境变量只在进程边界解析一次，domain 接收已经拆分并校验的 Config。
+	config, err := servingconfig.LoadEnvironment()
 	if err != nil {
-		logger.Error("create gateway", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("load environment: %w", err)
 	}
-	defer server.Close()
 
+	// 2. 显式组合所有实现，并把资源关闭责任保留在 cmd。
+	runtime, err := buildRuntime(config, logger)
+	if err != nil {
+		return err
+	}
+	defer runtime.Close()
 	httpServer := &http.Server{
-		Addr:    config.ListenAddress,
-		Handler: server.Handler(),
-		// 只给"读取请求头"设超时：防止慢速客户端用极慢的 header 占住连接
-		// （slowloris 攻击）。请求体不设超时——流式推理响应可能持续很久，
-		// 端到端的超时由 gateway 内部的 RequestTimeout 负责（见 config.go）。
-		ReadHeaderTimeout: 5 * time.Second,
+		Addr:              config.Process.ListenAddress,
+		Handler:           runtime.handler,
+		ReadHeaderTimeout: config.Process.ReadHeaderTimeout,
 	}
 
-	// signal.NotifyContext：注册 SIGINT（本地 Ctrl-C）和 SIGTERM（Kubernetes
-	// 滚动更新或删除 Pod 时由 kubelet 发送）两个信号，收到后 shutdownSignal.Done()
-	// 被关闭。defer stop() 确保 main 退出时取消订阅，避免 goroutine 泄漏。
+	// 3. 监听 SIGINT/SIGTERM；非正常 Listen 错误也会触发同一关停路径。
 	shutdownSignal, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	logRuntimeConfig(logger, config)
+	startHTTPServer(httpServer, logger, stop)
+	<-shutdownSignal.Done()
 
+	// 4. 先停止接收请求并等待 HTTP in-flight，再由 defer 反序关闭 domain 资源。
+	shutdownContext, cancel := context.WithTimeout(context.Background(), config.Process.ShutdownTimeout)
+	defer cancel()
+	if err := httpServer.Shutdown(shutdownContext); err != nil {
+		return fmt.Errorf("graceful shutdown: %w", err)
+	}
+	return nil
+}
+
+func startHTTPServer(server *http.Server, logger *slog.Logger, stop context.CancelFunc) {
 	go func() {
-		logger.Info("gateway listening",
-			"address", config.ListenAddress,
-			"upstream", config.UpstreamURL,
-			"routing_mode", config.RoutingMode,
-			"endpoint_discovery", config.EndpointDiscovery,
-			"observation_mode", config.ObservationMode,
-			"upstream_keepalive", config.KeepAlive,
-			"affinity_ttl", config.AffinityTTL,
-			"affinity_max_entries", config.AffinityMaxEntries,
-			"affinity_inflight_delta", config.AffinityInflightDelta,
-			"affinity_queue_depth_delta", config.AffinityQueueDepthDelta,
-			"max_inflight_requests", config.MaxInflightRequests,
-			"max_conns_per_host", config.MaxConnsPerHost,
-			"circuit_ewma_alpha", config.CircuitEWMAAlpha,
-			"circuit_error_threshold", config.CircuitErrorThreshold,
-			"circuit_min_requests", config.CircuitMinimumRequests,
-			"circuit_open_duration", config.CircuitOpenDuration,
-		)
-		if serveErr := httpServer.ListenAndServe(); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
-			// http.ErrServerClosed 是 Shutdown() 被调用后 ListenAndServe 的正常
-			// 返回，不是错误；只有其他错误才需要记录并主动触发关停流程。
-			logger.Error("gateway stopped unexpectedly", "error", serveErr)
+		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Error("gateway stopped unexpectedly", "error", err)
 			stop()
 		}
 	}()
+}
 
-	// 阻塞直到收到退出信号。
-	// Kubernetes 默认给 Pod 30 秒优雅终止宽限期（terminationGracePeriodSeconds），
-	// 所以 Shutdown 的超时必须小于这个值，否则请求还没处理完就会被 kubelet SIGKILL。
-	<-shutdownSignal.Done()
-	shutdownContext, cancel := context.WithTimeout(context.Background(), config.ShutdownTimeout)
-	defer cancel()
-	// Shutdown：停止接收新连接，等待所有 in-flight 请求自然结束；
-	// 超过 shutdown 超时仍未完成的连接会被强制断开。
-	if err := httpServer.Shutdown(shutdownContext); err != nil {
-		logger.Error("graceful shutdown failed", "error", err)
-		os.Exit(1)
-	}
+func logRuntimeConfig(logger *slog.Logger, config servingconfig.Config) {
+	logger.Info("gateway listening",
+		"address", config.Process.ListenAddress,
+		"upstream", config.RequestPath.Service.URL,
+		"routing_mode", config.Routing.Mode,
+		"endpoint_discovery", config.Discovery.Mode,
+		"observation_mode", config.ObservationMode,
+		"upstream_keepalive", config.Transport.KeepAlive,
+		"affinity_ttl", config.Routing.BoundedAffinity.TTL,
+		"affinity_max_entries", config.Routing.BoundedAffinity.MaxEntries,
+		"affinity_inflight_delta", config.Routing.BoundedAffinity.InflightDelta,
+		"affinity_queue_depth_delta", config.Routing.BoundedAffinity.QueueDepthDelta,
+		"max_inflight_requests", config.Admission.MaxInflight,
+		"max_conns_per_host", config.Transport.MaxConnsPerHost,
+		"circuit_ewma_alpha", config.Circuit.EWMAAlpha,
+		"circuit_error_threshold", config.Circuit.ErrorThreshold,
+		"circuit_min_requests", config.Circuit.MinimumRequests,
+		"circuit_open_duration", config.Circuit.OpenDuration,
+	)
 }

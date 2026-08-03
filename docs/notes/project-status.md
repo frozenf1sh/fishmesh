@@ -1,12 +1,12 @@
 # FishMesh 项目当前状态
 
-最后验证时间：2026-08-09。仓库为 `frozenf1sh/fishmesh`（private），当前 `main` 分支
+最后本地验证时间：2026-08-10。仓库为 `frozenf1sh/fishmesh`（private），当前 `main` 分支
 包含可信 serving baseline、bounded-affinity-v1、request-path reliability 和工程优先的项目
 章程。
 
-request-path reliability 已完成，当前主线是无 GPU simulator E2E 和标准网关集成。实验只用于
-工程决策、验收和回归防护；不会作为独立路线扩展。方向基准见
-`docs/design/project-charter.md`。
+request-path reliability 已完成。当前先按已确定的 Serving Domain 设计建立可复用 requestpath
+边界，再进入无 GPU simulator E2E 和标准网关集成。这个整理不改变产品方向或运行行为；实验
+仍只用于工程决策、验收和回归防护。方向基准见 `docs/design/project-charter.md`。
 
 ## 当前运行拓扑
 
@@ -138,13 +138,32 @@ VM 的影响更大：Kubernetes API 和 reconciliation 也会停止，应按完�
   `sha256:036149be62f706b5cc3580e1caf29714282a784bc21c56fc30f88a09d3bc0223`；Gateway/Analyst
   rollout Ready 且零重启，启动日志确认全部 reliability 参数；真实 vLLM smoke 8/8 成功，
   两个 routing key 保持 affinity，新 metrics 正常暴露。该 smoke 是兼容性验证，不是性能结论。
+- 代码组织 R0：确认“能力包 + 单向依赖 + 显式组合根”适用于 Serving，但拒绝顶层
+  `internal/domain`、`shared` 类型仓库和无意义的一实现一接口。已固定包/文件/声明/字面量规范、
+  目标依赖 DAG 和 R1–R5 渐进迁移计划；本阶段未改变运行代码或集群。
+- Serving Domain R1：Backend/ID、Identity、Observation/Sample、Routing 和 Circuit 已回到各自
+  owner；routing mode/policy/reason 与 circuit outcome 已类型化，transport 不再依赖 routing；
+  `go list` 架构测试会阻止原子 domain 出现反向依赖。运行协议、配置、部署和集群均未改变。
+- Serving Domain R2：`endpoint` 已更名并拆分为 contract-first 的 `discovery`；identity、
+  observation、transport 只向 Gateway 暴露接口和明确构造器；环境变量、HTTP/SSE header、
+  metric/label 与 vLLM/Kubernetes 协议常量已收口。完整本地 CI 通过，运行协议、部署和集群均
+  未改变；GPU 节点暂停期间不执行无价值的 K3s smoke。
+- Serving Domain R3：新增协议无关的 requestpath 编排与幂等 lease；discovery freshness、
+  circuit eligibility、Service fallback、local in-flight 和 membership GC 已从 Gateway 移出；
+  client cancellation、deadline、upstream/downstream stream failure 保持独立 typed outcome。
+- Serving Domain R4：新增非阻塞 admission domain 和进程 config package；Gateway 已拆为契约、
+  handler、proxy stream 与 metrics 文件，只依赖注入能力；`cmd/fishmesh-gateway` 显式创建并按
+  反序关闭 requestpath、observation、resolver 和 transport 等有状态资源。R1–R4 重构闭环。
+- R5A 无 GPU simulator：新增独立 `internal/simulator` 和可执行入口，提供 OpenAI SSE、vLLM
+  queue/running 指标及运行时故障控制；真实 HTTP/TLS E2E 已覆盖 slow、stream abort、circuit
+  fallback、overload、cancellation、EndpointSlice removal/stale。该阶段未使用 GPU/K3s。
 
 ## 下一步待办
 
-1. 用可控 simulator 把 slow/error/removed backend、discovery stale、overload 和 cancellation
-   变成不依赖 GPU 的自动 E2E；
-2. 完成 EPP/llm-d integration spike，记录协议、插件扩展点、失败模式和版本约束，再选择一个
+1. 完成 EPP/llm-d integration spike，记录协议、插件扩展点、失败模式和版本约束，再选择一个
    integrated runtime path；
+2. 为 simulator 增加长时间 churn/soak；integrated adapter 落地后让两种入口运行同一组
+   selection/reason conformance suite；
 3. 增加 dashboard、trace/log correlation、runbook、multi-arch release 和 supply-chain metadata；
 4. 工程闭环后再运行有限 workload matrix，并加入一个开源 scheduler 对照；只有简历使用
    性能数字时才要求至少两个独立物理 GPU；当前单卡 time-slicing 结果只

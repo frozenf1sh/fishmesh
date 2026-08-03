@@ -7,7 +7,7 @@
 
 ## 实现
 
-- `internal/serving/endpoint` 提供 Static 与 EndpointSlice 两种 Resolver；
+- `internal/serving/discovery` 提供 Static 与 EndpointSlice 两种 Resolver；
 - namespace-scoped `get/list/watch endpointslices`；
 - 仅选择 Ready 的 IPv4/IPv6 地址和有效端口；
 - 根据地址和端口生成稳定 `endpoint-*` ID；
