@@ -1,6 +1,6 @@
 # FishMesh Serving Domain 重新设计
 
-> 状态：R1–R4 与 R5A simulator 已完成；下一步进入 R5B EPP/llm-d 集成 spike。后续变更仍必须遵守
+> 状态：R1–R4、R5A–R5C 已完成；下一步进入 R5D 标准集成部署。后续变更仍必须遵守
 > [`code-organization.md`](code-organization.md)，并保持每个提交可构建、可回滚。
 
 ## 1. 结论
@@ -83,11 +83,16 @@ internal/serving/
 │   ├── transport.go
 │   ├── transport_impl.go
 │   └── transport_test.go
-├── requestpath/             # application orchestration, shared by adapters
+├── requestpath/             # standalone selection and lease orchestration
 │   ├── requestpath.go
 │   ├── requestpath_impl.go
 │   ├── requestpath_state_impl.go
 │   └── requestpath_test.go
+├── llmd/                    # llm-d scorer adapter（R5C 已完成）
+│   ├── llmd.go
+│   ├── scorer_impl.go
+│   ├── translation_impl.go
+│   └── *_test.go
 ├── gateway/                 # standalone HTTP/SSE delivery adapter
 │   ├── gateway.go
 │   ├── gateway_impl.go
@@ -99,7 +104,8 @@ internal/serving/
     ├── environment_impl.go
     └── config_test.go
 
-cmd/fishmesh-gateway/main.go # 唯一组合根：创建实现、注入、启动和关闭
+cmd/fishmesh-gateway/        # standalone 组合根
+cmd/fishmesh-epp/            # integrated 组合根（R5C 已完成）
 ```
 
 `diagnostics` 已冻结，不为了目录对称做无收益搬迁；以后发生真实修改时遵守同一文件布局。
@@ -118,6 +124,7 @@ cmd/fishmesh-gateway/main.go # 唯一组合根：创建实现、注入、启动�
 | `admission` | 进程内 permit 数量 | `TryAcquire`，返回幂等 permit | 排队、tenant rate limit |
 | `transport` | 每 backend HTTP client/connection pool | `Client/Remove/Close` | backend 选择、retry 策略 |
 | `requestpath` | membership 对齐、local in-flight lease、selection lifecycle | `Select`、`Complete`、`Reconcile` | HTTP header、SSE copy、环境变量 |
+| `llmd` | llm-d request/endpoint 到 routing 输入的翻译 | plugin 注册与 Filter/Scorer | ext_proc、discovery、flow control、proxy |
 | `gateway` | HTTP handler 生命周期、response writer、Gateway metrics | health/ready/metrics/v1 handler | 创建具体 domain 实现、策略算法 |
 | `config` | 环境变量到各 domain config 的映射 | `LoadEnvironment/Validate` | 运行时状态和外部网络 I/O |
 
@@ -154,6 +161,7 @@ flowchart TD
     CMD --> CIR["circuit"]
     CMD --> ADM["admission"]
     CMD --> TRANS["transport"]
+    CMD -. R5C .-> LLMD["llm-d adapter"]
 
     GW --> RP
     GW --> ADM
@@ -168,6 +176,9 @@ flowchart TD
     ID --> BACK
     ROUTE --> BACK
     ROUTE --> OBS
+    LLMD --> ROUTE
+    LLMD --> BACK
+    LLMD --> OBS
     CIR --> BACK
     TRANS --> BACK
 ```
@@ -180,7 +191,9 @@ flowchart TD
 - `gateway` 不 import Kubernetes platform client；
 - `transport` 不 import routing；
 - `discovery/identity/observation` 不 import requestpath 或 gateway；
-- 未来 EPP/llm-d adapter 依赖 requestpath/routing，不依赖 standalone gateway/transport。
+- llm-d adapter 只依赖 routing 及其稳定值对象，不依赖 standalone requestpath/gateway/transport。
+  requestpath 的 discovery、observation、circuit、fallback 和 lease 在 llm-d 中已有不同 owner，
+  不能形成第二套事实源。
 
 ## 6. 目标请求流程
 
@@ -302,8 +315,9 @@ HTTP handler，也不会让 transport 知道 EndpointSlice 配置。
 ### R5：为 P2 建立复用边界
 
 - controlled simulator 只实现标准 discovery/observation/upstream fault contract（R5A 已完成）；
-- EPP/llm-d spike 只依赖 requestpath/routing；
-- standalone 与 integrated adapter 运行同一组 selection/reason conformance tests。
+- EPP/llm-d adapter 只依赖 routing；
+- standalone 与 integrated adapter 对相同候选和负载输入运行 selection/reason conformance；
+- 两种运行时的 fallback、retry 和 stream lifecycle 分别按各自协议测试。
 
 每个 R 阶段单独更新阶段文档、提交和推送。禁止在纯搬包提交中顺便改变 route reason、fallback、
 timeout、连接复用或 circuit 算法。

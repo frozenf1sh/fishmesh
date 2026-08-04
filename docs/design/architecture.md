@@ -27,6 +27,7 @@ Serving Context（当前）
   identity -------> backend
   observation ----> backend + identity
   routing --------> backend + observation
+  llmd -----------> backend + observation + routing
   circuit --------> backend
   transport ------> backend
 
@@ -57,10 +58,12 @@ Simulator Context
 - `internal/serving/identity`：backend 到 Pod/Node/声明资源的映射。
 - `internal/serving/observation`：per-field sample、freshness 和慢速 Prometheus 采集循环。
 - `internal/serving/transport`：HTTP client/keep-alive 生命周期，不参与路由决策。
+- `internal/serving/llmd`：把 llm-d request/endpoint 数据翻译为 routing snapshot，并投影
+  Filter/Scorer/response provenance；不拥有 ext_proc 或 request lifecycle。
 
 R1–R4 已完成：类型 owner、I/O contract、requestpath 编排、Gateway delivery 和组合根均已分离，
-自动测试会约束上述 import。后续 simulator/EPP adapter 直接复用 requestpath，不复制 standalone
-Gateway 的 HTTP 代码。
+自动测试会约束上述 import。simulator 通过 standalone requestpath 验证请求生命周期；llm-d
+adapter 只复用纯 routing policy，不复制 Gateway，也不启动第二套 requestpath。
 强制文件布局、字面量规则和完整依赖矩阵见
 [`code-organization.md`](code-organization.md) 与
 [`serving-domain-redesign.md`](serving-domain-redesign.md)。
@@ -91,6 +94,7 @@ backend     -> standard library only
 admission   -> standard library only
 circuit     -> backend
 routing     -> backend + observation
+llmd        -> backend + observation + routing（第三方类型只停留在 adapter）
 identity    -> backend + platform/kubernetes
 observation -> backend + identity
 transport   -> backend
@@ -125,13 +129,18 @@ domain -> standard library only
 完成。该运行时便于开发、故障注入和策略测试，但不是长期生产入口，不扩展 TLS、认证、tenant、
 通用 rate limit 或 Gateway API 控制面。
 
-目标 integrated runtime 复用 Envoy-compatible Gateway 和 EPP/llm-d 扩展边界。两种运行时
-共享 `internal/serving/routing` 及其状态契约，不复制策略实现：
+目标 integrated runtime 复用 Envoy-compatible Gateway 和 llm-d EPP。两种运行时只共享
+`internal/serving/routing` 的纯选择语义，不复制策略实现，也不共享 delivery 状态机：
 
 ```text
 standalone: client -> gateway delivery -> scheduler core -> transport -> backend
-integrated: client -> external gateway -> EPP adapter -> scheduler core -> backend
+integrated: client -> external gateway -> llm-d runtime -> FishMesh scorer -> backend
 ```
+
+standalone 的 requestpath 拥有 EndpointSlice、observation、circuit、Service fallback 和 transport
+lease；llm-d 已拥有 InferencePool、subset、metrics data layer、flow control 和 response lifecycle。
+integrated adapter 不能启动第二套 requestpath。相同候选和信号下的选择必须一致，但空候选等
+故障由各 runtime 按自己的协议处理。
 
 只有出现独立扩缩容、独立权限或故障隔离需求时才增加进程。当前不引入数据库、消息队列、
 CRD 或 Operator。
@@ -206,11 +215,13 @@ EndpointSlice removal/stale，并验证 observation collector 能解析 simulato
 只承担集成验证；N5 剩余工作是长时间 churn/soak，以及 integrated adapter 落地后的共享
 selection/reason conformance suite。
 
-### N6：EPP/llm-d 集成
+### N6：EPP/llm-d 集成（R5C 本地切片已完成）
 
-先用 ADR 记录当前上游协议、插件接口、失败模式和版本约束，再选择 lightweight EPP、llm-d
-scheduler plugin 或协议兼容 adapter。集成层只翻译请求和 endpoint snapshot，不重新实现
-scheduler core。
+[`ADR-001`](decisions/001-llmd-router-integration.md) 已选择 Gateway API Inference Extension
+v1.5.0 + llm-d Router v0.9.0：构建注册 FishMesh scorer 的自定义 EPP 二进制。集成层只翻译
+llm-d request/endpoint/metric 到纯 routing 输入；不自研 ext_proc，不调用 standalone requestpath，
+不在空 subset 时执行 Service fallback。adapter、`fishmesh-epp` 组合根、最小配置和选择
+conformance 已完成；下一阶段补齐标准 Gateway/EPP/InferencePool 部署与 wire-level smoke。
 
 ### N7：可操作性
 

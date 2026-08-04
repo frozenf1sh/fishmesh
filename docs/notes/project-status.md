@@ -4,9 +4,11 @@
 包含可信 serving baseline、bounded-affinity-v1、request-path reliability 和工程优先的项目
 章程。
 
-request-path reliability 已完成。当前先按已确定的 Serving Domain 设计建立可复用 requestpath
-边界，再进入无 GPU simulator E2E 和标准网关集成。这个整理不改变产品方向或运行行为；实验
-仍只用于工程决策、验收和回归防护。方向基准见 `docs/design/project-charter.md`。
+request-path reliability、Serving Domain R1–R4、无 GPU simulator 基础和 R5C llm-d 本地集成
+切片均已完成。当前进入 R5D：补齐标准 Gateway/EPP/InferencePool 部署和 wire-level 故障验证。
+standalone requestpath 继续用于开发/故障 E2E；integrated 模式只复用纯 routing policy，不启动
+第二套 discovery、observation、circuit 或 Service fallback。方向基准见
+`docs/design/project-charter.md`，集成边界见 `docs/design/decisions/001-llmd-router-integration.md`。
 
 ## 当前运行拓扑
 
@@ -157,16 +159,28 @@ VM 的影响更大：Kubernetes API 和 reconciliation 也会停止，应按完�
 - R5A 无 GPU simulator：新增独立 `internal/simulator` 和可执行入口，提供 OpenAI SSE、vLLM
   queue/running 指标及运行时故障控制；真实 HTTP/TLS E2E 已覆盖 slow、stream abort、circuit
   fallback、overload、cancellation、EndpointSlice removal/stale。该阶段未使用 GPU/K3s。
+- R5B EPP/llm-d 决策：按 GIE v1.5.0、EPP Protocol v1.0.0 和 llm-d Router v0.9.0 核对
+  protocol、InferencePool、Filter/Scorer/Picker、data layer 与 in-flight lifecycle；选择 pinned
+  llm-d 编译期 scorer + 自定义 EPP 入口，拒绝自研 ext_proc 和生产使用 LWEPP。设计同时纠正
+  integrated 复用整个 requestpath 的错误假设：两种模式只共享纯 routing 选择，空 subset 在
+  EPP 中返回 503，不走 standalone Service fallback。本阶段未使用 GPU/K3s。
+- R5C llm-d 本地集成切片：新增只依赖 backend/observation/routing 的 `internal/serving/llmd`，
+  具体实现 pinned v0.9.0 的 Filter、Scorer、ConsumerPlugin 和 response hook；queue freshness、
+  required in-flight、endpoint churn、并发、多实例、selected/served provenance 和纯策略
+  conformance 均有 race/contract tests。新增 `fishmesh-epp` 组合根复用上游 runner，Docker 镜像
+  包含新二进制；最小 EndpointPickerConfig 已进入 manifest 门禁。该阶段没有访问 GPU/K3s，
+  完整 Gateway/EPP/InferencePool 部署和 ext_proc wire smoke 尚未完成。
 
 ## 下一步待办
 
-1. 完成 EPP/llm-d integration spike，记录协议、插件扩展点、失败模式和版本约束，再选择一个
-   integrated runtime path；
-2. 为 simulator 增加长时间 churn/soak；integrated adapter 落地后让两种入口运行同一组
-   selection/reason conformance suite；
-3. 增加 dashboard、trace/log correlation、runbook、multi-arch release 和 supply-chain metadata；
-4. 工程闭环后再运行有限 workload matrix，并加入一个开源 scheduler 对照；只有简历使用
+1. 补齐 pinned GIE v1.5.0、Gateway、EPP Deployment/Service/RBAC、InferencePool 和 ConfigMap
+   mount，形成可部署的 integrated overlay；
+2. 先用无 GPU simulator 验证 ext_proc 正常流、空 subset 503、取消、retry 后 served endpoint
+   和 endpoint churn，再决定是否执行真实 vLLM 兼容 smoke；
+3. 为 simulator 增加长时间 churn/soak；
+4. 增加 dashboard、trace/log correlation、runbook、multi-arch release 和 supply-chain metadata；
+5. 工程闭环后再运行有限 workload matrix，并加入 llm-d 内置 scorer 组合这一开源对照；只有简历使用
    性能数字时才要求至少两个独立物理 GPU；当前单卡 time-slicing 结果只
    能作为 correctness/profile 证据；
-5. 在声称 NetworkPolicy 已生效前迁移到支持 policy enforcement 的 CNI；当前 Flannel 不能
+6. 在声称 NetworkPolicy 已生效前迁移到支持 policy enforcement 的 CNI；当前 Flannel 不能
    执行声明式 NetworkPolicy。

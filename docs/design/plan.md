@@ -1,6 +1,6 @@
 # FishMesh 设计与实施路线
 
-> 状态：工程优先路线，2026-08-09。方向约束以
+> 状态：工程优先路线，2026-08-10。R5C 已完成 llm-d Router 编译期插件最小切片。方向约束以
 > [`project-charter.md`](project-charter.md) 为准。
 
 ## 1. 交付目标
@@ -32,8 +32,8 @@ FishMesh 要交付一个 Kubernetes-native LLM 请求流量调度组件，而不
 
 ### 尚未闭环
 
-- 标准 EPP/llm-d 集成尚未验证；
-- fault E2E 主要依赖真实集群手工执行，缺少无 GPU simulator；
+- llm-d 插件、组合根和最小配置已实现并通过本地契约测试，但标准 Gateway/EPP 栈尚未部署；
+- simulator 已覆盖第一组自动 fault E2E，长时间 churn/soak 尚未完成；
 - dashboard、trace、release/supply-chain 工程尚未完成。
 
 ## 3. 目标运行时
@@ -43,24 +43,28 @@ Development / conformance
   client -> FishMesh standalone Gateway -> scheduler core -> simulated/vLLM backends
 
 Production-shaped integration
-  client -> Envoy-compatible Gateway -> EPP/llm-d boundary
-                                      -> FishMesh scheduler core
+  client -> Envoy-compatible Gateway -> llm-d EPP runtime
+                                      -> FishMesh routing plugin
                                       -> vLLM backends
 
-Shared state inputs
-  EndpointSlice / InferencePool + backend metrics + local outcomes
+Shared policy inputs
+  eligible candidates + routing key + queue + in-flight
 ```
 
 standalone 与 integrated mode 必须共享：
 
-- `RequestContext` 和 backend snapshot 契约；
-- eligibility、bounded affinity、circuit 和 fallback 语义；
-- routing reason、metrics 和结构化日志字段；
-- deterministic/race/fault tests。
+- `internal/serving/routing` 中的 bounded-affinity 选择语义；
+- 相同候选、routing key、queue 和 in-flight 输入下的 endpoint/reason；
+- deterministic/race tests 和选择 conformance fixture。
 
-独立 Gateway 不继续扩展认证、租户、通用限流和 Gateway API 能力。进入集成实现前，先针对
-当前上游做短期 spike，确认 llm-d scheduler plugin、lightweight EPP 或协议兼容服务中哪个是
-最小且可维护的扩展点。
+两种模式不共享 delivery 故障处理。standalone requestpath 继续拥有 EndpointSlice、Service
+fallback、local circuit 和 transport lease；integrated 模式复用 llm-d 的 InferencePool、subset、
+flow control 和 stream lifecycle。空 EPP 候选集必须按协议返回 503，不能为了表面一致而调用
+standalone Service fallback。
+
+R5B 已完成短期 spike，并在
+[`ADR-001`](decisions/001-llmd-router-integration.md) 选择 pinned llm-d Router + 编译期
+FishMesh scorer。LWEPP 只用于标准参考/conformance，不作为生产路径；不自研 ext_proc 服务。
 
 ## 4. 快路径设计
 
@@ -150,13 +154,13 @@ Sample[T] {
 
 - `serving-domain-redesign.md` 的 R1–R4 已完成，可复用 requestpath 与显式组合根已经落地；
 - controlled backend simulator 与第一组无 GPU fault E2E 已完成；
-- EPP/llm-d integration spike 和 ADR；
-- 选择并实现一个 integrated runtime path；
-- standalone/integrated conformance tests；
+- EPP/llm-d integration spike、ADR、pinned scorer/adapter 和组合根已完成；
+- 纯 routing/integrated selection/reason conformance 已完成；
+- 部署标准 Gateway/EPP/InferencePool，并完成 wire-level failure contract；
 - Pod 删除、discovery stale、overload、transport failure 自动化。
 
-验收：同一 scheduler policy 在两种运行模式下产生一致选择和 reason；CI 不依赖 GPU 即可覆盖
-关键故障状态机。
+验收：同一 policy 在相同候选与信号下产生一致选择和 reason；两种运行时各自遵守 EPP 或
+standalone failure contract；CI 不依赖 GPU 即可覆盖关键状态机。
 
 代码重构不是新的产品路线，而是 P2 的入口条件：如果 simulator 和 EPP adapter 继续直接依赖
 当前大 Gateway，它们会复制或绑死 standalone 运行时。R1–R4 必须保持行为不变，并按独立阶段
@@ -194,8 +198,8 @@ Sample[T] {
 | Model server | vLLM 0.23.0 | 复用上游 engine |
 | Standalone proxy | Go HTTP/SSE | 开发、测试和演示 |
 | Production gateway | 未实现 | 复用 Envoy-compatible Gateway |
-| Endpoint selection | FishMesh scheduler core | EPP/llm-d 扩展点 |
-| Discovery | EndpointSlice REST watch | 兼容 InferencePool/EPP data layer |
+| Endpoint selection | FishMesh scheduler core | llm-d 编译期 scorer 扩展点 |
+| Discovery | EndpointSlice REST watch | integrated 模式复用 InferencePool/llm-d data layer |
 | Observability | Prometheus metrics | Prometheus + OTel + Grafana |
 | GPU operations | device plugin time-slicing | 不自研 GPU 管理平台 |
 

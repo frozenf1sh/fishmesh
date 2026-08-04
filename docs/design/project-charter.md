@@ -65,12 +65,13 @@ FishMesh 对应 AI Infra 平台、云原生推理服务和基础架构研发方�
 
 ### Integrated mode
 
-生产形态复用 Envoy-compatible Gateway 和 EPP/llm-d 边界，FishMesh 只提供调度、状态与故障
-策略。进入实现前先做兼容性 spike，确认当前上游协议和插件扩展点；不以维护第二套完整
-Gateway 为目标。
+生产形态复用 Envoy-compatible Gateway 和 llm-d EPP，FishMesh 只提供纯调度策略与决策
+provenance。InferencePool、subset、flow control、retry 和 stream lifecycle 由上游运行时负责。
+R5C 已实现编译期 scorer 与 `fishmesh-epp` 组合根；不维护第二套完整 Gateway 或 EPP。完整
+Gateway/EPP/InferencePool 部署和 wire-level smoke 仍需在 R5D 完成。
 
-两种形态必须复用同一个 scheduler core 和同一组不变量测试，避免演示实现与集成实现产生
-不同策略语义。
+两种形态必须复用同一个纯 scheduler core，并在相同候选和负载输入下运行选择不变量测试。
+delivery fallback、retry 和流生命周期按各自协议测试，不能为表面一致破坏 EPP 约束。
 
 ## 5. 方向决策门槛
 
@@ -110,7 +111,7 @@ MVP 同时满足以下条件才算完成：
 - **可靠性**：动态 endpoint、过载、上游错误、请求取消和滚动发布都有有界行为；
 - **资源安全**：连接、等待请求、affinity、observation、circuit 和 metric state 均有上限
   或回收机制；
-- **标准集成**：至少一种 EPP/llm-d 或协议兼容集成可部署，standalone 仍可用于测试；
+- **标准集成**：基于 llm-d EPP 的 FishMesh scorer 可部署，standalone 仍可用于测试；
 - **可操作性**：关键路径具有 metrics、structured logs、trace 或等价关联手段，并有故障
   runbook；
 - **自动验证**：无 GPU simulator E2E 覆盖正常、过载、endpoint 删除、stale discovery 和
@@ -122,7 +123,7 @@ MVP 同时满足以下条件才算完成：
 ## 8. 当前优先级
 
 1. P1：request-path reliability——circuit、GC、admission、connection bounds；（已完成）
-2. P2：simulator E2E 与 EPP/llm-d integration spike；（当前）
-3. P3：正式集成路径、dashboard/tracing、release 工程；
+2. P2：simulator E2E、EPP/llm-d adapter 与标准部署；（当前，adapter 垂直切片已完成）
+3. P3：dashboard/tracing、runbook 与 release 工程；
 4. P4：有限、可复现的开源 scheduler 对照；
 5. P5：只有在真实需求出现后再评估延期项。

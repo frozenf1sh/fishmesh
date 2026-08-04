@@ -22,6 +22,7 @@ func TestAtomicDomainDependencies(t *testing.T) {
 		newRule("internal/serving/backend"),
 		newRule("internal/serving/circuit", "internal/serving/backend"),
 		newRule("internal/serving/routing", "internal/serving/backend", "internal/serving/observation"),
+		newRule("internal/serving/llmd", "internal/serving/backend", "internal/serving/observation", "internal/serving/routing"),
 		newRule("internal/serving/identity", "internal/platform/kubernetes", "internal/serving/backend"),
 		newRule("internal/serving/observation", "internal/serving/backend", "internal/serving/identity"),
 		newRule("internal/serving/transport", "internal/serving/backend"),

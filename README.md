@@ -50,6 +50,9 @@ FishMesh implements a bounded policy instead:
   system behavior;
 - a GPU-free controlled backend simulator for delay, HTTP error, stream abort,
   held-stream and vLLM-observation fault injection.
+- a pinned llm-d Router v0.9.0 Filter/Scorer adapter and `fishmesh-epp`
+  composition root, with stable endpoint translation, required in-flight data,
+  stale-queue handling and selected-versus-served provenance.
 
 ## Runtime architecture
 
@@ -74,15 +77,18 @@ independent of an external proxy without binding the scheduler to the custom
 Gateway. It is the implemented development and demonstration mode, not an
 attempt to replace a production gateway.
 
-The production-shaped integration target is an Endpoint Picker/scheduler
-extension behind an Envoy-compatible Gateway. Gateway API Inference Extension
-now keeps the InferencePool and lightweight EPP APIs, while the full EPP
-scheduler has moved to llm-d. FishMesh will therefore validate an llm-d
-scheduler plugin or protocol-compatible integration before growing the custom
-proxy further:
+The production-shaped target is an Endpoint Picker behind an Envoy-compatible
+Gateway. R5C now implements the pinned llm-d Router v0.9.0 Filter/Scorer and a
+custom `fishmesh-epp` binary. FishMesh owns only bounded-affinity policy and
+type translation. The upstream runtime retains `ext_proc`, InferencePool
+discovery, parsing, flow control, retry and response lifecycle. FishMesh neither
+implements another EPP nor runs the standalone `requestpath` inside llm-d. The
+adapter is locally contract-tested; the complete Gateway/EPP/InferencePool
+deployment remains the next integration stage.
 
 - [Gateway API Inference Extension](https://github.com/kubernetes-sigs/gateway-api-inference-extension)
-- [llm-d Request Scheduler](https://llm-d.ai/docs/architecture/core/router/epp/scheduling)
+- [llm-d Router](https://github.com/llm-d/llm-d-router)
+- [Integration decision ADR-001](docs/design/decisions/001-llmd-router-integration.md)
 
 ## Failure contract
 
@@ -94,6 +100,11 @@ proxy further:
 | Partial/missing queue observations | exclude queue; per-field sample contract | observation recovery E2E |
 | Upstream transport errors | short-TTL EWMA circuit; cancellation remains neutral; fault E2E covered | circuit recovery soak |
 | Endpoint removed | stop selection and reclaim state; dynamic-discovery E2E covered | high-frequency churn soak |
+
+In integrated mode, an empty InferencePool/subset follows the upstream EPP 503
+contract and never invokes the standalone Service fallback. Missing or stale
+queue data is ignored rather than interpreted as zero; required in-flight data
+comes from llm-d's lifecycle producer.
 
 ## GPU-free local fault validation
 
@@ -180,8 +191,10 @@ operations are complete.
 
 1. **Request-path reliability:** admission, circuits, state GC, connection
    bounds and simulator fault E2E are implemented; soak coverage remains.
-2. **Standard integration:** the controlled backend simulator is implemented;
-   the EPP/llm-d spike and one supported integrated runtime path are next.
+2. **Standard integration:** the simulator, EPP/llm-d decision, pinned scorer,
+   `fishmesh-epp` composition root and GPU-free selection conformance are
+   complete; the complete Gateway/EPP/InferencePool deployment and wire-level
+   failure smoke are next.
 3. **Operability:** automated fault E2E tests, dashboards, tracing, multi-arch
    release image and supply-chain metadata.
 4. **Comparative validation:** a bounded workload matrix against Service,

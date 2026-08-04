@@ -31,6 +31,8 @@ FishMesh 实现了一种有界策略：
 - 有界配置解析、就绪/存活探针、优雅关闭、最小权限 RBAC 以及经过竞态检测的调度器/发现路径；
 - 确定性的负载生成器和 K3s 验证工作负载，用于验证系统行为；
 - 无需 GPU 的受控 backend simulator，可注入延迟、HTTP 错误、流中断、持续流和 vLLM 观测值。
+- 固定 llm-d Router v0.9.0 的 Filter/Scorer adapter 与 `fishmesh-epp` 组合根，支持稳定 endpoint
+  翻译、required in-flight、过期 queue 降级以及 selected/served provenance。
 
 ## 运行时架构
 
@@ -53,10 +55,15 @@ Prometheus <-------- 决策、故障和延迟
 生命周期。因此调度器可以在没有外部代理的情况下开发和测试，同时不会与未来标准网关 adapter
 绑定。这是已实现的开发和演示模式，而非试图替代生产级网关。
 
-面向生产的集成目标是 Envoy 兼容 Gateway 背后的 Endpoint Picker/调度器扩展。Gateway API Inference Extension 现在保留了 InferencePool 和轻量级 EPP API，而完整的 EPP 调度器已迁移至 llm-d。因此，FishMesh 将在进一步扩展自定义代理之前，先验证 llm-d 调度器插件或协议兼容的集成方式：
+面向生产的集成目标是 Envoy 兼容 Gateway 背后的 Endpoint Picker。R5C 已实现固定
+llm-d Router v0.9.0 的 Filter/Scorer 和 `fishmesh-epp` 二进制；FishMesh 只提供
+bounded-affinity 策略和类型翻译。`ext_proc`、InferencePool 发现、请求解析、流控、retry 和
+response lifecycle 全部复用上游，不自研协议兼容 EPP，也不把 standalone `requestpath` 再运行
+一份。adapter 已通过本地契约测试；完整 Gateway/EPP/InferencePool 部署仍是下一集成阶段。
 
 - [Gateway API Inference Extension](https://github.com/kubernetes-sigs/gateway-api-inference-extension)
-- [llm-d Request Scheduler](https://llm-d.ai/docs/architecture/core/router/epp/scheduling)
+- [llm-d Router](https://github.com/llm-d/llm-d-router)
+- [集成架构决策 ADR-001](docs/design/decisions/001-llmd-router-integration.md)
 
 ## 故障契约
 
@@ -68,6 +75,10 @@ Prometheus <-------- 决策、故障和延迟
 | 部分/缺失队列观测 | 从决策中排除队列；逐字段采样 | 观测恢复 E2E |
 | 上游传输错误 | 短 TTL EWMA 熔断；取消保持中性；已有故障 E2E | circuit 恢复 soak |
 | 端点被移除 | 停止选择并回收状态；已有动态发现 E2E | 高频 churn soak |
+
+integrated 模式下，空 InferencePool/subset 遵守上游 EPP 的 503 契约，绝不调用 standalone
+Service fallback。缺失或过期 queue 不会被解释成零；required in-flight 由 llm-d 生命周期
+producer 提供。
 
 ## 无 GPU 的本地故障验证
 
@@ -145,7 +156,8 @@ FishMesh 复用上游 vLLM 进行推理，并将复用 Gateway API/Envoy 或 llm
 ## 路线图
 
 1. **请求路径可靠性：** 准入、熔断、状态回收、连接上限和 simulator 故障 E2E 已实现；仍需 soak 覆盖。
-2. **标准集成：** 可控 backend simulator 已落地；下一步进行 EPP/llm-d 集成探路并确定运行时路径。
+2. **标准集成：** simulator、EPP/llm-d 决策、pinned scorer、`fishmesh-epp` 组合根和无 GPU
+   选择 conformance 已完成；下一步完成 Gateway/EPP/InferencePool 部署与 wire-level 故障 smoke。
 3. **可运维性：** 自动化故障端到端测试、仪表盘、链路追踪、多架构发布镜像和供应链元数据。
 4. **对比验证：** 针对 Service、最少负载和一个开源调度器的有界工作负载矩阵。
 

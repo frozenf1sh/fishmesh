@@ -71,7 +71,8 @@ type Dependencies struct {
 	OnBackendRemoved func(backend.ID)
 }
 
-// Path 是 standalone Gateway 与未来 EPP adapter 共享的请求选择边界。
+// Path 是 standalone Gateway 的请求选择与结算边界。
+// integrated llm-d adapter 只复用 routing，避免重复 discovery、观测和请求生命周期状态。
 type Path interface {
 	Select(context.Context, Request) (Lease, error)
 	State(context.Context) State

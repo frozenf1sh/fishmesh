@@ -2,7 +2,11 @@
 package backend
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"maps"
+	"net"
 	"net/url"
 )
 
@@ -10,6 +14,9 @@ const (
 	// MetadataPodName is the discovery-to-identity contract for a Kubernetes
 	// Pod targetRef. Live Pod state is deliberately not stored in Metadata.
 	MetadataPodName = "pod_name"
+
+	httpScheme       = "http"
+	endpointIDPrefix = "endpoint-"
 )
 
 // ID is the stable identity used by routing state, metrics, and lifecycle
@@ -22,6 +29,18 @@ type Backend struct {
 	ID       ID
 	URL      string
 	Metadata map[string]string
+}
+
+// NewHTTP 根据已经校验的 endpoint 地址构造跨 discovery adapter 一致的 backend 身份。
+// metadata 会被复制，调用方后续修改原 map 不会改变已发布的 Backend。
+func NewHTTP(address string, port int, metadata map[string]string) Backend {
+	host := net.JoinHostPort(address, fmt.Sprintf("%d", port))
+	sum := sha256.Sum256([]byte(host))
+	return Backend{
+		ID:       ID(endpointIDPrefix + hex.EncodeToString(sum[:6])),
+		URL:      httpScheme + "://" + host,
+		Metadata: maps.Clone(metadata),
+	}
 }
 
 // Validate 检查一个 backend 是否具备可用于请求转发的稳定身份和 HTTP 地址。

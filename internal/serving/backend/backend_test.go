@@ -20,3 +20,16 @@ func TestBackendValidate(t *testing.T) {
 		})
 	}
 }
+
+func TestNewHTTPBuildsStableEndpointIdentity(t *testing.T) {
+	metadata := map[string]string{MetadataPodName: "model-a"}
+	first := NewHTTP("10.0.0.2", 8000, metadata)
+	second := NewHTTP("10.0.0.2", 8000, metadata)
+	metadata[MetadataPodName] = "changed"
+	if first.ID != second.ID || first.URL != "http://10.0.0.2:8000" {
+		t.Fatalf("endpoint identity is not stable: first=%+v second=%+v", first, second)
+	}
+	if first.Metadata[MetadataPodName] != "model-a" {
+		t.Fatalf("backend metadata aliases caller map: %+v", first.Metadata)
+	}
+}

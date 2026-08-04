@@ -1,12 +1,8 @@
 package discovery
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
-	"net"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/frozenf1sh/fishmesh/internal/serving/backend"
@@ -17,8 +13,6 @@ const (
 	addressTypeIPv6    = "IPv6"
 	targetKindPod      = "Pod"
 	preferredPortName  = "http"
-	backendURLScheme   = "http"
-	backendIDPrefix    = "endpoint-"
 	fallbackItemPrefix = "item-"
 )
 
@@ -121,16 +115,11 @@ func buildBackendsFromMap(items map[string]endpointSliceResource) []backend.Back
 	})
 	backends := make([]backend.Backend, 0, len(keys))
 	for _, key := range keys {
-		host := net.JoinHostPort(key.address, strconv.Itoa(int(key.port)))
-		sum := sha256.Sum256([]byte(host))
 		metadata := map[string]string{}
 		if key.podName != "" {
 			metadata[backend.MetadataPodName] = key.podName
 		}
-		backends = append(backends, backend.Backend{
-			ID:  backend.ID(backendIDPrefix + hex.EncodeToString(sum[:6])),
-			URL: backendURLScheme + "://" + host, Metadata: metadata,
-		})
+		backends = append(backends, backend.NewHTTP(key.address, int(key.port), metadata))
 	}
 	return backends
 }

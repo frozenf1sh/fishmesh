@@ -23,6 +23,7 @@ manifest:
 	kubectl kustomize deploy/experiments/bounded-affinity >/dev/null
 	kubectl kustomize deploy/experiments/bounded-affinity-smoke-config >/dev/null
 	kubectl kustomize deploy/experiments/bounded-affinity-smoke >/dev/null
+	kubectl kustomize deploy/integrated/llmd-config >/dev/null
 	kubectl kustomize deploy/inference >/dev/null
 	kubectl kustomize deploy/system >/dev/null
 	kubectl kustomize deploy/validation >/dev/null

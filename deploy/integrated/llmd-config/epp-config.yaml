@@ -1,0 +1,20 @@
+apiVersion: llm-d.ai/v1alpha1
+kind: EndpointPickerConfig
+plugins:
+  - type: fishmesh-bounded-affinity-scorer
+    name: fishmesh-bounded-affinity
+    parameters:
+      routingKeyHeader: x-fishmesh-prefix-key
+      metricsMaxAge: 45s
+      affinityTTL: 5m
+      maxAffinityEntries: 10000
+      inflightDelta: 2
+      queueDepthDelta: 1
+  - type: max-score-picker
+  - type: single-profile-handler
+schedulingProfiles:
+  - name: default
+    plugins:
+      - pluginRef: fishmesh-bounded-affinity
+        weight: 1
+      - pluginRef: max-score-picker

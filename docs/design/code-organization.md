@@ -22,8 +22,8 @@ FishMesh 采用：
 这里的“domain”不是要求引入 Repository、Aggregate 或 Event Bus。一个 domain 就是一个具有
 明确输入、输出和状态所有权的能力包，例如 discovery、routing、circuit 或 transport。
 
-严格规范适合 FishMesh，因为请求路径包含多个天然能力边界，并且需要同时复用于 standalone
-Gateway 和未来 EPP/llm-d adapter。但必须做 Go 化调整：
+严格规范适合 FishMesh，因为请求路径包含多个天然能力边界；其中纯 routing policy 需要同时
+复用于 standalone Gateway 和未来 llm-d adapter。但必须做 Go 化调整：
 
 1. 接口用于替换边界，不用于装饰每个 struct；
 2. 包名表达能力，不用 `common`、`shared`、`manager` 隐藏所有权；
