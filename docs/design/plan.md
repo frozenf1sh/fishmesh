@@ -1,109 +1,130 @@
 # FishMesh 设计与实施路线
 
-> 状态：工程优先路线，2026-08-10。R5C 已完成 llm-d Router 编译期插件最小切片。方向约束以
-> [`project-charter.md`](project-charter.md) 为准。
+> 状态：交付优先路线，2026-08-11。R6A 已完成；R5D 不取消但后移。当前进入 R6B
+> tokenization 与 KV cache 能力域。最高方向约束见 [`project-charter.md`](project-charter.md)，决策见
+> [`ADR-002`](decisions/002-lite-exact-kv-routing.md)。
 
 ## 1. 交付目标
 
-FishMesh 要交付一个 Kubernetes-native LLM 请求流量调度组件，而不是一篇调度策略研究：
+FishMesh 要交付一个能在真实 Kubernetes 集群安装和运行的轻量 LLM Router，而不是调度论文、
+实验平台或 llm-d 插件示例。
 
-- 正确代理 OpenAI-compatible HTTP/SSE 请求；
-- 从 Kubernetes 动态维护可用 backend；
-- 在 affinity、负载和故障之间做有界、可解释的 endpoint selection；
-- 在过载、endpoint 删除、观测过期和上游错误时提供明确的降级行为；
-- 以 standalone Gateway 支持开发和测试，以 EPP/llm-d 集成形成生产形态；
-- 通过自动化测试、故障演练和有限 benchmark 验证工程结果。
+主交付物是 Lite mode：
 
-实验不单独形成产品路线。只有当实验决定实现方案、验证验收条件或防止回归时，才进入当前
-里程碑。
+- 单独的 `fishmesh-gateway` 镜像和声明式部署；
+- 正确的 OpenAI HTTP/SSE 数据面；
+- 动态 vLLM Pod 发现和资源生命周期；
+- 基于真实 KV block locality 的跨 session prefix reuse；
+- cache、负载、过载和故障联合选择；
+- 清晰降级、观测、告警、runbook、发布和性能边界。
+
+Standard mode 是第二交付物：同一纯策略通过 `fishmesh-epp` 接入 Envoy、InferencePool 和
+llm-d。它证明生态兼容性，不取代 Lite 产品。
 
 ## 2. 当前系统基线
 
-### 已完成
+### 已实现并在真实集群运行
 
-- Go streaming proxy、SSE 完整消费、TTFT 和 request provenance；
+- Go streaming proxy、SSE 透传、取消、TTFT 和 request provenance；
 - EndpointSlice Ready discovery、watch/relist、freshness/readiness 和 Service fallback；
-- per-backend vLLM queue/running observation，区分 ok/degraded/unavailable；
-- bounded-affinity-v1：Rendezvous Hash、SHA-256 routing key、TTL/容量上限、独立
-  queue/local-inflight spillover；
-- Prometheus routing/discovery/backend metrics；
-- 严格启动配置、graceful shutdown、最小 RBAC、Kustomize、CI 和 race tests；
-- 真实 K3s + vLLM 的行为 smoke 和可追溯运行元数据。
+- per-backend vLLM queue/running observation；
+- bounded-affinity-v1、Rendezvous Hash、TTL/容量上限和负载 spillover；
+- admission、per-backend connection bounds、transport EWMA circuit 和 endpoint state GC；
+- Prometheus metrics、严格配置、graceful shutdown、最小 RBAC 和 Kustomize；
+- 两个 vLLM 0.23.0 副本、prefix caching 和真实 OpenAI/SSE smoke。
 
-### 尚未闭环
+### 已实现但不是主产品
 
-- llm-d 插件、组合根和最小配置已实现并通过本地契约测试，但标准 Gateway/EPP 栈尚未部署；
-- simulator 已覆盖第一组自动 fault E2E，长时间 churn/soak 尚未完成；
-- dashboard、trace、release/supply-chain 工程尚未完成。
+- GPU-free simulator 和 loadgen；
+- `fishmesh-analyst` 与只读 Diagnostics 原型；
+- llm-d Router v0.9.0 Filter/Scorer adapter、`fishmesh-epp` 组合根和本地 conformance。
+
+### 当前关键缺口
+
+- 产品请求路径还没有启用/消费 vLLM KVEvents（R6A 实验链路已通过并在结束后恢复基础清单）；
+- 当前 `X-FishMesh-Prefix-Key` 是客户端 session hint，不是真实 prefix cache 信号；
+- Gateway 还没有有界读取、重放请求体和真实 tokenization；
+- 没有逐 Pod KV block index、event freshness 或 eviction/restart 契约；
+- 默认镜像和部署仍捆绑低优先级二进制；
+- Lite mode 缺少完整安装、dashboard、alerts、runbook、release 和资源预算；
+- Standard mode 尚未完成 Gateway/EPP/InferencePool wire 部署。
 
 ## 3. 目标运行时
 
+### 3.1 Lite mode
+
 ```text
-Development / conformance
-  client -> FishMesh standalone Gateway -> scheduler core -> simulated/vLLM backends
-
-Production-shaped integration
-  client -> Envoy-compatible Gateway -> llm-d EPP runtime
-                                      -> FishMesh routing plugin
-                                      -> vLLM backends
-
-Shared policy inputs
-  eligible candidates + routing key + queue + in-flight
+client
+  -> fishmesh-gateway Service
+  -> bounded OpenAI request body
+  -> vLLM Render API -> exact Token IDs
+  -> local KV index <- KVEvents from every vLLM Pod
+  -> eligibility + cache/load/failure routing
+  -> selected Pod IP
+  -> SSE passthrough + outcome
 ```
 
-standalone 与 integrated mode 必须共享：
+Lite mode 只保留必要进程。第一版不引入 Redis、Controller 或 tokenizer sidecar；优先调用现有
+vLLM `serve` 暴露的 Render API。若真实测量证明 render 与 inference 前端争用明显，再单独决定
+是否提供 renderer Service。
 
-- `internal/serving/routing` 中的 bounded-affinity 选择语义；
-- 相同候选、routing key、queue 和 in-flight 输入下的 endpoint/reason；
-- deterministic/race tests 和选择 conformance fixture。
+### 3.2 Standard mode
 
-两种模式不共享 delivery 故障处理。standalone requestpath 继续拥有 EndpointSlice、Service
-fallback、local circuit 和 transport lease；integrated 模式复用 llm-d 的 InferencePool、subset、
-flow control 和 stream lifecycle。空 EPP 候选集必须按协议返回 503，不能为了表面一致而调用
-standalone Service fallback。
+```text
+client
+  -> Envoy-compatible Gateway
+  -> llm-d EPP runtime
+       -> token producer + precise prefix producer
+       -> FishMesh routing adapter
+       -> llm-d picker / flow control / lifecycle
+  -> selected vLLM Pod
+```
 
-R5B 已完成短期 spike，并在
-[`ADR-001`](decisions/001-llmd-router-integration.md) 选择 pinned llm-d Router + 编译期
-FishMesh scorer。LWEPP 只用于标准参考/conformance，不作为生产路径；不自研 ext_proc 服务。
+两种模式只共享协议无关的 routing 输入和选择语义。Lite requestpath 的 discovery、circuit、
+fallback 和 lease 不能在 EPP 中再运行一份；Standard mode 的空 subset 仍返回 503。
 
-## 4. 快路径设计
+## 4. 目标快路径
 
 ```text
 request
-  -> validate + RequestContext
-  -> admission
+  -> bounded admission and body capture
+  -> exact tokenization
+  -> endpoint / observation / cache snapshot
   -> eligibility
-       Ready && fresh && circuit closed
-  -> bounded affinity
-       preferred within queue/inflight bounds ? preferred : least-loaded
+       Ready && Serving && fresh && circuit closed
+  -> exact-cache-load policy
+       estimate uncached prefill + queued work
+       apply hard overload guard and hysteresis
   -> bounded transport
-  -> stream response + record local outcome
+  -> stream response + complete lease
 ```
 
-### 快路径允许的输入
+### 4.1 快路径输入
 
 | 信号 | 用途 | 约束 |
 | --- | --- | --- |
-| Endpoint Ready/terminating | eligibility | Kubernetes 生命周期事实 |
-| discovery freshness | fallback | 超时后不继续使用无限陈旧地址 |
-| local in-flight | spillover/admission | 与 Gateway 请求生命周期同步 |
-| vLLM waiting/running | spillover | 只使用存在且足够新的字段 |
-| recent local transport errors | circuit | 只归因到实际选中的 backend |
-| session/routing key | affinity | 只保存摘要，不进入 metric label |
+| Endpoint Ready/Serving/Terminating | eligibility | Kubernetes 生命周期事实 |
+| discovery freshness | fallback | 不使用无限陈旧地址 |
+| exact prompt Token IDs | block lookup | 来自同模型 vLLM Render API |
+| per-Pod cached prefix tokens | locality | 来自 KVEvents index，必须带 freshness |
+| local in-flight / queued work | load cost | 与请求生命周期同步 |
+| vLLM waiting/running/KV usage | overload | 只使用有效且足够新的字段 |
+| observed prefill rate | cost estimate | 无样本时使用保守静态默认或不参与 |
+| recent local transport errors | circuit | 只归因实际选中 backend |
+| optional session hint | tie-break/hysteresis | 不得覆盖真实 cache/load |
 
-### 不进入快路径 score
+### 4.2 禁止冒充快路径事实的信号
 
 - 进程生命周期累计 TTFT histogram；
-- 累计 Prefix Cache hits/queries；
+- 全局累计 Prefix Cache hits/queries；
 - 节点级 GPU utilization、温度和显存；
+- 客户端自称的 prefix key；
 - eBPF RTT、重传或 socket stall；
-- LLM 或固定权重生成的综合分数。
-
-这些数据可以用于告警、时间窗口分析和方案验证，但不能把观测缺口伪装成精确调度信号。
+- LLM 生成的分数或没有量纲解释的任意权重。
 
 ## 5. 状态与资源不变量
 
-正式 scheduler 输入逐步改为独立 sample：
+所有外部信号使用显式 sample：
 
 ```text
 Sample[T] {
@@ -117,101 +138,148 @@ Sample[T] {
 
 必须始终成立：
 
-1. 空 routing key 不形成全局热点；
-2. partial/stale observation 不等于零负载；
-3. spillover 不重写 affinity preference；
-4. terminating、stale 或 open-circuit backend 不进入候选集；
-5. 请求取消能传播到 upstream，请求完成后计数必定释放；
-6. affinity、connections、waiting requests、observations、circuits 和 metric labels 都有
-   上限或 GC；
-7. fallback、reject 和 retry 均有固定 reason，不发生静默策略变化；
-8. 流响应开始后不进行透明 retry。
+1. unknown/stale cache 不等于零命中；
+2. Pod UID、model、cache salt 和 endpoint 身份不能混淆；
+3. event 断流、gap 或无法 replay 时，相关 endpoint 的 exact sample 失效；
+4. `uncached_tokens` 不小于零，cache 命中不能绕过 hard overload guard；
+5. terminating、stale、open-circuit backend 不进入候选；
+6. session hint 缺失时仍能 exact/load-aware 路由，不形成空 key 热点；
+7. request body、token slice、KV index、connections、in-flight、observations、circuits 和 labels
+   均有容量上限或回收；
+8. 请求取消传播到 render/upstream，请求完成后计数必定释放；
+9. response headers 发出后不透明 retry；
+10. fallback、reject 和 degradation 均有固定 typed reason。
 
-## 6. 实施里程碑
+## 6. 交付物清单
 
-### P0：可信 serving baseline（已完成）
+### 必须进入 Lite MVP
 
-- keep-alive baseline、动态 discovery 和 SSE 生命周期；
-- 明确观测 availability/freshness；
-- 配置失败关闭和实验 provenance；
-- 移除 weighted GPU score、eBPF 和 Agent 主线。
+- gateway-only release image；
+- `deploy/lite` 声明式安装入口；
+- vLLM exact KVEvents 配置和兼容矩阵；
+- exact/load-only 配置与启动校验；
+- cache index/event/tokenization/route 指标；
+- Grafana dashboard、Prometheus alerts 和故障 runbook；
+- 真实集群 smoke、rollout、event stale/recovery 和 benchmark 脚本；
+- README 中五分钟可运行的 demo；
+- multi-arch、digest、SBOM、版本和升级说明。
 
-### P1：request-path reliability（已完成）
+### 必须进入 Standard 交付
 
-- transport error EWMA/短 TTL circuit；
-- endpoint-scoped transport/in-flight/observation/circuit/metric GC；
-- admission limit、`MaxConnsPerHost` 和明确 429/503；
-- cancellation、deadline 和 retry boundary tests；
-- per-field sample 契约。
+- 独立 `fishmesh-epp` image；
+- Gateway/HTTPRoute/InferencePool/EPP 部署；
+- llm-d precise prefix match 到 FishMesh routing 的翻译；
+- ext_proc 正常流、空 subset 503、429、retry served endpoint 和 EPP failover 验收；
+- Lite/Standard 相同策略输入的 conformance。
 
-验收：在 simulator 中重复注入 slow/error/removed backend，内存状态保持有界，请求不继续发送
-到被隔离 endpoint，恢复无需重启 Gateway。
+### 从默认产品移除
 
-当前 unit/race fault tests 已覆盖上述状态机，真实 K3s 已验证新镜像、配置、metrics 和 vLLM
-请求兼容性；更长时间的 churn/soak 被纳入 P2 simulator E2E。
+- `fishmesh-analyst`；
+- `fishmesh-simulator`；
+- `fishmesh-loadgen`；
+- diagnostics demo fixture；
+- 历史 experiment overlays。
 
-### P2：标准集成与自动 E2E（当前）
+它们可以作为单独 dev target 保留，但不能继续放在默认 release image、默认 Kustomize 或 README
+主流程中。
 
-- `serving-domain-redesign.md` 的 R1–R4 已完成，可复用 requestpath 与显式组合根已经落地；
-- controlled backend simulator 与第一组无 GPU fault E2E 已完成；
-- EPP/llm-d integration spike、ADR、pinned scorer/adapter 和组合根已完成；
-- 纯 routing/integrated selection/reason conformance 已完成；
-- 部署标准 Gateway/EPP/InferencePool，并完成 wire-level failure contract；
-- Pod 删除、discovery stale、overload、transport failure 自动化。
+## 7. 实施里程碑
 
-验收：同一 policy 在相同候选与信号下产生一致选择和 reason；两种运行时各自遵守 EPP 或
-standalone failure contract；CI 不依赖 GPU 即可覆盖关键状态机。
+### R6A：真实 KV 信号门禁（已完成）
 
-代码重构不是新的产品路线，而是 P2 的入口条件：如果 simulator 和 EPP adapter 继续直接依赖
-当前大 Gateway，它们会复制或绑死 standalone 运行时。R1–R4 必须保持行为不变，并按独立阶段
-提交、验证和推送。
+目标：用最小代码证明数据链路真实可用，再决定生产抽象。
 
-### P3：可操作与可交付
+- 给现有 vLLM 0.23.0 开启 KVEvents publisher/replay；
+- 从两个 Pod 订阅 stored/removed events；
+- 调用 Render API 获取 Chat 请求的真实 Token IDs；
+- 查询逐 Pod prefix match；
+- 验证跨 session 共享 system prompt、eviction、Pod restart、subscriber disconnect/replay；
+- 记录 event lag、render/lookup latency、index entries 与 RSS；
+- 输出兼容性和 Go/no-go 结论。
 
-- Prometheus dashboard、结构化日志关联和 OpenTelemetry trace；
-- runbook、告警与 rollout/rollback 演练；
-- multi-arch、registry digest、SBOM、签名和版本化 release；
-- 资源 requests/limits、PDB 和安全清单复核。
+验收：[`ADR-002`](decisions/002-lite-exact-kv-routing.md) 第 9 节全部通过。失败时先决定
+pin/upgrade 或删除方案，禁止用 simulator/累计 hit rate 代替。
 
-验收：从一次请求 ID 能定位 endpoint selection、upstream 结果和 fallback/circuit 原因；新环境
-可按文档部署、验证并回滚。
+实测结果为跨会话 128-token 逐 Pod 命中、断流先 invalid 后 replay、3105 个真实 removed 后旧
+命中归零，以及 Pod UID 重建清理；详见[阶段 18](../stages/18-R6A真实KV信号闭环.md)。
 
-### P4：有限对照验证
+### R6B：能力域与纯策略
 
-- Service、least-loaded、bounded affinity 和一个开源 scheduler；
-- hot/skew/overload/failure 四组工程场景；
-- 多轮重复、固定版本和环境边界；
-- 输出决策结论、适用范围和已知代价。
+按以下顺序实现，每一项独立可 review：
 
-验收：结果用于确认默认策略和阈值，不以扩展实验矩阵作为项目完成标准。
+1. `tokenization` 契约、值对象、contract tests；
+2. vLLM Render adapter；
+3. `kvcache` 契约、match/freshness 值对象、contract tests；
+4. KVEvents/index adapter 和 membership cleanup；
+5. `routing` exact-cache-load 输入与纯选择；
+6. `requestpath` tokenization/cache/load/degradation 编排；
+7. Gateway bounded body/replay 与 response passthrough；
+8. llmd adapter 的 precise `PrefixCacheMatchInfo` 翻译。
 
-## 7. 慢速诊断路径
+每个切片都必须保持主编排函数可读、状态有界，并通过完整 CI。不得在一个提交同时引入协议
+adapter、策略、部署和大规模包移动。
 
-`fishmesh-analyst` 已验证只读 collector 和确定性规则结构，但目前不是主产品。P1-P3 期间冻结
-功能扩展，只允许安全修复。若未来恢复，必须直接消费真实 Prometheus 时间窗口和 Kubernetes
-事件，并服务于现有故障 runbook；不引入 LLM 自动执行或集群写权限。
+### R6C：Lite 产品化
 
-## 8. 开源边界
+- 拆分 release images 和构建目标；
+- 建立 `deploy/lite`，包含 SA/RBAC、ConfigMap、Deployment、Service、probes、resources、PDB、
+  security context；
+- 在支持 policy enforcement 的 CNI 上再启用 NetworkPolicy，不做虚假声明；
+- 完成两 Gateway 副本的本地索引行为和资源预算；
+- 执行 vLLM rollout、endpoint churn、event stale/replay、Gateway restart 和 cancellation 验收；
+- 交付 dashboard、alerts、runbook 和五分钟 demo。
 
-| 层 | FishMesh 当前实现 | 长期边界 |
-| --- | --- | --- |
-| Model server | vLLM 0.23.0 | 复用上游 engine |
-| Standalone proxy | Go HTTP/SSE | 开发、测试和演示 |
-| Production gateway | 未实现 | 复用 Envoy-compatible Gateway |
-| Endpoint selection | FishMesh scheduler core | llm-d 编译期 scorer 扩展点 |
-| Discovery | EndpointSlice REST watch | integrated 模式复用 InferencePool/llm-d data layer |
-| Observability | Prometheus metrics | Prometheus + OTel + Grafana |
-| GPU operations | device plugin time-slicing | 不自研 GPU 管理平台 |
+### R6D：轻量与性能边界
 
-“为什么不用开源”的工程答案是：FishMesh 不替代成熟入口和推理引擎；它实现并验证一个边界
-清晰的 selection/state/failure 模块，然后通过标准扩展点接入开源运行时。
+使用现有真实集群先完成工程 profile，再决定是否需要独立物理 GPU 扩展结论：
 
-## 9. 明确延期
+- direct Service；
+- FishMesh load-only；
+- FishMesh exact；
+- llm-d precise。
 
-- eBPF 请求路由或 socket rewrite；
-- per-backend GPU utilization score；
-- LLM tool-calling Agent 和自动 actuator；
-- FishMesh CRD/Operator；
-- prefill/decode disaggregation；
-- 通用 AI Gateway、认证计费或多租户控制面；
-- 仅为展示技术栈而迁移 Service Mesh、Cilium、数据库或消息队列。
+预设工程目标而非提前声明结果：
+
+- routing decision p99 目标小于 1 ms（不含 Render）；
+- 长 SSE steady-state token throughput 目标达到 direct Service 的 95% 以上；
+- 2–8 endpoint、受控 index 容量下 Gateway RSS 目标为 256 MiB 级；
+- cache-cold workload 不显著劣于 load-only；
+- 公共长 prefix workload 的 TTFT 有稳定改善；
+- event stale 时不产生错误的 exact-cache 声明。
+
+若目标未达成，优先优化 body copy、tokenization 调用、index bounds 和 proxy hot path，不通过
+删除正确性检查换性能。
+
+### R6E：Standard mode 闭环
+
+- 完成原 R5D 的标准栈部署；
+- 配置 llm-d token producer、precise prefix producer 和 FishMesh scorer；
+- 验证 wire protocol 与 failure contract；
+- 对比内置 llm-d policy，若 FishMesh policy 没有行为差异或运维价值，允许把 Standard mode
+  收缩为配置/兼容性证明，不为保留自定义代码而继续扩展。
+
+## 8. 开发与提交规则
+
+- 一次只迁移或实现一个能力域；
+- 先契约和值对象，再 contract test，再实现，再编排，再 adapter/deploy；
+- 编排函数只保留 3–7 个同层级步骤，目标不超过 40 行；
+- 中文注释解释不变量、失败语义和降级原因，不翻译 Go 语法；
+- 第三方类型只停留在 adapter；
+- behavior change 与 mechanical move 分开；
+- 每个阶段更新 `docs/stages/`、阶段索引和 `docs/notes/project-status.md`；
+- 每次完成后通过 `go test -race ./...`、`go vet ./...`、`go build ./...`、`make manifest` 和
+  `git diff --check`，再规范提交并推送；
+- 用户的本地 artifact、raw benchmark、日志和无关未跟踪文件不得进入提交。
+
+## 9. 停止扩张条件
+
+以下事项不阻塞 MVP：
+
+- 更多 simulator fault 类型或长时间无 GPU soak；
+- Analyst 新 collector 或 LLM diagnosis；
+- 更大的 workload 矩阵和论文式统计展示；
+- Redis、多集群、P/D、offloading、Agent、eBPF、CRD/Operator；
+- 与所有 Gateway provider 的安装矩阵。
+
+当 Lite MVP、有限对照和 Standard 兼容性完成后，项目应优先整理演示、简历和面试讲述，而不是
+自动开启新的技术方向。

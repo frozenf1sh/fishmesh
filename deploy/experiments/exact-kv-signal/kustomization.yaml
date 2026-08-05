@@ -1,0 +1,33 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../inference
+patches:
+  - target:
+      group: apps
+      version: v1
+      kind: Deployment
+      name: qwen-vllm
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/args/-
+        value: '--kv-events-config={"enable_kv_cache_events":true,"publisher":"zmq","endpoint":"tcp://*:5557","replay_endpoint":"tcp://*:5558","buffer_steps":4096,"hwm":10000,"max_queue_size":10000,"topic":"kv@$(POD_IP):8000@qwen2.5-0.5b-instruct"}'
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+      - op: add
+        path: /spec/template/spec/containers/0/ports/-
+        value:
+          name: kv-events
+          containerPort: 5557
+          protocol: TCP
+      - op: add
+        path: /spec/template/spec/containers/0/ports/-
+        value:
+          name: kv-replay
+          containerPort: 5558
+          protocol: TCP

@@ -1,6 +1,7 @@
 # FishMesh Serving Domain 重新设计
 
-> 状态：R1–R4、R5A–R5C 已完成；下一步进入 R5D 标准集成部署。后续变更仍必须遵守
+> 状态：R1–R4、R5A–R5C、R6A 已完成；R5D 顺序已由 ADR-002 调整，下一步进入 R6B
+> tokenization 与 KV cache 能力域。后续变更仍必须遵守
 > [`code-organization.md`](code-organization.md)，并保持每个提交可构建、可回滚。
 
 ## 1. 结论
@@ -319,6 +320,10 @@ HTTP handler，也不会让 transport 知道 EndpointSlice 配置。
 - standalone 与 integrated adapter 对相同候选和负载输入运行 selection/reason conformance；
 - 两种运行时的 fallback、retry 和 stream lifecycle 分别按各自协议测试。
 
+R5C 完成后，项目根据 [`ADR-002`](decisions/002-lite-exact-kv-routing.md) 重新评估交付物：
+`fishmesh-epp` 继续作为 Standard mode，但不再把 Lite Gateway 降为仅开发载体。原计划 R5D 的
+完整标准部署后移到 R6E，先用真实集群闭环 Lite exact KV 主能力。
+
 每个 R 阶段单独更新阶段文档、提交和推送。禁止在纯搬包提交中顺便改变 route reason、fallback、
 timeout、连接复用或 circuit 算法。
 
@@ -332,6 +337,12 @@ timeout、连接复用或 circuit 算法。
 ### 不建立 `domain/shared`
 
 shared 没有业务所有权，通常只会持续吸收类型。当前 routing 过载正是这种问题的实例。
+
+这不禁止在最近共同 owner 下建立纯 `entity/<concept>` 子包。若一个较大 domain 的多个子能力，
+或同一 Serving Context 内多个 domain，确实共享稳定、无外部依赖的数据模型，可以使用例如
+`internal/serving/kvcache/entity/conf` 或 `internal/serving/entity/conf` 的路径；模型可以提供
+`Validate`、`Equal` 等只依赖自身字段的行为。实体子包必须只依赖标准库、按具体概念命名，
+不能执行 I/O 或成为所有 Config/DTO 的收容目录。单一实现专属配置仍留在自己的 owner 中。
 
 ### 不要求每包固定一个接口和一个实现
 
@@ -354,3 +365,64 @@ Backend 值对象不需要 `BackendService` 接口；只为目录对称创建接
 - Gateway 主代理函数和 RequestPath 主选择函数都能在约 40 行内读懂；
 - 所有现有 race/fault/K3s smoke 行为保持不变；
 - simulator 和未来 EPP adapter 不需要 import standalone Gateway。
+
+## 11. R6 增量设计：Exact KV 能力域
+
+R6 不推翻 R1–R4 的 owner 和依赖方向，只增加两个有真实替换边界的叶子能力：
+
+```text
+tokenization -> exact prompt Token IDs
+kvcache      -> per-backend cached-prefix snapshot
+```
+
+计划依赖为：
+
+```text
+tokenization -> standard library（vLLM Render 类型只在 adapter）
+kvcache      -> backend（llm-d-kv-cache/vLLM event 类型只在 adapter）
+routing      -> backend + observation + kvcache values
+requestpath  -> discovery + observation + tokenization + kvcache + routing + circuit
+llmd         -> backend + observation + kvcache values + routing
+gateway      -> admission + requestpath + transport
+```
+
+### 11.1 先 spike，后建包
+
+R6A 已用最小真实集群 spike 验证 vLLM 0.23.0 KVEvents、Render API、跨 session system prompt、
+eviction、Pod restart 和 stale/replay。门禁记录见阶段 18；实验探针不进入产品依赖。R6B 现在按
+契约和叶子能力顺序建立生产实现，仍禁止模拟 KV event 框架或共享存储。
+
+### 11.2 生产实现顺序
+
+R6B 严格按叶子到编排实施：
+
+1. `tokenization` contract/value/test；
+2. vLLM Render adapter；
+3. `kvcache` contract/value/test；
+4. KVEvents/index/lifecycle adapter；
+5. routing exact-cache-load 纯策略；
+6. requestpath 降级编排；
+7. Gateway bounded body 与原始 body replay；
+8. llmd `PrefixCacheMatchInfo` 翻译。
+
+每步独立提交，禁止把新包移动、策略行为、第三方升级和部署变更混在一起。
+
+### 11.3 编排阅读目标
+
+R6 后 requestpath 主函数只表达：tokenize、snapshot、eligibility/route、acquire lease。Gateway
+主函数只表达：admission、bounded body、select、stream、complete。JSON、ZMQ、block hash、event
+replay、map GC 和 Prometheus wire parsing 必须留在各自 adapter/owner 中。
+
+### 11.4 状态所有权
+
+- token IDs 随单次请求存在，完成选择后只保留转发所需 body，不进入全局 metric label；
+- KV block index 由 kvcache owner 持有，有容量、Pod UID、freshness、Close 和逐 endpoint GC；
+- routing 只读取不可变 `Match`，不修改 index；
+- requestpath 只决定降级，不自行启动备用 subscriber；
+- Standard llmd adapter 读取上游 match，不创建 Lite index；
+- 多 Gateway 副本各自维护本地索引，MVP 不引入 Redis。
+
+### 11.5 低优先级模块
+
+Diagnostics 不因新方向重构；simulator 不模拟产品尚未证明的 KV 能力；loadgen 仍是独立客户端。
+R6C 将三者从默认 release image 和部署移除，但源代码的物理删除必须单独决策。

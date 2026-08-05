@@ -1,187 +1,212 @@
-# FishMesh 可复现实验方案
+# FishMesh 工程验证方案
 
-> 实验服务于工程决策、验收和回归防护，不是独立产品路线。本文件取代“每个策略跑一次并
-> 比较单个 P95”的方式；历史报告保留，但只作为探索性证据。
+> 状态：2026-08-11 收缩。实验只服务于真实 KV 主能力的门禁、验收和性能回归，不再作为独立
+> 产品路线。历史报告保留，但不会继续扩展相同矩阵。
 
-## 1. 实验准入与退出
+## 1. 验证优先级
 
-### 1.1 准入条件
+不同问题使用不同环境，不能因为 simulator 方便就回避真实集群：
 
-创建 experiment manifest 或占用真实 GPU 前，必须先写明：
+| 优先级 | 环境 | 允许回答的问题 |
+| --- | --- | --- |
+| 1 | 真实 K3s + vLLM | KVEvents、Render token、prefix match、eviction、Pod restart、SSE、rollout、资源和性能 |
+| 2 | Go unit/race/contract test | 纯策略、容量、freshness、并发、取消和状态不变量 |
+| 3 | 已有 simulator | HTTP/SSE error、held stream、取消、circuit、admission、确定性 endpoint fault |
 
-1. **工程决策**：结果要决定哪个实现、默认值或风险是否可接受；
-2. **候选方案**：至少一个 baseline 和一个 treatment；
-3. **判定标准**：运行前确定行为或性能阈值，不能看完结果再修改；
-4. **后续动作**：不同结果分别会触发实现、回退、延期还是删除；
-5. **最低环境**：能用 unit/fault test 或 simulator 回答时，不先占用真实 GPU。
+R6 不为证明产品可行而增加模拟 KVEvents、模拟 tokenizer 或新的长时间无 GPU soak。真实信号闭环
+后，可以增加最小 fixture 防止已经确认的行为回归。
 
-不能指向一个工程动作的实验不进入当前里程碑。为了增加技术名词、图表或 workload 维度的
-探索默认放入 backlog，不能阻塞 reliability、standard integration 和 operability。
+## 2. 准入条件
 
-### 1.2 三类验证
+运行验证前必须写明：
 
-| 类型 | 用途 | 产物 | 是否需要统计区间 |
-| --- | --- | --- | --- |
-| Behavior/conformance | 验证状态机、不变量和故障语义 | 自动测试、reason、状态转换 | 否 |
-| Performance decision | 在候选实现或默认值间选择 | 多轮 raw data、区间、决策 | 是 |
-| Exploratory profile | 发现可能的问题 | 明确标注的本地记录 | 不形成能力声明 |
+1. **工程决策**：结果决定哪个实现、默认值、资源预算或是否继续；
+2. **baseline/treatment**：至少一个当前行为和一个候选行为；
+3. **预设判定**：运行前确定正确性或性能阈值；
+4. **后续动作**：通过、失败和结果不确定分别触发什么；
+5. **最小环境**：真实 engine contract 不得用 mock，纯状态机不占用 GPU；
+6. **停止条件**：证据足够做决定后不继续扩大矩阵。
 
-单次 K3s smoke 属于 behavior/conformance。它可以证明请求成功经过 affinity、spillover 或
-fallback，不能证明策略性能更优。
+不能指向工程动作的实验不进入当前里程碑。为了增加图表、技术名词或代码量的探索进入个人
+笔记，不进入仓库主线。
 
-### 1.3 停止条件
+## 3. 当前只回答四个问题
 
-达到预定义精度或足以做工程选择后停止扩展矩阵。若结果不稳定，先检查环境、实现或测量
-契约；不能无限增加重复次数掩盖不可复现的系统。结论写入设计/阶段文档后，实验任务才完成。
+### Q1：真实 KV locality 是否可获得
 
-## 2. 当前要回答的问题
+- vLLM 0.23.0 能否同时启用 prefix caching、KVEvents publisher 和 replay；
+- 两个 Pod 的 stored/removed 事件能否被稳定区分；
+- Render API 是否返回与模型实际模板一致的 Token IDs；
+- 不同 session、相同 system prompt 是否产生非零公共 block prefix；
+- eviction、Pod restart、断流和 replay 后索引是否正确。
 
-实验只验证四个独立假设：
+结果决定是否进入 R6B。任一核心不变量无法满足时，先评估版本 pin/upgrade；不能用 session key
+或累计 hit rate 假装 exact 成功。
 
-1. **Transport**：固定路由策略时，HTTP keep-alive 的净效应是多少？
-2. **Locality**：固定负载时，共享 prefix/session 的 affinity 在什么复用比例和 prompt 长度下
-   才产生稳定收益？
-3. **Overload**：热点倾斜时，bounded affinity 是否比 pure affinity 降低失败率和 P99，且
-   保留大部分 locality 收益？
-4. **Failure**：Pod、telemetry 或 Kubernetes API 异常时，策略能否在规定时间内停止选择
-   无效 backend 并安全回退？
+### Q2：联合策略是否比单一信号更安全
 
-GPU-aware、eBPF 网络优化、LLM Agent 和 disaggregated serving 不属于本轮假设。
+固定请求和 endpoint 状态，对比：
 
-这些问题分别服务于 keep-alive 默认值、bounded-affinity 默认策略、过载保护和故障恢复
-验收，不用于证明 FishMesh 在所有 workload 下优于开源 scheduler。
+- load-only；
+- cache-only（风险对照，不作为生产候选）；
+- exact-cache-load；
+- optional session hint 对 tie-break 的影响。
 
-## 3. 对照策略
+重点验证严重过载时是否拒绝追逐 cache、信号 stale 时是否明确降级、相同输入是否确定性选择。
 
-每个 workload 至少比较：
+### Q3：Lite mode 的轻量成本是否成立
 
-- `service-keepalive`：Kubernetes Service + connection reuse；
-- `least-loaded`：EndpointSlice + local/vLLM load，不使用 affinity；
-- `pure-affinity`：仅作为风险对照，不作为候选生产策略；
-- `bounded-affinity`：preferred backend 未越过 spillover threshold 时保持亲和；
-- `open-source-router`：llm-d EPP 或 vLLM Router，同版本 vLLM 和同一 workload。
+测量：
 
-`service-no-keepalive` 只用于 transport 假设，不参加后续 scheduler 排名。
+- bounded body capture 和 Render latency；
+- KV index lookup p50/p95/p99；
+- event ingest lag 和 replay recovery；
+- Gateway CPU/RSS 与 index entry 数量；
+- direct Service、load-only、exact 下的 SSE token throughput；
+- cache-cold TTFT overhead。
 
-## 4. 工作负载矩阵
+结果决定默认 index 容量、Gateway resources、是否需要 renderer Service，以及 Lite 的适用规模。
 
-### 4.1 基础维度
+### Q4：Lite 与 Standard 的适用边界是什么
 
-| 维度 | 建议取值 |
+只在 Lite MVP 完成后对比 FishMesh exact 和 llm-d precise：
+
+- 安装对象、常驻进程、权限和资源；
+- prefix-heavy 与 cache-cold workload；
+- event stale、EPP/Gateway 失败和 rollout；
+- 能力差异：TLS、多租户、流控、多池、HA 与运维复杂度。
+
+目的不是证明 FishMesh 全面击败 llm-d，而是形成可信的选择指南。
+
+## 4. R6A 真实信号门禁（已完成）
+
+### 4.1 固定环境
+
+- Kubeconfig：`~/.kube/fishmesh.yaml`；
+- Namespace：`kubellm`；
+- vLLM：固定 0.23.0 镜像/digest；
+- 模型：当前 Qwen2.5-0.5B-Instruct；
+- endpoint：两个 time-sliced vLLM Pod；
+- prefix caching：开启；
+- KVEvents：为每 Pod 配置唯一 topic、publisher 和 replay endpoint。
+
+time-slicing 不代表独立 GPU，因此本阶段只判断 signal correctness、单卡相对开销和恢复语义。
+
+### 4.2 最小请求集
+
+准备三类 OpenAI Chat 请求：
+
+1. A/B 使用不同 session 和不同 user message，但共享足够长且字节完全相同的 system prompt；
+2. C 使用完全不同 system prompt；
+3. D 与 A 内容相同但使用隔离 cache salt（若当前 API 支持并能传递）。
+
+先让 A 在指定 Pod 完成，再查询 B/C/D 的逐 Pod matched prefix。必须记录 prompt tokens、完整 block
+数量、matched blocks/tokens、Pod UID、event timestamp 和选择 reason。
+
+### 4.3 故障步骤
+
+- 触发足够请求产生 block stored；
+- 产生缓存压力或等待自然 eviction，观察 removed；
+- 删除一个 vLLM Pod，确认旧 UID 索引清理；
+- 新 Pod Ready 后确认不会继承旧 locality；
+- 中断 subscriber，超过 freshness 后确认 exact invalid；
+- 恢复连接并使用 replay，确认恢复或明确 full resync 边界。
+
+### 4.4 通过条件
+
+- A/B 在实际拥有 cache 的 Pod 上得到非零公共 prefix；
+- C 不产生虚假公共 prefix；
+- salt 隔离不发生跨域匹配；
+- removed/restart 后不继续报告旧 block；
+- stale 状态可观测并触发 load-aware degradation；
+- lookup/ingest 状态有明确容量和回收方式；
+- 结果可通过脚本和声明式配置复现。
+
+2026-08-11 门禁已通过：跨会话公共 system prompt 在实际缓存 Pod 命中 8 blocks/128 tokens，
+断流先 invalid 后由 replay 恢复，真实缓存压力产生 3105 个 removed 并清除旧命中，Pod UID 重建
+后旧 locality 归零。cache salt 隔离没有在本轮文本 MVP 中单独施压，保留为 R6B adapter contract
+test；它不影响 ADR-002 的文本 exact 数据源 Go/no-go。完整证据见
+[`阶段 18`](../stages/18-R6A真实KV信号闭环.md)。
+
+## 5. R6D 有限性能矩阵
+
+R6A 不跑大矩阵。R6D 只比较四个 treatment：
+
+- `service`：Kubernetes Service 直连；
+- `fishmesh-load-only`；
+- `fishmesh-exact`；
+- `llmd-precise`。
+
+只保留三类 workload：
+
+| Workload | 目的 |
 | --- | --- |
-| prefix 热点比例 | 0%、25%、50%、75%、95% |
-| prefix groups | 1、4、16 |
-| prompt 长度 | 约 256、1K、4K tokens；模型允许时增加 16K |
-| output 长度 | 16、128 tokens |
-| concurrency | 1、4、8、16；超过硬件容量的档位标记 saturation |
-| request count | 每轮 warmup 50 + measurement 至少 500 |
-| repetitions | 每个 treatment 至少 7 轮 |
+| cache-cold | 衡量智能路由纯开销 |
+| shared-system-prefix | 衡量跨 session 真实复用收益 |
+| shared-prefix + skew/overload | 验证 cache 与负载 trade-off |
 
-不能用 byte 数冒充 token 数。Loadgen 后续应记录 tokenizer/version 和最终 prompt token count；
-完成前继续记录 byte 数，但报告必须显式标注近似值。
+每类使用短、中、长三个 prompt 档位和正常/饱和两个 concurrency 档位即可。达到置信区间和工程
+决策所需样本后停止，不自动扩展 prefix groups、模型、输出长度和所有 Gateway provider。
 
-### 4.2 两类运行环境
+## 6. 指标
 
-1. **Real GPU correctness profile**：当前 RTX 4060 time-slicing，用来验证真实 vLLM、SSE、
-   EndpointSlice、cache 行为和故障恢复，不宣称独立 GPU 扩展性。
-2. **Controlled simulator profile**：多个可控 backend，注入 queue、cache、延迟和故障，用来
-   验证策略不变量、阈值和恢复时间。
+### 正确性
 
-简历若使用性能数字，必须在至少两个独立物理 GPU/backend 上复验；没有满足该条件时，项目
-仍可凭可靠性、标准集成和故障 E2E 完成工程 MVP，不应为了制造数字阻塞交付。
+- prompt tokens、matched prefix blocks/tokens；
+- match source、valid/freshness/degradation reason；
+- event stored/removed/replay/gap/reconnect；
+- Pod UID/index entry 清理；
+- selected/served endpoint；
+- fallback、circuit、cancel 和 error outcome。
 
-## 5. 运行规程
+### 性能与资源
 
-每个 experiment block：
+- Render latency；
+- index lookup 和 routing decision p50/p95/p99；
+- TTFT、E2E、TPOT/ITL；
+- output token throughput；
+- Gateway CPU/RSS、GC 和 request body bytes；
+- index entries、admission/eviction 和 per-Pod memory；
+- event ingest lag 和 stale duration；
+- success/error/timeout rate。
 
-1. 验证节点、Pod、EndpointSlice、模型和 `/metrics` readiness；
-2. 记录 Git SHA、镜像 digest、vLLM version/args、GPU driver、内核、节点和 policy config；
-3. 为不同 treatment 生成随机执行顺序并保存 seed；
-4. 使用独立 prefix namespace，避免跨 treatment 缓存污染；
-5. 执行固定 warmup，不纳入 measurement；
-6. 运行 measurement，完整消费 SSE；
-7. 保存所有成功、失败、超时和 retry attempt，不覆盖文件；
-8. 记录 vLLM counter 的运行前后 delta；
-9. 一个 block 内出现 NodeNotReady、Pod restart 或环境变更时，整轮标记 invalid，保留但不
-   混入性能统计；
-10. 分析脚本只读取 immutable artifact，不从文档手工抄数字。
+节点级 GPU 指标只用于说明环境，不得写成各 time-sliced Pod 独立 GPU 利用率。
 
-## 6. Artifact 契约
+## 7. Artifact 与复现契约
 
-JSONL 顺序：
+每次运行保存：
 
 ```text
 run_metadata
-request × N
+event/checkpoint records
+request records
 summary
 ```
 
 `run_metadata` 至少包含：
 
-- immutable run ID；
-- Git SHA 和 image digest；
-- Gateway/vLLM/version；
-- cluster profile；
-- model、请求数、并发、prefix 分布、prompt/output 大小；
-- treatment、policy version、threshold；
-- random seed 和 treatment order；
-- warmup/measurement 标记。
+- Git SHA、FishMesh image digest；
+- vLLM/llm-d/Gateway 版本和 digest；
+- vLLM args、KVEvents/replay 配置和 block size；
+- cluster、node、GPU、model、tokenizer/chat template；
+- treatment、policy/config、index bounds；
+- request seed、warmup、measurement 和故障时间线。
 
-本地或外部 artifact 存储保留 failed attempt 和 rerun。Git 只保存生成器、声明式配置、
-分析代码、schema 和经过评审的结论；raw JSONL、压缩日志、节点转储和集群快照不提交。
-报告若选择某轮，必须给出预先定义的排除原因，不能因为结果更好而选择 rerun。
+Git 只保存代码、schema、脚本、声明式配置和评审后的结论。raw JSONL、压缩日志、节点转储和
+集群快照仍保留在仓库外，不因为本次方向调整改变提交规范。
 
-## 7. 指标
+## 8. 统计与结论规则
 
-### 7.1 主要指标
+- behavior/conformance 可以按明确不变量判定，不要求统计区间；
+- performance 每个 treatment 至少多轮重复，报告分布和跨轮中位数；
+- 报告绝对差值与相对变化，不只报告最好的一轮；
+- 性能改善不能以更高失败率、错误 cache 声明或静默降级为代价；
+- saturation 与正常稳态分开；
+- 当前单卡结果明确限定为 correctness/profile；
+- 简历使用跨 GPU 扩展或吞吐结论前，必须在至少两个独立物理 GPU/backend 上复验。
 
-- success/error/timeout rate；
-- TTFT P50/P95/P99；
-- E2E latency；
-- TPOT/ITL；
-- request throughput 和 output token throughput；
-- backend distribution、spillover ratio、fallback ratio；
-- cache hit tokens/query tokens 的窗口 delta；
-- fault detection、traffic removal 和 recovery time。
+## 9. 历史数据处理
 
-### 7.2 诊断指标
-
-- per-backend waiting/running；
-- local in-flight 和 error EWMA；
-- KV cache usage；
-- EndpointSlice freshness/resourceVersion；
-- node-level GPU utilization、memory、temperature、XID；
-- Pod restart 和 NodeReady transitions。
-
-节点 GPU 指标不得写成 backend A/B 各自的利用率。
-
-## 8. 统计和结论门槛
-
-- 报告每轮分布和跨轮中位数，不只报告表现最好的一轮；
-- 对主要差异给出 bootstrap 95% interval 或等价不确定性区间；
-- 同时报告绝对差值和相对变化；
-- 性能改善不能以更高失败率为代价；
-- 若 P50 改善但 P99/失败率恶化，结论必须描述 trade-off；
-- saturation/failure treatment 不与正常稳态 treatment 混合；
-- 单 GPU profile 的结论限定为该硬件和版本。
-
-Bounded affinity 的性能决策条件：
-
-1. hot workload 下相对 least-loaded 保留可重复的 locality 收益；
-2. skew/saturation 下相对 pure affinity 显著降低 P99 或失败率；
-3. stale/no-endpoint 场景在配置 TTL 内停止直接 endpoint selection；
-4. 恢复后无需重启 Gateway 即回到正常 selection；
-5. 所有决策能由 reason/metrics/artifact 解释。
-
-这些条件决定策略默认值和适用范围，不替代 circuit、GC、admission、E2E 和标准集成等工程
-MVP 验收项。
-
-## 9. 历史 2026-08-08 数据处理
-
-历史结果不删除，也不重新包装为严格实验：
-
-- connection matrix 的三个 attempt 全部保留；
-- hot prefix 第一次 `196/200` 和 rerun `200/200` 同时保留；
-- mixed、saturation 和 endpoint failure 从仍存活的 Job 恢复原始日志；
-- 恢复 artifact 标记 `partial-historical-recovery`；
-- 历史表格只支持后续方向选择，不进入最终 benchmark headline。
+2026-08-08 及此前 keep-alive、prefix-hash、bounded-affinity 数据不删除，但它们只证明当时的
+transport/行为结论。旧 `prefix_group/routing_key` 不是 vLLM token-block locality，不得在新 README、
+简历或面试中重新解释为 exact cache-aware 结果。

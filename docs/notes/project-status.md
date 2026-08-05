@@ -1,14 +1,19 @@
 # FishMesh 项目当前状态
 
-最后本地验证时间：2026-08-10。仓库为 `frozenf1sh/fishmesh`（private），当前 `main` 分支
+最后只读复核时间：2026-08-11。仓库为 `frozenf1sh/fishmesh`（private），当前 `main` 分支
 包含可信 serving baseline、bounded-affinity-v1、request-path reliability 和工程优先的项目
 章程。
 
-request-path reliability、Serving Domain R1–R4、无 GPU simulator 基础和 R5C llm-d 本地集成
-切片均已完成。当前进入 R5D：补齐标准 Gateway/EPP/InferencePool 部署和 wire-level 故障验证。
-standalone requestpath 继续用于开发/故障 E2E；integrated 模式只复用纯 routing policy，不启动
-第二套 discovery、observation、circuit 或 Service fallback。方向基准见
-`docs/design/project-charter.md`，集成边界见 `docs/design/decisions/001-llmd-router-integration.md`。
+request-path reliability、Serving Domain R1–R4、无 GPU simulator 基础、R5C llm-d 本地集成和
+R6A 真实 KV 信号门禁均已完成。阶段 18 已在真实双 vLLM 集群证明 Render tokenization、跨
+session 128-token prefix match、eviction、Pod restart 清理和 subscriber invalid/replay；下一步
+进入 R6B，先实现 tokenization domain。R5D 标准 Gateway/EPP 部署不取消，但后移到 Lite exact
+KV MVP 之后。方向基准见 `docs/design/project-charter.md`，新决策见
+`docs/design/decisions/002-lite-exact-kv-routing.md`。
+
+当前产品代码尚未实现 exact KV routing。已部署的 `X-FishMesh-Prefix-Key` 仍然只是 session
+affinity hint，不能描述为真实 prefix-aware。R6A 曾通过实验 overlay 开启 KVEvents publisher/
+replay，验证结束后已恢复基础 vLLM 清单；当前运行 Pod 不长期开放实验端口。
 
 ## 当前运行拓扑
 
@@ -131,8 +136,9 @@ VM 的影响更大：Kubernetes API 和 reconciliation 也会停止，应按完�
 - P1 K3s 行为 smoke attempt 2：24/24 成功，1 次 miss、11 次 hit、12 次
   local-inflight spillover，两个 backend 各选择 12 次；完整运行配置、镜像 digest、Job、
   EndpointSlice、日志和 JSONL 已归档。该结果只证明行为正确性，不是性能 benchmark。
-- 工程方向章程：standalone Gateway 定位为开发/conformance 载体，生产形态提前为
-  EPP/llm-d 集成；Analyst 冻结扩展，实验系统不再与可靠性和交付能力并列为产品主线。
+- 2026-08-10 工程方向章程曾把 standalone Gateway 定位为开发/conformance 载体、把生产形态
+  提前为 EPP/llm-d 集成；这一主次关系已在 2026-08-11 由 ADR-002 修订，但当时对 Analyst 和
+  实验系统的冻结决定继续有效。
 - P1 request-path reliability：全局 admission 128、每 backend 连接上限 32、transport error
   EWMA circuit、endpoint state GC、queue/running per-field sample、client cancellation 和
   no-retry-after-headers 边界均有 race/fault tests。
@@ -170,17 +176,33 @@ VM 的影响更大：Kubernetes API 和 reconciliation 也会停止，应按完�
   conformance 均有 race/contract tests。新增 `fishmesh-epp` 组合根复用上游 runner，Docker 镜像
   包含新二进制；最小 EndpointPickerConfig 已进入 manifest 门禁。该阶段没有访问 GPU/K3s，
   完整 Gateway/EPP/InferencePool 部署和 ext_proc wire smoke 尚未完成。
+- R6 方向复位：确认主要缺口不是 scorer 代码量，而是可独立交付的产品和真实 cache signal。
+  Lite Gateway 恢复为主产品，Standard EPP 保留为生态集成；exact KV 将复用 vLLM KVEvents、
+  Render API 与上游 `llm-d-kv-cache` library。simulator/loadgen 冻结功能，Analyst/Diagnostics 从
+  默认产品面移除，R6C 前不做破坏性源码删除。新增 ADR-002，并统一更新章程、架构、计划、
+  实验规范、中英文 README 与代码可读性要求。代码规范补充允许按具体概念建立纯
+  `entity/<concept>` 子包：只依赖标准库，可由值对象执行 `Validate` 等自身校验，但不得成为新的
+  shared 类型仓库。本阶段未修改集群或 Go 行为。
+- R6A 真实 KV 信号闭环：新增声明式 vLLM 0.23.0 KVEvents/replay overlay 和一次性真实探针；
+  `llm-d-kv-cache` 升至正式版 v0.9.0。不同会话共享 system prompt 时只在真实缓存 Pod 命中
+  8 blocks/128 tokens；断流期间 exact 状态先 invalid，恢复后 replay 补回；真实压力产生 3105
+  个 removed 并把旧命中降为零；旧 Pod UID 删除后 80-token 命中被清理，新 Pod 从 sequence 0
+  独立发布。实测 Render 约 5–6 ms、lookup 约 0.08–0.14 ms，压力后 Go HeapAlloc 约 11.7 MiB。
+  最小复测 event lag 为 0.678 ms，空索引探针 RSS 约 33.2 MiB。实验结束后恢复基础 vLLM
+  Deployment，exact 尚未接入 Gateway。
 
 ## 下一步待办
 
-1. 补齐 pinned GIE v1.5.0、Gateway、EPP Deployment/Service/RBAC、InferencePool 和 ConfigMap
-   mount，形成可部署的 integrated overlay；
-2. 先用无 GPU simulator 验证 ext_proc 正常流、空 subset 503、取消、retry 后 served endpoint
-   和 endpoint churn，再决定是否执行真实 vLLM 兼容 smoke；
-3. 为 simulator 增加长时间 churn/soak；
-4. 增加 dashboard、trace/log correlation、runbook、multi-arch release 和 supply-chain metadata；
-5. 工程闭环后再运行有限 workload matrix，并加入 llm-d 内置 scorer 组合这一开源对照；只有简历使用
-   性能数字时才要求至少两个独立物理 GPU；当前单卡 time-slicing 结果只
-   能作为 correctness/profile 证据；
-6. 在声称 NetworkPolicy 已生效前迁移到支持 policy enforcement 的 CNI；当前 Flannel 不能
-   执行声明式 NetworkPolicy。
+1. R6B-1 先建立 `internal/serving/tokenization`：契约、纯值对象、Config、typed error 和 contract
+   tests，不接 Gateway；
+2. 实现薄 vLLM Render adapter，覆盖 timeout、取消、请求/响应上限、model mismatch 和不支持 route；
+3. R6B-2 再建立 `kvcache` owner，复用上游 parser/indexer，并实现 replay heartbeat、sequence gap、
+   Pod UID 清理、容量和 freshness；
+4. 之后按 routing → requestpath → gateway → llmd 的顺序逐域接入，每个切片单独更新阶段文档、
+   提交和推送；
+5. R6C 从默认镜像/部署移除 analyst、simulator、loadgen，交付 gateway-only Lite 安装、dashboard、
+   alerts、runbook 和 release；
+6. Lite MVP 后再完成原 R5D Standard mode，并执行 Service/load-only/FishMesh exact/llm-d precise
+   的有限同环境对照；
+7. 在声称 NetworkPolicy 已生效前迁移到支持 policy enforcement 的 CNI；当前 Flannel 不能执行
+   声明式 NetworkPolicy。

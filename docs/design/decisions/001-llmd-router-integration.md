@@ -1,9 +1,15 @@
 # ADR-001｜以 llm-d Router 编译期插件接入标准 EPP
 
-- 状态：已接受，R5C 本地实现验证完成；等待 R5D 标准栈部署验证
+- 状态：Standard mode 决策继续有效；产品主次与精确 KV 范围已由
+  [`ADR-002`](002-lite-exact-kv-routing.md) 修订
 - 决策日期：2026-08-10
 - 上游快照：Gateway API Inference Extension v1.5.0、Endpoint Picker Protocol v1.0.0、
   llm-d Router v0.9.0
+
+> 2026-08-11 修订说明：本 ADR 关于“不自研 ext_proc、固定 llm-d release、复用 InferencePool
+> 和 response lifecycle”的决定继续有效。文中“standalone 只用于开发/演示”以及“精确 KV
+> block cache 不进入项目”的范围已被 ADR-002 替代；R5D 标准部署顺序调整到 Lite exact KV
+> MVP 之后。以下正文保留当时的决策背景，避免改写历史。
 
 ## 1. 要决定什么
 

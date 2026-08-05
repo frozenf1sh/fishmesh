@@ -22,5 +22,7 @@
 | 14 | R5A 无 GPU Simulator 与故障 E2E | 可控 SSE/vLLM 契约、动态 EndpointSlice、取消与可靠性自动验证 |
 | 15 | R5B EPP 与 llm-d 集成决策 | 选择 pinned llm-d scorer，拒绝自研 EPP 与双重 requestpath |
 | 16 | R5C llm-d 适配器与 EPP 组合根 | 编译期 Filter/Scorer、上游 runner、选择 conformance 与最小配置 |
+| 17 | R6 方向复位与 Exact KV 主线 | Lite 主产品、真实 KV cache 决策、冻结边界与 R6A–R6E 路线 |
+| 18 | R6A 真实 KV 信号闭环 | Render/KVEvents/replay、跨会话 128-token 命中、eviction/restart 与 R6B 门禁 |
 
 每个阶段完成后都会补充独立中文说明，并在文末明确下一阶段边界。
