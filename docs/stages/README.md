@@ -24,5 +24,7 @@
 | 16 | R5C llm-d 适配器与 EPP 组合根 | 编译期 Filter/Scorer、上游 runner、选择 conformance 与最小配置 |
 | 17 | R6 方向复位与 Exact KV 主线 | Lite 主产品、真实 KV cache 决策、冻结边界与 R6A–R6E 路线 |
 | 18 | R6A 真实 KV 信号闭环 | Render/KVEvents/replay、跨会话 128-token 命中、eviction/restart 与 R6B 门禁 |
+| 19 | R6B-1 真实分词能力域 | 不可变 prompt profile、vLLM Render adapter、typed degradation 与资源上限 |
+| 20 | R6B-2 真实 KV 状态域 | 有界索引、同步 sequence、replay freshness、cache salt 与 Pod UID 回收 |
 
 每个阶段完成后都会补充独立中文说明，并在文末明确下一阶段边界。

@@ -1,7 +1,7 @@
 # FishMesh Serving Domain 重新设计
 
-> 状态：R1–R4、R5A–R5C、R6A 已完成；R5D 顺序已由 ADR-002 调整，下一步进入 R6B
-> tokenization 与 KV cache 能力域。后续变更仍必须遵守
+> 状态：R1–R4、R5A–R5C、R6A、R6B tokenization/KV cache 叶子能力已完成；R5D 顺序已由
+> ADR-002 调整，下一步进入 exact-cache-load 纯 routing。后续变更仍必须遵守
 > [`code-organization.md`](code-organization.md)，并保持每个提交可构建、可回滚。
 
 ## 1. 结论

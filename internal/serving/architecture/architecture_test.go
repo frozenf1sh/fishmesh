@@ -20,6 +20,8 @@ func TestAtomicDomainDependencies(t *testing.T) {
 		newRule("internal/simulator"),
 		newRule("internal/serving/admission"),
 		newRule("internal/serving/backend"),
+		newRule("internal/serving/tokenization"),
+		newRule("internal/serving/kvcache", "internal/serving/backend"),
 		newRule("internal/serving/circuit", "internal/serving/backend"),
 		newRule("internal/serving/routing", "internal/serving/backend", "internal/serving/observation"),
 		newRule("internal/serving/llmd", "internal/serving/backend", "internal/serving/observation", "internal/serving/routing"),

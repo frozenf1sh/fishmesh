@@ -1,14 +1,17 @@
 # FishMesh 项目当前状态
 
-最后只读复核时间：2026-08-11。仓库为 `frozenf1sh/fishmesh`（private），当前 `main` 分支
+最后项目状态更新时间：2026-08-12；集群最后只读复核时间：2026-08-11。仓库为
+`frozenf1sh/fishmesh`（private），当前 `main` 分支
 包含可信 serving baseline、bounded-affinity-v1、request-path reliability 和工程优先的项目
 章程。
 
 request-path reliability、Serving Domain R1–R4、无 GPU simulator 基础、R5C llm-d 本地集成和
-R6A 真实 KV 信号门禁均已完成。阶段 18 已在真实双 vLLM 集群证明 Render tokenization、跨
-session 128-token prefix match、eviction、Pod restart 清理和 subscriber invalid/replay；下一步
-进入 R6B，先实现 tokenization domain。R5D 标准 Gateway/EPP 部署不取消，但后移到 Lite exact
-KV MVP 之后。方向基准见 `docs/design/project-charter.md`，新决策见
+R6A 真实 KV 信号门禁、R6B-1 tokenization 和 R6B-2 kvcache domain 均已完成。阶段 18 已在真实双 vLLM 集群证明
+Render tokenization、跨 session 128-token prefix match、eviction、Pod restart 清理和 subscriber
+invalid/replay；阶段 19 已把 Render 调用收敛成有模型校验、cache salt、typed degradation 和资源
+上限的产品能力；阶段 20 已交付同步 sequence、replay freshness、有界索引、cache salt 和 Pod UID
+清理。下一步进入 R6B-3 exact-cache-load 纯 routing。R5D 标准 Gateway/EPP 部署不取消，但后移到
+Lite exact KV MVP 之后。方向基准见 `docs/design/project-charter.md`，新决策见
 `docs/design/decisions/002-lite-exact-kv-routing.md`。
 
 当前产品代码尚未实现 exact KV routing。已部署的 `X-FishMesh-Prefix-Key` 仍然只是 session
@@ -190,19 +193,26 @@ VM 的影响更大：Kubernetes API 和 reconciliation 也会停止，应按完�
   独立发布。实测 Render 约 5–6 ms、lookup 约 0.08–0.14 ms，压力后 Go HeapAlloc 约 11.7 MiB。
   最小复测 event lag 为 0.678 ms，空索引探针 RSS 约 33.2 MiB。实验结束后恢复基础 vLLM
   Deployment，exact 尚未接入 Gateway。
+- R6B-1 真实分词能力域：新增无其他 internal 依赖的 `internal/serving/tokenization`，以不可变
+  Result/Prompt 提供真实 Token IDs 和 cache salt；vLLM adapter 显式支持 Chat/Completions Render，
+  保留扩展字段，并保护 timeout、取消、请求/响应体和 token 总数边界。模型错配、非 2xx、异常
+  响应和多模态未支持均返回 typed error，不能被误解为零命中。本阶段没有接 Gateway、KV index
+  或集群，当前线上行为仍是 bounded affinity。
+- R6B-2 真实 KV 状态域：新增只依赖 backend 的 `internal/serving/kvcache`，复用上游 vLLM parser、
+  canonical hash、有界 index 和 longest-prefix scorer，但不用没有容量/完成回执的上游异步 event
+  workqueue。每条 live/replay event 同步 apply 后才推进 sequence；gap 先 invalid，再 replay，无法
+  覆盖时清理该 Pod。cache salt、BlockRemoved、replay TTL、Pod UID 替换、查询/事件/index 容量和
+  Close 等待均有 race/contract tests。当前只承诺已验证的 vLLM 0.23 文本 GPU event，不支持的
+  LoRA/HMA/offload 明确失效。本阶段仍未接 Gateway 或 routing，也没有访问集群。
 
 ## 下一步待办
 
-1. R6B-1 先建立 `internal/serving/tokenization`：契约、纯值对象、Config、typed error 和 contract
-   tests，不接 Gateway；
-2. 实现薄 vLLM Render adapter，覆盖 timeout、取消、请求/响应上限、model mismatch 和不支持 route；
-3. R6B-2 再建立 `kvcache` owner，复用上游 parser/indexer，并实现 replay heartbeat、sequence gap、
-   Pod UID 清理、容量和 freshness；
-4. 之后按 routing → requestpath → gateway → llmd 的顺序逐域接入，每个切片单独更新阶段文档、
+1. R6B-3 修改纯 routing，加入 exact cache、uncached tokens、负载和 hard overload 选择；
+2. 之后按 requestpath → gateway → llmd 的顺序逐域接入，每个切片单独更新阶段文档、
    提交和推送；
-5. R6C 从默认镜像/部署移除 analyst、simulator、loadgen，交付 gateway-only Lite 安装、dashboard、
+3. R6C 从默认镜像/部署移除 analyst、simulator、loadgen，交付 gateway-only Lite 安装、dashboard、
    alerts、runbook 和 release；
-6. Lite MVP 后再完成原 R5D Standard mode，并执行 Service/load-only/FishMesh exact/llm-d precise
+4. Lite MVP 后再完成原 R5D Standard mode，并执行 Service/load-only/FishMesh exact/llm-d precise
    的有限同环境对照；
-7. 在声称 NetworkPolicy 已生效前迁移到支持 policy enforcement 的 CNI；当前 Flannel 不能执行
+5. 在声称 NetworkPolicy 已生效前迁移到支持 policy enforcement 的 CNI；当前 Flannel 不能执行
    声明式 NetworkPolicy。

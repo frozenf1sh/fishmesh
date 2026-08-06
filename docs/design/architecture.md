@@ -72,6 +72,8 @@ KVEvents/index 和 `PrefixCacheMatchInfo`；FishMesh adapter 只翻译稳定值�
 | `circuit` | transport outcome EWMA 与 open state | `Record/State/Reconcile` |
 | `admission` | 进程并发许可 | `TryAcquire` 和幂等 permit |
 | `transport` | endpoint-scoped HTTP client/connection | `ClientFor/Remove/Close` |
+| `tokenization` | 推理请求到真实模型 Token IDs | `Tokenizer.Tokenize` 与只读 prompt profile |
+| `kvcache` | 逐 vLLM 实例的真实 KV block locality | `Index.Lookup/Reconcile/State/Close` |
 | `requestpath` | Lite selection、fallback、lease 与成员回收 | `Select` 和 `Lease.Complete` |
 | `gateway` | HTTP/SSE delivery 与指标投影 | health/ready/metrics/v1 handler |
 | `llmd` | llm-d 数据到 routing 的翻译 | plugin 注册、Filter/Scorer/hooks |
@@ -113,10 +115,14 @@ backend prefix match。
 
 ```text
 kvcache/
-├── kvcache.go               # Match、Snapshot、Index、Subscriber 契约
-├── index_impl.go            # bounded index 与 lookup 编排
-├── vllm_events_impl.go      # llm-d-kv-cache/vLLM KVEvents adapter
-├── lifecycle_impl.go        # Pod membership、replay、freshness 和清理
+├── kvcache.go               # Match、Snapshot、Instance 与 Index 契约
+├── config.go                # index/event/replay/query 容量和 freshness
+├── kvcache_impl.go          # lookup owner 与关闭事务
+├── vllm_index_impl.go       # 上游 parser/hash/index/scorer 薄 adapter
+├── lifecycle_impl.go        # 同步 live event 与 sequence 状态
+├── replay_impl.go           # replay heartbeat 和 gap 恢复
+├── reconcile_impl.go        # Pod UID membership 与清理事务
+├── zmq_impl.go              # vLLM PUB/SUB 和 ROUTER/DEALER transport
 ├── kvcache_test.go          # lookup、stale、eviction、UID 不变量
 └── *_impl_test.go           # wire、重连、容量和并发
 ```

@@ -207,10 +207,10 @@ pin/upgrade 或删除方案，禁止用 simulator/累计 hit rate 代替。
 
 按以下顺序实现，每一项独立可 review：
 
-1. `tokenization` 契约、值对象、contract tests；
-2. vLLM Render adapter；
-3. `kvcache` 契约、match/freshness 值对象、contract tests；
-4. KVEvents/index adapter 和 membership cleanup；
+1. `tokenization` 契约、值对象、contract tests（阶段 19 已完成）；
+2. vLLM Render adapter（阶段 19 已完成）；
+3. `kvcache` 契约、match/freshness 值对象、contract tests（阶段 20 已完成）；
+4. KVEvents/index adapter 和 membership cleanup（阶段 20 已完成）；
 5. `routing` exact-cache-load 输入与纯选择；
 6. `requestpath` tokenization/cache/load/degradation 编排；
 7. Gateway bounded body/replay 与 response passthrough；
