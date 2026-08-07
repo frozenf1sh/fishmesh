@@ -10,6 +10,9 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/go-logr/logr"
+	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
+
 	servingconfig "github.com/frozenf1sh/fishmesh/internal/serving/config"
 )
 
@@ -23,6 +26,11 @@ import (
 // "透明的流式代理"，框架自带的中间件、路由和缓冲行为会干扰对字节流的精确
 // 控制；标准库的行为完全可预期，也避免了额外的依赖。
 func main() {
+	// 上游 llm-d-kv-cache 的 InMemoryIndex 内部走 controller-runtime 的 logr。
+	// 若不初始化，首次日志会打印 "log.SetLogger(...) was never called" 警告并刷屏。
+	// 项目自己的日志仍走下方 slog JSON；llm-d 内部日志对排障价值低，直接丢弃，
+	// 保持依赖边界干净(第三方类型只停留在 adapter,不进入项目日志面)。
+	ctrllog.SetLogger(logr.Discard())
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	if err := run(logger); err != nil {
 		logger.Error("gateway exited", "error", err)

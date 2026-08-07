@@ -10,9 +10,11 @@ import (
 	"github.com/frozenf1sh/fishmesh/internal/serving/discovery"
 	"github.com/frozenf1sh/fishmesh/internal/serving/gateway"
 	"github.com/frozenf1sh/fishmesh/internal/serving/identity"
+	"github.com/frozenf1sh/fishmesh/internal/serving/kvcache"
 	"github.com/frozenf1sh/fishmesh/internal/serving/observation"
 	"github.com/frozenf1sh/fishmesh/internal/serving/requestpath"
 	"github.com/frozenf1sh/fishmesh/internal/serving/routing"
+	"github.com/frozenf1sh/fishmesh/internal/serving/tokenization"
 	"github.com/frozenf1sh/fishmesh/internal/serving/transport"
 )
 
@@ -37,6 +39,8 @@ type Config struct {
 	Admission       admission.Config
 	Transport       transport.Config
 	RequestPath     requestpath.Config
+	Tokenization    tokenization.Config
+	KVCache         kvcache.Config
 }
 
 // Validate 执行不需要外部 I/O 的跨配置约束检查。
@@ -47,8 +51,8 @@ func (c Config) Validate() error {
 	if err := c.RequestPath.Service.Validate(); err != nil {
 		return fmt.Errorf("service backend: %w", err)
 	}
-	if c.Admission.MaxInflight <= 0 || c.Transport.MaxConnsPerHost <= 0 || c.Transport.RequestTimeout <= 0 {
-		return fmt.Errorf("admission and transport limits must be positive")
+	if c.Gateway.MaxRequestBodyBytes <= 0 || c.Admission.MaxInflight <= 0 || c.Transport.MaxConnsPerHost <= 0 || c.Transport.RequestTimeout <= 0 {
+		return fmt.Errorf("gateway body, admission and transport limits must be positive")
 	}
 	if c.Discovery.Mode == discovery.ModeEndpointSlice {
 		endpointSlice := c.Discovery.EndpointSlice
@@ -68,6 +72,17 @@ func (c Config) Validate() error {
 	if !supportedRoutingMode(c.Routing.Mode) {
 		return fmt.Errorf("unsupported routing mode %q", c.Routing.Mode)
 	}
+	if c.Routing.Mode == routing.ModeExactCacheLoad {
+		if c.Discovery.Mode != discovery.ModeEndpointSlice {
+			return fmt.Errorf("exact-cache-load requires EndpointSlice discovery")
+		}
+		if err := c.Tokenization.Validate(); err != nil {
+			return fmt.Errorf("exact tokenization: %w", err)
+		}
+		if err := c.KVCache.Validate(); err != nil {
+			return fmt.Errorf("exact KV cache: %w", err)
+		}
+	}
 	if c.Routing.Mode == routing.ModeBoundedAffinity {
 		bounded := c.Routing.BoundedAffinity
 		if bounded.TTL <= 0 || bounded.MaxEntries <= 0 || bounded.InflightDelta < 0 || bounded.QueueDepthDelta < 0 {
@@ -85,7 +100,7 @@ func (c Config) Validate() error {
 
 func supportedRoutingMode(mode routing.Mode) bool {
 	switch mode {
-	case routing.ModeService, routing.ModePrefixHash, routing.ModePrefixAffinity, routing.ModeLoadAware, routing.ModeBoundedAffinity:
+	case routing.ModeService, routing.ModePrefixHash, routing.ModePrefixAffinity, routing.ModeLoadAware, routing.ModeBoundedAffinity, routing.ModeExactCacheLoad:
 		return true
 	default:
 		return false

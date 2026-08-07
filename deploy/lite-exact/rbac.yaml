@@ -1,0 +1,22 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: fishmesh-gateway-lite-exact-reader
+  annotations:
+    fishmesh.io/permission-scope: namespace-scoped-read-only-endpointslice-discovery
+rules:
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: fishmesh-gateway-lite-exact-reader
+subjects:
+  - kind: ServiceAccount
+    name: fishmesh-gateway
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: fishmesh-gateway-lite-exact-reader

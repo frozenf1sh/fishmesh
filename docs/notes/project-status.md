@@ -1,22 +1,21 @@
 # FishMesh 项目当前状态
 
-最后项目状态更新时间：2026-08-12；集群最后只读复核时间：2026-08-11。仓库为
+最后项目状态更新时间：2026-08-12；集群最后真实验收时间：2026-08-12。仓库为
 `frozenf1sh/fishmesh`（private），当前 `main` 分支
 包含可信 serving baseline、bounded-affinity-v1、request-path reliability 和工程优先的项目
 章程。
 
 request-path reliability、Serving Domain R1–R4、无 GPU simulator 基础、R5C llm-d 本地集成和
-R6A 真实 KV 信号门禁、R6B-1 tokenization 和 R6B-2 kvcache domain 均已完成。阶段 18 已在真实双 vLLM 集群证明
-Render tokenization、跨 session 128-token prefix match、eviction、Pod restart 清理和 subscriber
-invalid/replay；阶段 19 已把 Render 调用收敛成有模型校验、cache salt、typed degradation 和资源
-上限的产品能力；阶段 20 已交付同步 sequence、replay freshness、有界索引、cache salt 和 Pod UID
-清理。下一步进入 R6B-3 exact-cache-load 纯 routing。R5D 标准 Gateway/EPP 部署不取消，但后移到
-Lite exact KV MVP 之后。方向基准见 `docs/design/project-charter.md`，新决策见
-`docs/design/decisions/002-lite-exact-kv-routing.md`。
+R6A 真实 KV 信号门禁、R6B-1 至 R6B-6 与 R6C 已完成：真实 Render、同步 KV index、pure routing、
+requestpath 编排、有界 body/SSE delivery、组合根、真实 ZMQ/replay 和可安装 Lite 产品面均已闭环。R6C
+在真实双 vLLM 集群以不带 session key 的两个相同 system prompt、不同 user message 请求，记录到第二请求
+`available`、`exact-cache-load-v1` 和 80 cached prefix tokens；删除实际命中 Pod 后，过渡请求显式降级、
+替代 Pod replay 后恢复 exact 命中。R5D 标准 Gateway/EPP 部署不取消，但后移到 Lite exact KV MVP 之后。
+方向基准见 `docs/design/project-charter.md`，新决策见 `docs/design/decisions/002-lite-exact-kv-routing.md`。
 
-当前产品代码尚未实现 exact KV routing。已部署的 `X-FishMesh-Prefix-Key` 仍然只是 session
-affinity hint，不能描述为真实 prefix-aware。R6A 曾通过实验 overlay 开启 KVEvents publisher/
-replay，验证结束后已恢复基础 vLLM 清单；当前运行 Pod 不长期开放实验端口。
+基础配置仍为 `bounded-affinity`，`X-FishMesh-Prefix-Key` 继续只作为 session affinity hint；当前运行集群
+已通过 `deploy/lite-exact` 显式启用 `exact-cache-load`。exact 模式通过
+EndpointSlice/Pod UID 建立实例、订阅 KVEvents/replay；unknown/stale 永不伪装成零命中。
 
 ## 当前运行拓扑
 
@@ -39,11 +38,11 @@ OrbStack 内置的 Kubernetes 集群不是这个多节点 control plane。官方
   `qwen-vllm` 仍然是 headless Service，EndpointSlice 实验直接读取它的 Ready 地址；
 - `fishmesh-gateway` 是一个 Go streaming proxy，运行在 GPU 节点。它不申请 GPU，
   但因为第一个镜像是 amd64 而 control plane 是 ARM64，所以被放在该节点；
-- Gateway 当前运行 `fishmesh:0.3.0-p1` 的 bounded-affinity overlay；默认阈值为 local
-  in-flight delta 2、queue-depth delta 1，EndpointSlice 不可用、无 Ready backend 或过期时
-  回退 Kubernetes Service；
-- `fishmesh-analyst` 是同镜像中的只读慢速控制面，当前以 `observability` overlay 运行在
-  GPU 节点，不在请求路径中，仅通过 namespace-scoped Role 读取 Events/Pods；
+- Gateway 当前运行只含 Gateway 二进制的 `fishmesh-gateway:r6c-lite-r1`，Lite overlay 启用
+  EndpointSlice + KVEvents/replay exact routing。它使用专用 SA，只有 EndpointSlice
+  `get/list/watch`，无 Pods/Secrets 权限；unknown/stale 仍回退 load-aware；
+- analyst、simulator 和 loadgen 已冻结且不在当前产品部署或 Gateway 镜像中；遗留 analyst
+  Deployment/RBAC 与 loadgen SA 已从集群清理；
 - 模型持久化于 GPU 笔记本的 `/var/lib/fishmesh/models`，通过 retained local PV/PVC
   暴露，不会在每次 Pod 重启时重新下载。
 
@@ -204,15 +203,40 @@ VM 的影响更大：Kubernetes API 和 reconciliation 也会停止，应按完�
   覆盖时清理该 Pod。cache salt、BlockRemoved、replay TTL、Pod UID 替换、查询/事件/index 容量和
   Close 等待均有 race/contract tests。当前只承诺已验证的 vLLM 0.23 文本 GPU event，不支持的
   LoRA/HMA/offload 明确失效。本阶段仍未接 Gateway 或 routing，也没有访问集群。
+- R6B-3 缓存/负载联合纯路由：routing 新增不依赖 kvcache/tokenization 的 `ExactInput`、
+  `CacheMatch`、`Load` 和 `exact-cache-load-v1`。策略按 eligible、hard overload、uncached tokens、
+  queue/running、local in-flight 和最终 session 平局提示做确定性选择。有效零命中保持 exact 语义；
+  unknown/stale 则由 requestpath 显式改用 load-aware，并返回 typed degradation。Gateway、Render、
+  KV index 和线上部署尚未接入。
+- R6B-4 请求路径 Exact 编排：requestpath 在 exact mode 下显式注入 tokenization 与 kvcache，
+  将只读 TokenIDs、模型、cache salt 和 eligible backends 构造成一次 KV lookup，再投影 Match 为
+  routing `ExactInput` 并消费其 Decision。tokenizer/lookup 普通失败与 unknown/stale match 通过
+  typed load-aware 降级发布；取消/超时不吞掉而是返回调用方。Gateway、组合根、Pod instance 翻译、
+  subscriber 和线上部署仍未接入，现网仍是 bounded affinity。
+- R6B-5 有界 Body 与 Exact 交付：Gateway 对原始请求 body 实施 2 MiB 默认硬上限，并用同一字节
+  副本完成 requestpath Render/KV lookup 输入和 upstream replay；超限在选路前返回 413。SSE copy、
+  `[DONE]`、headers 后不 retry 和 lease outcome 均保持原行为。响应新增 `X-FishMesh-Exact-Status`，
+  现有 route reason/policy/backend 头在选路后立即写出，unknown/stale 的 load-aware 降级可直接观察。
+  进程内闭环测试已走通 Render→Lookup→select→SSE；生产组合根和 KV subscriber 尚未接入。
+- R6B-6 组合根真实 KV 接入：Gateway 在显式 exact mode 创建 renderer 与有界 kvcache index，将
+  EndpointSlice `targetRef.uid`、Pod IP 翻译为稳定 Instance 和 `5557/5558` ZMQ endpoint，并在退出时
+  关闭 subscriber。真实 vLLM 0.23 事件包含 `group_idx=0/full_attention`；该单组文本语义已以同包
+  contract test 窄化兼容，其他 HMA/LoRA/window 语义仍 explicit invalid。真实集群第二个无 session key
+  请求得到 160 cached prefix tokens；首请求 `match-unavailable` 保持 load-aware 降级。验收后已恢复默认
+  bounded-affinity。
+- R6C Lite 产品化：默认 Dockerfile 仅构建 `fishmesh-gateway`，新 `deploy/lite-exact` 组合专用
+  RBAC、PDB、probes、资源/安全边界与 KVEvents/replay 配置；指标发布 KV validity/freshness/sequence/
+  batches、exact degradation 与进程 CPU/RSS，且不泄露请求数据。真实滚动更新成功，删除实际命中 vLLM
+  Pod 后旧事件流退出、剩余 backend 的 zero miss 仍为 exact，替代 Pod replay 的过渡明确降级，随后
+  恢复 80-token exact hit。llm-d 的 controller-runtime logger 由 Gateway 入口显式 discard，修复后的
+  live/recovery 日志未再出现 stack warning。Flannel 仍不执行 NetworkPolicy，策略只作为 CNI 迁移后待启用项。
 
 ## 下一步待办
 
-1. R6B-3 修改纯 routing，加入 exact cache、uncached tokens、负载和 hard overload 选择；
-2. 之后按 requestpath → gateway → llmd 的顺序逐域接入，每个切片单独更新阶段文档、
+1. 之后按 llmd 的顺序逐域接入，每个切片单独更新阶段文档、
    提交和推送；
-3. R6C 从默认镜像/部署移除 analyst、simulator、loadgen，交付 gateway-only Lite 安装、dashboard、
-   alerts、runbook 和 release；
-4. Lite MVP 后再完成原 R5D Standard mode，并执行 Service/load-only/FishMesh exact/llm-d precise
+2. Lite MVP 后完成 R6D：执行 Service/load-only/FishMesh exact/llm-d precise 的有限同环境对照；
+3. R6D 后再完成原 R5D Standard mode，并执行 Gateway/EPP 生产集成；
    的有限同环境对照；
-5. 在声称 NetworkPolicy 已生效前迁移到支持 policy enforcement 的 CNI；当前 Flannel 不能执行
+4. 在声称 NetworkPolicy 已生效前迁移到支持 policy enforcement 的 CNI；当前 Flannel 不能执行
    声明式 NetworkPolicy。

@@ -18,6 +18,8 @@ const (
 	headerPreferredBackendID = "X-FishMesh-Preferred-Backend-ID"
 	headerPolicy             = "X-FishMesh-Policy"
 	headerSpilloverReason    = "X-FishMesh-Spillover-Reason"
+	headerExactStatus        = "X-FishMesh-Exact-Status"
+	headerCachedPrefixTokens = "X-FishMesh-Cached-Prefix-Tokens"
 	headerUpstream           = "X-FishMesh-Upstream"
 	headerConnection         = "Connection"
 	headerKeepAlive          = "Keep-Alive"

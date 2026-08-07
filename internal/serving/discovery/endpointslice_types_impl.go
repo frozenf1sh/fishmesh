@@ -57,12 +57,14 @@ type endpointEntry struct {
 type endpointTargetRef struct {
 	Kind string `json:"kind"`
 	Name string `json:"name"`
+	UID  string `json:"uid"`
 }
 
 type addressPort struct {
 	address string
 	port    int32
 	podName string
+	podUID  string
 }
 
 func buildBackends(items []endpointSliceResource) []backend.Backend {
@@ -95,11 +97,12 @@ func buildBackendsFromMap(items map[string]endpointSliceResource) []backend.Back
 				if strings.TrimSpace(address) == "" {
 					continue
 				}
-				podName := ""
+				podName, podUID := "", ""
 				if endpoint.TargetRef != nil && endpoint.TargetRef.Kind == targetKindPod {
 					podName = endpoint.TargetRef.Name
+					podUID = endpoint.TargetRef.UID
 				}
-				unique[addressPort{address: address, port: port, podName: podName}] = struct{}{}
+				unique[addressPort{address: address, port: port, podName: podName, podUID: podUID}] = struct{}{}
 			}
 		}
 	}
@@ -118,6 +121,9 @@ func buildBackendsFromMap(items map[string]endpointSliceResource) []backend.Back
 		metadata := map[string]string{}
 		if key.podName != "" {
 			metadata[backend.MetadataPodName] = key.podName
+		}
+		if key.podUID != "" {
+			metadata[backend.MetadataPodUID] = key.podUID
 		}
 		backends = append(backends, backend.NewHTTP(key.address, int(key.port), metadata))
 	}

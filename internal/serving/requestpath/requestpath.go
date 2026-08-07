@@ -8,8 +8,10 @@ import (
 	"github.com/frozenf1sh/fishmesh/internal/serving/backend"
 	"github.com/frozenf1sh/fishmesh/internal/serving/circuit"
 	"github.com/frozenf1sh/fishmesh/internal/serving/discovery"
+	"github.com/frozenf1sh/fishmesh/internal/serving/kvcache"
 	"github.com/frozenf1sh/fishmesh/internal/serving/observation"
 	"github.com/frozenf1sh/fishmesh/internal/serving/routing"
+	"github.com/frozenf1sh/fishmesh/internal/serving/tokenization"
 )
 
 const (
@@ -29,6 +31,32 @@ type Outcome string
 // Request 是与 HTTP 协议无关的请求路径输入。
 type Request struct {
 	RoutingKey string
+	// Route 和 Body 是 Gateway 读取并有界复制后的原始推理输入。只有 exact 策略把它翻译为
+	// tokenization.Input；其他策略不解析或保留 body。
+	Route string
+	Body  []byte
+}
+
+// ExactStatus 描述本次选择是否取得可用于 exact routing 的完整信号。
+type ExactStatus string
+
+const (
+	ExactNotRequested       ExactStatus = "not-requested"
+	ExactAvailable          ExactStatus = "available"
+	ExactTokenizationFailed ExactStatus = "tokenization-failed"
+	ExactLookupFailed       ExactStatus = "lookup-failed"
+	ExactMatchUnavailable   ExactStatus = "match-unavailable"
+)
+
+// KVCacheState 是 delivery 可以安全观测的逐 backend KV index 快照。
+// 它不包含 Pod UID、ZMQ endpoint、prompt 或 token IDs；unknown/stale 必须由 Valid=false 与 Reason 共同表达。
+type KVCacheState struct {
+	Valid          bool
+	Reason         kvcache.Reason
+	Freshness      time.Duration
+	LastSequence   uint64
+	AppliedBatches uint64
+	ReplayBatches  uint64
 }
 
 // State 是一次选择时使用的可观测快照，供 delivery 层投影为 metrics。
@@ -37,6 +65,10 @@ type State struct {
 	Observations map[backend.ID]observation.Backend
 	CircuitOpen  map[backend.ID]bool
 	Discovery    discovery.ResolverStatus
+	Exact        ExactStatus
+	KVCache      map[backend.ID]KVCacheState
+	// CachedPrefixTokens 是本次 exact lookup 对最终 backend 的真实完整 block 前缀；unknown/stale 时为零且 Exact 不为 available。
+	CachedPrefixTokens int
 }
 
 // Completion 描述 lease 完成后发生的 circuit 状态变化。
@@ -68,6 +100,9 @@ type Dependencies struct {
 	Observations     observation.Reader
 	Strategy         routing.Strategy
 	Circuits         circuit.Breaker
+	Tokenizer        tokenization.Tokenizer
+	KVCache          kvcache.Index
+	KVReconcile      func(context.Context, []backend.Backend) error
 	OnBackendRemoved func(backend.ID)
 }
 

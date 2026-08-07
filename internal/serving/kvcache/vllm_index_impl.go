@@ -16,7 +16,10 @@ import (
 	"k8s.io/apimachinery/pkg/util/sets"
 )
 
-const supportedDeviceTier = "gpu"
+const (
+	supportedDeviceTier   = "gpu"
+	canonicalKVGroupIndex = 0
+)
 
 // eventFault 把协议/兼容错误映射为稳定的 instance degradation reason。
 type eventFault struct {
@@ -181,10 +184,10 @@ func (s *vllmStore) applyOne(ctx context.Context, podID, model string, event kve
 }
 
 func (s *vllmStore) applyStored(ctx context.Context, podID, model string, event *kvevents.BlockStoredEvent) error {
-	if event.BlockSize != s.blockSize || event.LoraID != nil || event.LoraName != nil || event.GroupIdx != nil {
+	if event.BlockSize != s.blockSize || event.LoraID != nil || event.LoraName != nil || !isSupportedStoredGroup(event) {
 		return newEventFault(
 			ReasonUnsupportedEvent,
-			fmt.Errorf("stored event uses unsupported block size, LoRA or HMA metadata"),
+			fmt.Errorf("stored event uses unsupported block size, LoRA or HMA metadata: block_size=%d expected=%d lora_id_set=%t lora_name_set=%t group_idx=%v kv_cache_spec_kind=%q sliding_window=%v", event.BlockSize, s.blockSize, event.LoraID != nil, event.LoraName != nil, event.GroupIdx, event.KVCacheSpecKind, event.KVCacheSpecSlidingWindowSize),
 		)
 	}
 	deviceTier, err := normalizeDeviceTier(event.DeviceTier)
@@ -229,7 +232,7 @@ func (s *vllmStore) applyStored(ctx context.Context, podID, model string, event 
 }
 
 func (s *vllmStore) applyRemoved(ctx context.Context, podID string, event *kvevents.BlockRemovedEvent) error {
-	if event.GroupIdx != nil {
+	if event.GroupIdx != nil && *event.GroupIdx != canonicalKVGroupIndex {
 		return newEventFault(ReasonUnsupportedEvent, fmt.Errorf("HMA block removal is not supported"))
 	}
 	deviceTier, err := normalizeDeviceTier(event.DeviceTier)
@@ -243,6 +246,15 @@ func (s *vllmStore) applyRemoved(ctx context.Context, podID string, event *kveve
 		}
 	}
 	return nil
+}
+
+func isSupportedStoredGroup(event *kvevents.BlockStoredEvent) bool {
+	if event.GroupIdx == nil {
+		return true
+	}
+	return *event.GroupIdx == canonicalKVGroupIndex &&
+		event.KVCacheSpecKind == kvevents.KVCacheSpecKindFullAttention &&
+		event.KVCacheSpecSlidingWindowSize == nil
 }
 
 func foldCacheSalt(features []*kvblock.BlockExtraFeatures, salt string, fullBlocks int) []*kvblock.BlockExtraFeatures {

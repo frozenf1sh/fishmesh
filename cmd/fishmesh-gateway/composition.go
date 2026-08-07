@@ -1,9 +1,13 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
+	"strconv"
 	"sync"
 
 	"github.com/frozenf1sh/fishmesh/internal/platform/kubernetes"
@@ -14,9 +18,11 @@ import (
 	"github.com/frozenf1sh/fishmesh/internal/serving/discovery"
 	"github.com/frozenf1sh/fishmesh/internal/serving/gateway"
 	"github.com/frozenf1sh/fishmesh/internal/serving/identity"
+	"github.com/frozenf1sh/fishmesh/internal/serving/kvcache"
 	"github.com/frozenf1sh/fishmesh/internal/serving/observation"
 	"github.com/frozenf1sh/fishmesh/internal/serving/requestpath"
 	"github.com/frozenf1sh/fishmesh/internal/serving/routing"
+	"github.com/frozenf1sh/fishmesh/internal/serving/tokenization"
 	"github.com/frozenf1sh/fishmesh/internal/serving/transport"
 )
 
@@ -26,6 +32,7 @@ type runtime struct {
 	observations observation.Reader
 	resolver     discovery.Resolver
 	transport    transport.Pool
+	kvCache      kvcache.Index
 
 	close sync.Once
 }
@@ -71,9 +78,29 @@ func buildRuntime(config servingconfig.Config, logger *slog.Logger) (*runtime, e
 	}
 	assembled.transport = components.pool
 
-	// 4. 组合 RequestPath；backend 移除后在锁外统一清理 transport 和 metrics。
+	// 4. exact 模式由组合根显式创建 Render adapter、ZMQ source 与有界 KV index。
+	var tokenizer tokenization.Tokenizer
+	var index kvcache.Index
+	var reconcile func(context.Context, []backend.Backend) error
+	if config.Routing.Mode == routing.ModeExactCacheLoad {
+		tokenizer, err = tokenization.NewVLLMRenderer(config.Tokenization, tokenization.Dependencies{HTTPClient: http.DefaultClient})
+		if err != nil {
+			assembled.Close()
+			return nil, fmt.Errorf("create exact tokenizer: %w", err)
+		}
+		index, err = kvcache.NewVLLM(context.Background(), config.KVCache, kvcache.Dependencies{EventSource: kvcache.NewZMQSource()})
+		if err != nil {
+			assembled.Close()
+			return nil, fmt.Errorf("create exact KV cache: %w", err)
+		}
+		assembled.kvCache = index
+		reconcile = exactKVReconcile(index, config.Tokenization.Model)
+	}
+
+	// 5. 组合 RequestPath；backend 移除后在锁外统一清理 transport、metrics 和 KV instance。
 	pathService, err := requestpath.New(config.RequestPath, requestpath.Dependencies{
 		Resolver: resolver, Observations: observations, Strategy: components.strategy, Circuits: components.breaker,
+		Tokenizer: tokenizer, KVCache: index, KVReconcile: reconcile,
 		OnBackendRemoved: func(backendID backend.ID) {
 			components.pool.Remove(backendID)
 			components.metrics.DeleteBackend(string(backendID), string(config.Routing.Mode))
@@ -85,7 +112,7 @@ func buildRuntime(config servingconfig.Config, logger *slog.Logger) (*runtime, e
 	}
 	assembled.requestPath = pathService
 
-	// 5. 最后创建只依赖接口的 HTTP/SSE delivery。
+	// 6. 最后创建只依赖接口的 HTTP/SSE delivery。
 	server, err := gateway.New(config.Gateway, gateway.Dependencies{
 		RequestPath: pathService, Admission: components.admission, Transport: components.pool,
 		Metrics: components.metrics, Logger: logger,
@@ -123,6 +150,9 @@ func (r *runtime) Close() {
 		if r.requestPath != nil {
 			_ = r.requestPath.Close()
 		}
+		if r.kvCache != nil {
+			_ = r.kvCache.Close()
+		}
 		if r.observations != nil {
 			_ = r.observations.Close()
 		}
@@ -133,6 +163,39 @@ func (r *runtime) Close() {
 			r.transport.Close()
 		}
 	})
+}
+
+// exactKVReconcile 将 EndpointSlice 发布的 Pod UID/IP 翻译为 kvcache.Instance。
+// 这里是 Kubernetes discovery 与 ZMQ endpoint 的唯一交汇处；routing/requestpath 不了解两种协议。
+func exactKVReconcile(index kvcache.Index, model string) func(context.Context, []backend.Backend) error {
+	return func(ctx context.Context, backends []backend.Backend) error {
+		instances := make([]kvcache.Instance, 0, len(backends))
+		for _, candidate := range backends {
+			instance, err := kvInstance(candidate, model)
+			if err != nil {
+				return err
+			}
+			instances = append(instances, instance)
+		}
+		return index.Reconcile(ctx, instances)
+	}
+}
+
+func kvInstance(candidate backend.Backend, model string) (kvcache.Instance, error) {
+	parsed, err := url.Parse(candidate.URL)
+	if err != nil || parsed.Hostname() == "" {
+		return kvcache.Instance{}, fmt.Errorf("exact KV backend URL %q: %w", candidate.URL, err)
+	}
+	uid := candidate.Metadata[backend.MetadataPodUID]
+	if uid == "" {
+		return kvcache.Instance{}, fmt.Errorf("exact KV backend %q has no Pod UID", candidate.ID)
+	}
+	host := parsed.Hostname()
+	podIdentifier := net.JoinHostPort(host, strconv.Itoa(8000))
+	return kvcache.Instance{
+		Backend: candidate.ID, PodUID: kvcache.WorkloadUID(uid), PodIdentifier: podIdentifier, Model: model,
+		EventsEndpoint: "tcp://" + net.JoinHostPort(host, strconv.Itoa(5557)), ReplayEndpoint: "tcp://" + net.JoinHostPort(host, strconv.Itoa(5558)),
+	}, nil
 }
 
 func kubernetesConfigs(config servingconfig.Config) (discovery.Config, identity.Config, error) {

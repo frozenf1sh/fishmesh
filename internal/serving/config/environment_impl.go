@@ -13,9 +13,11 @@ import (
 	"github.com/frozenf1sh/fishmesh/internal/serving/discovery"
 	"github.com/frozenf1sh/fishmesh/internal/serving/gateway"
 	"github.com/frozenf1sh/fishmesh/internal/serving/identity"
+	"github.com/frozenf1sh/fishmesh/internal/serving/kvcache"
 	"github.com/frozenf1sh/fishmesh/internal/serving/observation"
 	"github.com/frozenf1sh/fishmesh/internal/serving/requestpath"
 	"github.com/frozenf1sh/fishmesh/internal/serving/routing"
+	"github.com/frozenf1sh/fishmesh/internal/serving/tokenization"
 	"github.com/frozenf1sh/fishmesh/internal/serving/transport"
 )
 
@@ -23,6 +25,7 @@ type environmentValues struct {
 	endpointRefresh, endpointMaxAge                 time.Duration
 	observationInterval, observationMaxAge          time.Duration
 	requestTimeout, shutdownTimeout                 time.Duration
+	maxRequestBody                                  int64
 	affinityTTL, circuitOpenDuration                time.Duration
 	keepAlive                                       bool
 	affinityMaxEntries, maxInflight, maxConnections int
@@ -58,6 +61,9 @@ func loadEnvironmentValues() (environmentValues, error) {
 			return assignDuration(envObservationMaxAge, defaultObservationMaxAge, &values.observationMaxAge)
 		},
 		func() error { return assignDuration(envRequestTimeout, defaultRequestTimeout, &values.requestTimeout) },
+		func() error {
+			return assignInt64(envMaxRequestBodyBytes, defaultMaxRequestBodyBytes, &values.maxRequestBody)
+		},
 		func() error {
 			return assignDuration(envShutdownTimeout, defaultShutdownTimeout, &values.shutdownTimeout)
 		},
@@ -97,6 +103,9 @@ func loadEnvironmentValues() (environmentValues, error) {
 	if values.circuitAlpha <= 0 || values.circuitAlpha > 1 || values.circuitError <= 0 || values.circuitError > 1 || values.circuitOpenDuration <= 0 {
 		return environmentValues{}, fmt.Errorf("circuit alpha, threshold and open duration must be positive and bounded")
 	}
+	if values.maxRequestBody <= 0 {
+		return environmentValues{}, fmt.Errorf("%s must be positive", envMaxRequestBodyBytes)
+	}
 	return values, nil
 }
 
@@ -124,7 +133,7 @@ func (v environmentValues) buildConfig() (Config, error) {
 	caFile := valueOrDefault(envKubernetesCAFile, defaultKubernetesCAFile)
 	config := Config{
 		Process: ProcessConfig{ListenAddress: valueOrDefault(envListenAddress, defaultListenAddress), ReadHeaderTimeout: defaultReadHeaderTimeout, ShutdownTimeout: v.shutdownTimeout},
-		Gateway: gateway.Config{RoutingMode: routingMode, KeepAlive: v.keepAlive, RequestTimeout: v.requestTimeout},
+		Gateway: gateway.Config{RoutingMode: routingMode, KeepAlive: v.keepAlive, RequestTimeout: v.requestTimeout, MaxRequestBodyBytes: v.maxRequestBody},
 		Discovery: discovery.Config{Mode: discoveryMode, Static: staticBackends, EndpointSlice: discovery.EndpointSliceConfig{
 			Namespace: namespace, ServiceName: valueOrDefault(envEndpointService, defaultEndpointService), BaseURL: apiURL,
 			TokenFile: tokenFile, CAFile: caFile, RefreshInterval: v.endpointRefresh,
@@ -136,10 +145,12 @@ func (v environmentValues) buildConfig() (Config, error) {
 		Routing: routing.Config{Mode: routingMode, Service: service, BoundedAffinity: routing.BoundedAffinityConfig{
 			TTL: v.affinityTTL, MaxEntries: v.affinityMaxEntries, InflightDelta: v.affinityInflightDelta, QueueDepthDelta: v.affinityQueueDelta,
 		}},
-		Circuit:     circuit.Config{EWMAAlpha: v.circuitAlpha, ErrorThreshold: v.circuitError, MinimumRequests: v.circuitMinimumRequests, OpenDuration: v.circuitOpenDuration},
-		Admission:   admission.Config{MaxInflight: v.maxInflight},
-		Transport:   transport.Config{KeepAlive: v.keepAlive, RequestTimeout: v.requestTimeout, MaxConnsPerHost: v.maxConnections},
-		RequestPath: requestpath.Config{Service: service, RequireFreshDiscovery: discoveryMode == discovery.ModeEndpointSlice, DiscoveryMaxAge: v.endpointMaxAge, ReconcileInterval: reconcileInterval},
+		Circuit:      circuit.Config{EWMAAlpha: v.circuitAlpha, ErrorThreshold: v.circuitError, MinimumRequests: v.circuitMinimumRequests, OpenDuration: v.circuitOpenDuration},
+		Admission:    admission.Config{MaxInflight: v.maxInflight},
+		Transport:    transport.Config{KeepAlive: v.keepAlive, RequestTimeout: v.requestTimeout, MaxConnsPerHost: v.maxConnections},
+		RequestPath:  requestpath.Config{Service: service, RequireFreshDiscovery: discoveryMode == discovery.ModeEndpointSlice, DiscoveryMaxAge: v.endpointMaxAge, ReconcileInterval: reconcileInterval},
+		Tokenization: tokenization.DefaultConfig(valueOrDefault(envExactRenderURL, defaultExactRenderURL), valueOrDefault(envExactModel, defaultExactModel)),
+		KVCache:      kvcache.DefaultConfig(),
 	}
 	return config, nil
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 )
@@ -208,6 +209,7 @@ func (s *eventStream) accept(ctx context.Context, event Event, replayed bool) er
 		if errors.As(err, &fault) {
 			reason = fault.reason
 		}
+		slog.Error("KV event apply failed", "backend", s.instance.Backend, "pod_identifier", s.instance.PodIdentifier, "sequence", event.Sequence, "replayed", replayed, "reason", reason, "error", err)
 		s.invalidateAndClear(ctx, reason, err)
 		return err
 	}

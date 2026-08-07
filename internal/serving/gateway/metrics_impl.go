@@ -24,45 +24,60 @@ import (
 // /metrics，不依赖独立的 Prometheus 服务。抓取方（或人工 curl）拿到
 // 数据后自行聚合，减少实验环境的运行面。
 type Metrics struct {
-	registry             *prometheus.Registry
-	inflight             prometheus.Gauge         // 当前正在代理中的请求数（反映瞬时并发）
-	requests             *prometheus.CounterVec   // 完成的请求总数，按 method/status 分桶
-	requestSeconds       *prometheus.HistogramVec // 端到端请求耗时，按 method/status 分桶
-	ttftSeconds          prometheus.Histogram     // 首 token 延迟（TTFT），项目的核心测量指标
-	upstreamErrors       prometheus.Counter       // 上游传输层失败次数（区别于业务层 4xx/5xx）
-	streamErrors         prometheus.Counter       // response headers 之后的 upstream stream 读取失败
-	admissionRejections  prometheus.Counter       // Gateway 达到并发硬上限后拒绝的请求
-	circuitOpen          *prometheus.GaugeVec     // endpoint transport circuit 当前是否打开
-	circuitOpens         *prometheus.CounterVec   // endpoint transport circuit 打开次数
-	routingDecisions     *prometheus.CounterVec   // 路由模式和有限 backend ID 维度
-	routingReasons       *prometheus.CounterVec   // 固定枚举 reason，不使用请求 key 作为 label
-	affinitySpillovers   *prometheus.CounterVec   // bounded affinity spillover trigger
-	routeFallbacks       prometheus.Counter       // 路由策略失败后的 Service fallback
-	observationStatus    *prometheus.GaugeVec
-	observationFreshness *prometheus.GaugeVec
-	observationQueue     *prometheus.GaugeVec
-	observationRunning   *prometheus.GaugeVec
-	observationIdentity  *prometheus.GaugeVec
-	observationGPU       *prometheus.GaugeVec
-	discoveryStatus      *prometheus.GaugeVec
-	discoveryFreshness   prometheus.Gauge
-	discoveryReady       prometheus.Gauge
-	observationMu        sync.Mutex
-	observationIDs       map[string]struct{}
-	identityLabels       map[string][2]string
+	registry              *prometheus.Registry
+	inflight              prometheus.Gauge         // 当前正在代理中的请求数（反映瞬时并发）
+	requests              *prometheus.CounterVec   // 完成的请求总数，按 method/status 分桶
+	requestSeconds        *prometheus.HistogramVec // 端到端请求耗时，按 method/status 分桶
+	ttftSeconds           prometheus.Histogram     // 首 token 延迟（TTFT），项目的核心测量指标
+	upstreamErrors        prometheus.Counter       // 上游传输层失败次数（区别于业务层 4xx/5xx）
+	streamErrors          prometheus.Counter       // response headers 之后的 upstream stream 读取失败
+	admissionRejections   prometheus.Counter       // Gateway 达到并发硬上限后拒绝的请求
+	circuitOpen           *prometheus.GaugeVec     // endpoint transport circuit 当前是否打开
+	circuitOpens          *prometheus.CounterVec   // endpoint transport circuit 打开次数
+	routingDecisions      *prometheus.CounterVec   // 路由模式和有限 backend ID 维度
+	routingReasons        *prometheus.CounterVec   // 固定枚举 reason，不使用请求 key 作为 label
+	affinitySpillovers    *prometheus.CounterVec   // bounded affinity spillover trigger
+	routeFallbacks        prometheus.Counter       // 路由策略失败后的 Service fallback
+	observationStatus     *prometheus.GaugeVec
+	observationFreshness  *prometheus.GaugeVec
+	observationQueue      *prometheus.GaugeVec
+	observationRunning    *prometheus.GaugeVec
+	observationIdentity   *prometheus.GaugeVec
+	observationGPU        *prometheus.GaugeVec
+	discoveryStatus       *prometheus.GaugeVec
+	discoveryFreshness    prometheus.Gauge
+	discoveryReady        prometheus.Gauge
+	kvCacheValid          *prometheus.GaugeVec
+	kvCacheFreshness      *prometheus.GaugeVec
+	kvCacheLastSequence   *prometheus.GaugeVec
+	kvCacheAppliedBatches *prometheus.GaugeVec
+	kvCacheReplayBatches  *prometheus.GaugeVec
+	kvCacheStatus         *prometheus.GaugeVec
+	exactRequests         *prometheus.CounterVec
+	exactDegradations     *prometheus.CounterVec
+	kvCacheMu             sync.Mutex
+	kvCacheIDs            map[string]struct{}
+	kvCacheStatuses       map[string]string
+	observationMu         sync.Mutex
+	observationIDs        map[string]struct{}
+	identityLabels        map[string][2]string
 }
 
 // NewMetrics 创建 standalone Gateway 自己的隔离 registry。
 func NewMetrics() *Metrics {
 	m := &Metrics{
-		registry:       prometheus.NewRegistry(),
-		observationIDs: make(map[string]struct{}),
-		identityLabels: make(map[string][2]string),
+		registry:        prometheus.NewRegistry(),
+		observationIDs:  make(map[string]struct{}),
+		identityLabels:  make(map[string][2]string),
+		kvCacheIDs:      make(map[string]struct{}),
+		kvCacheStatuses: make(map[string]string),
 	}
 	m.initializeRequestMetrics()
 	m.initializeRoutingMetrics()
 	m.initializeObservationMetrics()
 	m.initializeDiscoveryMetrics()
+	m.initializeKVCacheMetrics()
+	m.registry.MustRegister(prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}), prometheus.NewGoCollector())
 	return m
 }
 
@@ -152,6 +167,34 @@ func (m *Metrics) initializeDiscoveryMetrics() {
 	m.registry.MustRegister(m.discoveryStatus, m.discoveryFreshness, m.discoveryReady)
 }
 
+func (m *Metrics) initializeKVCacheMetrics() {
+	m.kvCacheValid = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: metricNamespace, Subsystem: metricSubsystem, Name: metricKVCacheInstanceValid, Help: "Whether a backend KV cache state is safe for exact routing.",
+	}, []string{labelBackendID})
+	m.kvCacheFreshness = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: metricNamespace, Subsystem: metricSubsystem, Name: metricKVCacheFreshnessSeconds, Help: "Age of the last replay-confirmed KV cache state.",
+	}, []string{labelBackendID})
+	m.kvCacheLastSequence = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: metricNamespace, Subsystem: metricSubsystem, Name: metricKVCacheLastSequence, Help: "Last KV event sequence synchronously applied to the local index.",
+	}, []string{labelBackendID})
+	m.kvCacheAppliedBatches = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: metricNamespace, Subsystem: metricSubsystem, Name: metricKVCacheAppliedBatches, Help: "KV event batches synchronously applied to the local index.",
+	}, []string{labelBackendID})
+	m.kvCacheReplayBatches = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: metricNamespace, Subsystem: metricSubsystem, Name: metricKVCacheReplayBatches, Help: "KV event batches applied through replay.",
+	}, []string{labelBackendID})
+	m.kvCacheStatus = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: metricNamespace, Subsystem: metricSubsystem, Name: metricKVCacheStatus, Help: "Current typed KV cache state reason (one active reason has value 1).",
+	}, []string{labelBackendID, labelKVCacheStatus})
+	m.exactRequests = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: metricNamespace, Subsystem: metricSubsystem, Name: metricExactRequestsTotal, Help: "Exact routing selections by stable signal status.",
+	}, []string{labelExactStatus})
+	m.exactDegradations = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: metricNamespace, Subsystem: metricSubsystem, Name: metricExactDegradationsTotal, Help: "Exact routing selections that explicitly degraded to load-aware routing.",
+	}, []string{labelExactStatus})
+	m.registry.MustRegister(m.kvCacheValid, m.kvCacheFreshness, m.kvCacheLastSequence, m.kvCacheAppliedBatches, m.kvCacheReplayBatches, m.kvCacheStatus, m.exactRequests, m.exactDegradations)
+}
+
 // updateBackendObservations 只使用 backend ID 等有界标签，不写入请求 routing key。
 func (m *Metrics) updateBackendObservations(states map[backend.ID]observation.Backend) {
 	m.observationMu.Lock()
@@ -207,6 +250,61 @@ func (m *Metrics) deleteObservation(id string) {
 	delete(m.observationIDs, id)
 }
 
+func (m *Metrics) updateKVCache(states map[backend.ID]requestpath.KVCacheState) {
+	m.kvCacheMu.Lock()
+	defer m.kvCacheMu.Unlock()
+	for backendID := range m.kvCacheIDs {
+		if _, exists := states[backend.ID(backendID)]; !exists {
+			m.deleteKVCache(backendID)
+		}
+	}
+	for backendID, state := range states {
+		id := string(backendID)
+		m.kvCacheValid.WithLabelValues(id).Set(boolMetric(state.Valid))
+		m.kvCacheFreshness.WithLabelValues(id).Set(state.Freshness.Seconds())
+		m.kvCacheLastSequence.WithLabelValues(id).Set(float64(state.LastSequence))
+		m.kvCacheAppliedBatches.WithLabelValues(id).Set(float64(state.AppliedBatches))
+		m.kvCacheReplayBatches.WithLabelValues(id).Set(float64(state.ReplayBatches))
+		status := kvCacheStateReason(state)
+		if previous, exists := m.kvCacheStatuses[id]; exists && previous != status {
+			m.kvCacheStatus.DeleteLabelValues(id, previous)
+		}
+		m.kvCacheStatus.WithLabelValues(id, status).Set(1)
+		m.kvCacheIDs[id] = struct{}{}
+		m.kvCacheStatuses[id] = status
+	}
+}
+
+func (m *Metrics) deleteKVCache(backendID string) {
+	m.kvCacheValid.DeleteLabelValues(backendID)
+	m.kvCacheFreshness.DeleteLabelValues(backendID)
+	m.kvCacheLastSequence.DeleteLabelValues(backendID)
+	m.kvCacheAppliedBatches.DeleteLabelValues(backendID)
+	m.kvCacheReplayBatches.DeleteLabelValues(backendID)
+	if status, exists := m.kvCacheStatuses[backendID]; exists {
+		m.kvCacheStatus.DeleteLabelValues(backendID, status)
+		delete(m.kvCacheStatuses, backendID)
+	}
+	delete(m.kvCacheIDs, backendID)
+}
+
+func kvCacheStateReason(state requestpath.KVCacheState) string {
+	if state.Valid {
+		return kvCacheStatusReady
+	}
+	if state.Reason == "" {
+		return kvCacheStatusUnknown
+	}
+	return string(state.Reason)
+}
+
+func boolMetric(value bool) float64 {
+	if value {
+		return 1
+	}
+	return 0
+}
+
 func (m *Metrics) updateCircuit(backendID string, open bool) {
 	value := 0.0
 	if open {
@@ -229,6 +327,9 @@ func (m *Metrics) DeleteBackend(backendID, routingMode string) {
 	m.observationMu.Lock()
 	defer m.observationMu.Unlock()
 	m.deleteObservation(backendID)
+	m.kvCacheMu.Lock()
+	m.deleteKVCache(backendID)
+	m.kvCacheMu.Unlock()
 }
 
 func (m *Metrics) updateEndpointDiscovery(status discovery.ResolverStatus) {
@@ -248,6 +349,7 @@ func (m *Metrics) updateEndpointDiscovery(status discovery.ResolverStatus) {
 func (m *Metrics) updateRequestPath(state requestpath.State) {
 	m.updateBackendObservations(state.Observations)
 	m.updateEndpointDiscovery(state.Discovery)
+	m.updateKVCache(state.KVCache)
 	for backendID, open := range state.CircuitOpen {
 		m.updateCircuit(string(backendID), open)
 	}
@@ -264,6 +366,12 @@ func (m *Metrics) observeSelection(mode routing.Mode, lease requestpath.Lease) {
 	}
 	if decision.Policy == routing.PolicyServiceFallbackV1 {
 		m.routeFallbacks.Inc()
+	}
+	if mode == routing.ModeExactCacheLoad {
+		m.exactRequests.WithLabelValues(string(lease.State.Exact)).Inc()
+		if lease.State.Exact != requestpath.ExactAvailable && lease.State.Exact != requestpath.ExactNotRequested {
+			m.exactDegradations.WithLabelValues(string(lease.State.Exact)).Inc()
+		}
 	}
 }
 

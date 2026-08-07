@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/frozenf1sh/fishmesh/internal/serving/backend"
 	servingconfig "github.com/frozenf1sh/fishmesh/internal/serving/config"
 )
 
@@ -37,6 +38,18 @@ func TestBuildRuntimeComposesStaticGateway(t *testing.T) {
 		t.Fatalf("gateway status = %d", response.Code)
 	}
 	runtime.Close()
+}
+
+func TestKVInstanceUsesPodUIDAndPodIPEndpoints(t *testing.T) {
+	instance, err := kvInstance(backend.Backend{
+		ID: "backend-a", URL: "http://10.42.1.137:8000", Metadata: map[string]string{backend.MetadataPodUID: "uid-a"},
+	}, "qwen")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if instance.PodUID != "uid-a" || instance.PodIdentifier != "10.42.1.137:8000" || instance.EventsEndpoint != "tcp://10.42.1.137:5557" || instance.ReplayEndpoint != "tcp://10.42.1.137:5558" {
+		t.Fatalf("instance = %+v", instance)
+	}
 }
 
 func TestBuildRuntimeRejectsInvalidConfigBeforeCreatingResources(t *testing.T) {

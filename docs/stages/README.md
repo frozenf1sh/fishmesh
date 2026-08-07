@@ -26,5 +26,10 @@
 | 18 | R6A 真实 KV 信号闭环 | Render/KVEvents/replay、跨会话 128-token 命中、eviction/restart 与 R6B 门禁 |
 | 19 | R6B-1 真实分词能力域 | 不可变 prompt profile、vLLM Render adapter、typed degradation 与资源上限 |
 | 20 | R6B-2 真实 KV 状态域 | 有界索引、同步 sequence、replay freshness、cache salt 与 Pod UID 回收 |
+| 21 | R6B-3 缓存/负载联合纯路由 | exact-cache-load 值契约、硬过载保护与 requestpath 显式 load-aware 降级 |
+| 22 | R6B-4 请求路径 Exact 编排 | TokenIDs/KV Match 投影、exact 输入构造与显式 load-aware 降级 |
+| 23 | R6B-5 有界 Body 与 Exact 交付 | body replay、SSE 透传、Exact 状态/决策头与可重复闭环测试 |
+| 24 | R6B-6 组合根真实 KV 接入 | EndpointSlice/Pod UID 组合、真实 ZMQ/replay、单组 full-attention 兼容与集群双请求命中 |
+| 25 | R6C Lite 产品化 | Gateway 独立镜像、Lite exact overlay、最小 RBAC/资源边界、KV 指标与滚动/断流恢复演练 |
 
 每个阶段完成后都会补充独立中文说明，并在文末明确下一阶段边界。

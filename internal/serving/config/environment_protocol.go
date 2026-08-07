@@ -10,6 +10,8 @@ const (
 	envListenAddress           = "FISHMESH_LISTEN_ADDRESS"
 	envUpstreamURL             = "FISHMESH_UPSTREAM_URL"
 	envRoutingMode             = "FISHMESH_ROUTING_MODE"
+	envExactModel              = "FISHMESH_EXACT_MODEL"
+	envExactRenderURL          = "FISHMESH_EXACT_RENDER_URL"
 	envBackendEndpoints        = "FISHMESH_BACKEND_ENDPOINTS"
 	envLegacyPrefixEndpoints   = "FISHMESH_PREFIX_ENDPOINTS"
 	envEndpointDiscovery       = "FISHMESH_ENDPOINT_DISCOVERY"
@@ -25,6 +27,7 @@ const (
 	envObservationMaxAge       = "FISHMESH_BACKEND_OBSERVATION_MAX_AGE"
 	envUpstreamKeepAlive       = "FISHMESH_UPSTREAM_KEEPALIVE"
 	envRequestTimeout          = "FISHMESH_REQUEST_TIMEOUT"
+	envMaxRequestBodyBytes     = "FISHMESH_MAX_REQUEST_BODY_BYTES"
 	envShutdownTimeout         = "FISHMESH_SHUTDOWN_TIMEOUT"
 	envAffinityTTL             = "FISHMESH_AFFINITY_TTL"
 	envAffinityMaxEntries      = "FISHMESH_AFFINITY_MAX_ENTRIES"
@@ -49,6 +52,7 @@ const (
 	defaultObservationInterval           = 15 * time.Second
 	defaultObservationMaxAge             = 45 * time.Second
 	defaultRequestTimeout                = 90 * time.Second
+	defaultMaxRequestBodyBytes     int64 = 2 << 20
 	defaultShutdownTimeout               = 30 * time.Second
 	defaultReadHeaderTimeout             = 5 * time.Second
 	defaultAffinityTTL                   = 5 * time.Minute
@@ -62,4 +66,6 @@ const (
 	defaultCircuitMinimumRequests        = 3
 	defaultCircuitOpenDuration           = 10 * time.Second
 	defaultRoutingMode                   = routing.ModeService
+	defaultExactModel                    = "qwen2.5-0.5b-instruct"
+	defaultExactRenderURL                = "http://qwen-vllm-baseline.kubellm.svc.cluster.local:8000"
 )

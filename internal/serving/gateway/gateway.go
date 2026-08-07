@@ -14,9 +14,10 @@ import (
 
 // Config 只包含 HTTP delivery 自己解释的运行参数。
 type Config struct {
-	RoutingMode    routing.Mode
-	KeepAlive      bool
-	RequestTimeout time.Duration
+	RoutingMode         routing.Mode
+	KeepAlive           bool
+	RequestTimeout      time.Duration
+	MaxRequestBodyBytes int64
 }
 
 // Dependencies 由进程组合根创建并注入，Gateway 不选择具体实现。
@@ -40,8 +41,8 @@ type Server struct {
 
 // New 创建纯 delivery Server；所有外部能力必须已经由组合根构造完成。
 func New(config Config, dependencies Dependencies) (*Server, error) {
-	if config.RequestTimeout <= 0 {
-		return nil, fmt.Errorf("gateway request timeout must be positive")
+	if config.RequestTimeout <= 0 || config.MaxRequestBodyBytes <= 0 {
+		return nil, fmt.Errorf("gateway request timeout and body limit must be positive")
 	}
 	if dependencies.RequestPath == nil || dependencies.Admission == nil || dependencies.Transport == nil || dependencies.Metrics == nil || dependencies.Logger == nil {
 		return nil, fmt.Errorf("gateway requestpath, admission, transport, metrics and logger must not be nil")

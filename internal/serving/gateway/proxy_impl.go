@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -18,6 +19,8 @@ import (
 	"github.com/frozenf1sh/fishmesh/internal/serving/requestpath"
 	"github.com/frozenf1sh/fishmesh/internal/serving/routing"
 )
+
+var errRequestBodyTooLarge = errors.New("request body exceeds gateway limit")
 
 type proxyResult struct {
 	status  int
@@ -50,20 +53,32 @@ func (s *Server) proxy(writer http.ResponseWriter, request *http.Request) {
 	s.metrics.inflight.Inc()
 	defer s.metrics.inflight.Dec()
 
-	// 2. 从协议无关的 RequestPath 获取必须完成的 backend lease。
-	lease, err := s.requestPath.Select(request.Context(), requestpath.Request{RoutingKey: request.Header.Get(headerPrefixKey)})
+	// 2. 一次性有界读取 body；同一份字节既是 Render 输入，也会重放给实际 upstream。
+	body, err := readBoundedBody(request, s.config.MaxRequestBodyBytes)
+	if err != nil {
+		status = s.rejectRequestBody(writer, requestID, err)
+		return
+	}
+	request.Body = io.NopCloser(bytes.NewReader(body))
+	request.ContentLength = int64(len(body))
+
+	// 3. 从协议无关的 RequestPath 获取必须完成的 backend lease。
+	lease, err := s.requestPath.Select(request.Context(), requestpath.Request{
+		RoutingKey: request.Header.Get(headerPrefixKey), Route: request.URL.Path, Body: body,
+	})
 	if err != nil {
 		status = http.StatusServiceUnavailable
 		http.Error(writer, "request path unavailable", status)
 		return
 	}
 	s.metrics.observeSelection(s.config.RoutingMode, lease)
+	s.writeDecisionHeaders(writer, requestID, lease)
 
-	// 3. 转发一次 upstream 流；response headers 发出后绝不重试。
+	// 4. 转发一次 upstream 流；response headers 发出后绝不重试。
 	result := s.proxyUpstream(writer, request, requestID, lease, startedAt)
 	status = result.status
 
-	// 4. 将精确 outcome 交还 lease，统一释放 in-flight 并更新 circuit。
+	// 5. 将精确 outcome 交还 lease，统一释放 in-flight 并更新 circuit。
 	s.metrics.observeCompletion(lease, lease.Complete(result.outcome))
 }
 
@@ -82,7 +97,7 @@ func (s *Server) proxyUpstream(writer http.ResponseWriter, request *http.Request
 	defer response.Body.Close()
 
 	copyResponseHeaders(writer.Header(), response.Header)
-	s.writeResponseHeaders(writer, requestID, upstream, lease)
+	s.writeUpstreamHeader(writer, upstream)
 	writer.WriteHeader(response.StatusCode)
 	copyResult := s.copyResponse(writer, response.Body, startedAt)
 	return s.classifyStreamResult(request, requestID, lease, response.StatusCode, copyResult)
@@ -102,7 +117,7 @@ func (s *Server) handleUpstreamError(writer http.ResponseWriter, request *http.R
 	return proxyResult{status: http.StatusBadGateway, outcome: requestpath.OutcomeTransportFailure}
 }
 
-func (s *Server) writeResponseHeaders(writer http.ResponseWriter, requestID string, upstream *url.URL, lease requestpath.Lease) {
+func (s *Server) writeDecisionHeaders(writer http.ResponseWriter, requestID string, lease requestpath.Lease) {
 	decision := lease.Decision
 	writer.Header().Set(headerRequestID, requestID)
 	writer.Header().Set(headerRoutingMode, string(s.config.RoutingMode))
@@ -113,6 +128,11 @@ func (s *Server) writeResponseHeaders(writer http.ResponseWriter, requestID stri
 	if decision.SpilloverReason != "" {
 		writer.Header().Set(headerSpilloverReason, string(decision.SpilloverReason))
 	}
+	writer.Header().Set(headerExactStatus, string(lease.State.Exact))
+	writer.Header().Set(headerCachedPrefixTokens, strconv.Itoa(lease.State.CachedPrefixTokens))
+}
+
+func (*Server) writeUpstreamHeader(writer http.ResponseWriter, upstream *url.URL) {
 	writer.Header().Set(headerUpstream, upstream.Host)
 }
 
@@ -156,6 +176,16 @@ func (s *Server) rejectAdmission(writer http.ResponseWriter, requestID string, e
 	return status
 }
 
+func (s *Server) rejectRequestBody(writer http.ResponseWriter, requestID string, err error) int {
+	writer.Header().Set(headerRequestID, requestID)
+	if errors.Is(err, errRequestBodyTooLarge) {
+		http.Error(writer, "request body exceeds gateway limit", http.StatusRequestEntityTooLarge)
+		return http.StatusRequestEntityTooLarge
+	}
+	http.Error(writer, "request body unavailable", http.StatusBadRequest)
+	return http.StatusBadRequest
+}
+
 func (s *Server) newUpstreamRequest(request *http.Request, requestID string, upstream *url.URL) (*http.Request, context.CancelFunc) {
 	requestContext, cancel := context.WithTimeout(request.Context(), s.config.RequestTimeout)
 	upstreamRequest := request.Clone(requestContext)
@@ -171,6 +201,23 @@ func (s *Server) newUpstreamRequest(request *http.Request, requestID string, ups
 		upstreamRequest.Header.Set(headerConnection, connectionClose)
 	}
 	return upstreamRequest, cancel
+}
+
+func readBoundedBody(request *http.Request, maximum int64) ([]byte, error) {
+	if request.Body == nil {
+		return nil, nil
+	}
+	if request.ContentLength > maximum {
+		return nil, errRequestBodyTooLarge
+	}
+	body, err := io.ReadAll(io.LimitReader(request.Body, maximum+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(body)) > maximum {
+		return nil, errRequestBodyTooLarge
+	}
+	return body, nil
 }
 
 func copyResponseBody(writer http.ResponseWriter, body io.Reader, onFirstEvent func(), detector *sseDetector) bodyCopyResult {

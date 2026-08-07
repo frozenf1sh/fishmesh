@@ -26,10 +26,11 @@ func TestLoadEnvironmentRejectsMalformedValues(t *testing.T) {
 		key   string
 		value string
 	}{
-		"duration": {"FISHMESH_REQUEST_TIMEOUT", "ninety-seconds"},
-		"boolean":  {"FISHMESH_UPSTREAM_KEEPALIVE", "sometimes"},
-		"float":    {"FISHMESH_AFFINITY_QUEUE_DEPTH_DELTA", "low"},
-		"positive": {"FISHMESH_MAX_INFLIGHT_REQUESTS", "0"},
+		"duration":   {"FISHMESH_REQUEST_TIMEOUT", "ninety-seconds"},
+		"boolean":    {"FISHMESH_UPSTREAM_KEEPALIVE", "sometimes"},
+		"float":      {"FISHMESH_AFFINITY_QUEUE_DEPTH_DELTA", "low"},
+		"positive":   {"FISHMESH_MAX_INFLIGHT_REQUESTS", "0"},
+		"body limit": {"FISHMESH_MAX_REQUEST_BODY_BYTES", "0"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Setenv(test.key, test.value)
@@ -50,6 +51,7 @@ func TestLoadEnvironmentMapsBoundedAffinityDomains(t *testing.T) {
 	t.Setenv("FISHMESH_AFFINITY_QUEUE_DEPTH_DELTA", "2.5")
 	t.Setenv("FISHMESH_MAX_INFLIGHT_REQUESTS", "64")
 	t.Setenv("FISHMESH_MAX_CONNS_PER_HOST", "12")
+	t.Setenv("FISHMESH_MAX_REQUEST_BODY_BYTES", "4096")
 	t.Setenv("FISHMESH_CIRCUIT_EWMA_ALPHA", "0.4")
 	t.Setenv("FISHMESH_CIRCUIT_ERROR_THRESHOLD", "0.7")
 	t.Setenv("FISHMESH_CIRCUIT_MIN_REQUESTS", "5")
@@ -62,7 +64,7 @@ func TestLoadEnvironmentMapsBoundedAffinityDomains(t *testing.T) {
 	if config.Routing.Mode != routing.ModeBoundedAffinity || bounded.TTL != 2*time.Minute || bounded.MaxEntries != 2048 || bounded.InflightDelta != 3 || bounded.QueueDepthDelta != 2.5 {
 		t.Fatalf("unexpected routing config: %+v", config.Routing)
 	}
-	if config.Admission.MaxInflight != 64 || config.Transport.MaxConnsPerHost != 12 || config.Circuit.EWMAAlpha != 0.4 || config.Circuit.ErrorThreshold != 0.7 || config.Circuit.MinimumRequests != 5 || config.Circuit.OpenDuration != 15*time.Second {
+	if config.Gateway.MaxRequestBodyBytes != 4096 || config.Admission.MaxInflight != 64 || config.Transport.MaxConnsPerHost != 12 || config.Circuit.EWMAAlpha != 0.4 || config.Circuit.ErrorThreshold != 0.7 || config.Circuit.MinimumRequests != 5 || config.Circuit.OpenDuration != 15*time.Second {
 		t.Fatalf("unexpected reliability config: %+v", config)
 	}
 }

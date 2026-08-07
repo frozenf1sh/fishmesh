@@ -88,6 +88,58 @@ func TestVLLMStoreRejectsUnsupportedEngineSemantics(t *testing.T) {
 	}
 }
 
+func TestVLLMStoreAcceptsSingleFullAttentionGroup(t *testing.T) {
+	store, err := newVLLMStore(DefaultConfig())
+	if err != nil {
+		t.Fatalf("create store: %v", err)
+	}
+	group := 0
+	event := &kvevents.BlockStoredEvent{
+		BlockHashes:     []uint64{101, 102},
+		Tokens:          sequentialTokens(32),
+		BlockSize:       16,
+		DeviceTier:      "gpu",
+		GroupIdx:        &group,
+		KVCacheSpecKind: kvevents.KVCacheSpecKindFullAttention,
+	}
+	if err := store.applyOne(context.Background(), "pod-a", "qwen", event); err != nil {
+		t.Fatalf("single full-attention group must be compatible: %v", err)
+	}
+	if err := store.applyOne(context.Background(), "pod-a", "qwen", &kvevents.BlockRemovedEvent{
+		BlockHashes: []uint64{101, 102}, DeviceTier: "gpu", GroupIdx: &group,
+	}); err != nil {
+		t.Fatalf("single full-attention group removal must be compatible: %v", err)
+	}
+}
+
+func TestVLLMStoreRejectsNonCanonicalGroupSemantics(t *testing.T) {
+	store, err := newVLLMStore(DefaultConfig())
+	if err != nil {
+		t.Fatalf("create store: %v", err)
+	}
+	nonZeroGroup := 1
+	slidingWindowGroup := 0
+	slidingWindow := 128
+	for name, event := range map[string]*kvevents.BlockStoredEvent{
+		"non-zero group": {
+			BlockHashes: []uint64{101, 102}, Tokens: sequentialTokens(32), BlockSize: 16, DeviceTier: "gpu",
+			GroupIdx: &nonZeroGroup, KVCacheSpecKind: kvevents.KVCacheSpecKindFullAttention,
+		},
+		"sliding window": {
+			BlockHashes: []uint64{201, 202}, Tokens: sequentialTokens(32), BlockSize: 16, DeviceTier: "gpu",
+			GroupIdx: &slidingWindowGroup, KVCacheSpecKind: kvevents.KVCacheSpecKindSlidingWindow, KVCacheSpecSlidingWindowSize: &slidingWindow,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := store.applyOne(context.Background(), "pod-a", "qwen", event)
+			var fault *eventFault
+			if !errors.As(err, &fault) || fault.reason != ReasonUnsupportedEvent {
+				t.Fatalf("unsupported group semantics were not typed: %T %v", err, err)
+			}
+		})
+	}
+}
+
 func sequentialTokens(count int) []uint32 {
 	tokens := make([]uint32, count)
 	for index := range tokens {

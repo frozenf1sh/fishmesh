@@ -15,29 +15,35 @@ const (
 	ModePrefixAffinity  Mode = "prefix-affinity"
 	ModeLoadAware       Mode = "load-aware"
 	ModeBoundedAffinity Mode = "bounded-affinity"
+	ModeExactCacheLoad  Mode = "exact-cache-load"
 
-	PolicyServiceV1         Policy = "service-v1"
-	PolicyPureAffinityV1    Policy = "pure-affinity-v1"
-	PolicyLeastInflightV1   Policy = "least-inflight-v1"
-	PolicyBoundedAffinityV1 Policy = "bounded-affinity-v1"
-	PolicyServiceFallbackV1 Policy = "service-fallback-v1"
+	PolicyServiceV1           Policy = "service-v1"
+	PolicyPureAffinityV1      Policy = "pure-affinity-v1"
+	PolicyLeastInflightV1     Policy = "least-inflight-v1"
+	PolicyBoundedAffinityV1   Policy = "bounded-affinity-v1"
+	PolicyServiceFallbackV1   Policy = "service-fallback-v1"
+	PolicyExactCacheLoadV1    Policy = "exact-cache-load-v1"
+	PolicyExactLoadFallbackV1 Policy = "exact-load-fallback-v1"
 
-	ReasonServiceDefault        Reason = "service-default"
-	ReasonPrefixAffinity        Reason = "prefix-affinity"
-	ReasonLeastInflight         Reason = "least-inflight"
-	ReasonMissingKeyLeastLoaded Reason = "missing-key-least-loaded"
-	ReasonAffinityHit           Reason = "affinity-hit"
-	ReasonAffinityMiss          Reason = "affinity-miss"
-	ReasonAffinitySpillover     Reason = "affinity-spillover"
-	ReasonQueueDepth            Reason = "queue-depth"
-	ReasonLocalInflight         Reason = "local-inflight"
-	ReasonIneligible            Reason = "ineligible"
-	ReasonCircuitOpen           Reason = "circuit-open"
-	ReasonDiscoveryFallback     Reason = "discovery-fallback"
-	ReasonCircuitFallback       Reason = "circuit-fallback"
-	ReasonStrategyFallback      Reason = "strategy-fallback"
-	ReasonBackendFallback       Reason = "backend-fallback"
-	ReasonAdmissionCapacity     Reason = "admission-capacity"
+	ReasonServiceDefault         Reason = "service-default"
+	ReasonPrefixAffinity         Reason = "prefix-affinity"
+	ReasonLeastInflight          Reason = "least-inflight"
+	ReasonMissingKeyLeastLoaded  Reason = "missing-key-least-loaded"
+	ReasonAffinityHit            Reason = "affinity-hit"
+	ReasonAffinityMiss           Reason = "affinity-miss"
+	ReasonAffinitySpillover      Reason = "affinity-spillover"
+	ReasonQueueDepth             Reason = "queue-depth"
+	ReasonLocalInflight          Reason = "local-inflight"
+	ReasonIneligible             Reason = "ineligible"
+	ReasonCircuitOpen            Reason = "circuit-open"
+	ReasonDiscoveryFallback      Reason = "discovery-fallback"
+	ReasonCircuitFallback        Reason = "circuit-fallback"
+	ReasonStrategyFallback       Reason = "strategy-fallback"
+	ReasonBackendFallback        Reason = "backend-fallback"
+	ReasonAdmissionCapacity      Reason = "admission-capacity"
+	ReasonExactCacheLoad         Reason = "exact-cache-load"
+	ReasonExactSignalUnavailable Reason = "exact-signal-unavailable"
+	ReasonHardOverloadFallback   Reason = "hard-overload-fallback"
 )
 
 // Mode identifies one configured endpoint-selection strategy.
@@ -71,6 +77,45 @@ type Snapshot struct {
 	Inflight     map[backend.ID]int64
 	Observations map[backend.ID]observation.Backend
 	Ineligible   map[backend.ID]Reason
+	Loads        map[backend.ID]Load
+	Exact        ExactInput
+}
+
+// Load 是 routing 解释的逐 backend 负载值；缺失观测必须显式标记，而不能伪装成零负载。
+type Load struct {
+	QueueDepth   int64
+	Running      int64
+	Valid        bool
+	HardOverload bool
+}
+
+// CacheMatch 是 routing 对真实 KV 状态的只读投影。它不暴露 kvcache 的实现或第三方类型。
+// Valid=false 表示信号未知或过期；MatchedTokens=0 只有在 Valid=true 时才代表真实零命中。
+type CacheMatch struct {
+	Valid         bool
+	MatchedTokens int
+}
+
+// ExactInput 是一次 exact-cache-load 决策的请求侧值对象。调用方必须用 tokenization 的
+// TokenIDs 计算 PromptTokens，并把 kvcache.Match 逐字段投影为 Matches；routing 不拥有两者。
+type ExactInput struct {
+	PromptTokens int
+	Matches      map[backend.ID]CacheMatch
+}
+
+// UsableFor 只有在每个候选都有有效 exact match 时返回 true。未知/过期不是零命中，调用方
+// 必须据此显式降级到 load-aware，而非让 exact 策略猜测缺失数据。
+func (i ExactInput) UsableFor(backends []backend.Backend) bool {
+	if i.PromptTokens <= 0 || len(backends) == 0 {
+		return false
+	}
+	for _, candidate := range backends {
+		match, ok := i.Matches[candidate.ID]
+		if !ok || !match.Valid || match.MatchedTokens < 0 || match.MatchedTokens > i.PromptTokens {
+			return false
+		}
+	}
+	return true
 }
 
 // Decision records the selected backend and explainable policy result.
@@ -105,6 +150,8 @@ func New(mode Mode, service backend.Backend) (Strategy, error) {
 		return NewLoadAware(), nil
 	case ModeBoundedAffinity:
 		return NewBoundedAffinity(DefaultBoundedAffinityConfig())
+	case ModeExactCacheLoad:
+		return NewExactCacheLoad(), nil
 	default:
 		return nil, fmt.Errorf("unsupported routing mode %q", mode)
 	}

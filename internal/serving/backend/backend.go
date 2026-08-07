@@ -14,6 +14,8 @@ const (
 	// MetadataPodName is the discovery-to-identity contract for a Kubernetes
 	// Pod targetRef. Live Pod state is deliberately not stored in Metadata.
 	MetadataPodName = "pod_name"
+	// MetadataPodUID 是 EndpointSlice targetRef 发布的实例生命周期身份；KV index 依赖它清除复用 IP 的旧归属。
+	MetadataPodUID = "pod_uid"
 
 	httpScheme       = "http"
 	endpointIDPrefix = "endpoint-"

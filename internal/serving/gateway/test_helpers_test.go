@@ -18,6 +18,7 @@ import (
 
 const (
 	defaultRequestTimeout = 5 * time.Second
+	defaultRequestBodyMax = 2 << 20
 )
 
 type testRuntimeConfig struct {
@@ -75,7 +76,7 @@ func newTestServer(t testing.TB, config testRuntimeConfig) (*Server, error) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server, err := New(Config{RoutingMode: config.RoutingMode, KeepAlive: config.KeepAlive, RequestTimeout: config.RequestTimeout}, Dependencies{
+	server, err := New(Config{RoutingMode: config.RoutingMode, KeepAlive: config.KeepAlive, RequestTimeout: config.RequestTimeout, MaxRequestBodyBytes: defaultRequestBodyMax}, Dependencies{
 		RequestPath: pathService, Admission: admissionController, Transport: pool, Metrics: metrics, Logger: testLogger(),
 	})
 	if err != nil {
