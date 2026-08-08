@@ -71,12 +71,12 @@ Standard mode 面向共享 Gateway、多推理池和平台统一入口。FishMes
 - 严格配置、探针、优雅关闭、最小 RBAC 和经过 race test 的请求生命周期；
 - 固定 llm-d Router v0.9.0 的 adapter 与 `fishmesh-epp` 组合根，本地契约测试已通过。
 
-R6A 真实信号门禁已经通过：vLLM Render/KVEvents/replay 为共享 system prompt 的两个不同会话
-返回了逐 Pod 128-token 命中，真实 eviction、subscriber 恢复和 Pod 重建也正确移除了旧 locality。
-Exact routing 仍未接入 Gateway；R6B 先按契约实现 tokenization 与 KV cache 能力域，再修改请求路径。
+R6A–R6B 的真实信号与请求路径已完成：vLLM Render/KVEvents/replay 为共享 system prompt 的不同会话
+提供逐 Pod 命中，Gateway 已据此执行 `exact-cache-load-v1`。真实 eviction、subscriber 恢复和 Pod
+重建会移除旧 locality；unknown/stale 明确降级到 load-aware，绝不伪装成零 token 命中。
 
-因此当前 `X-FishMesh-Prefix-Key` 只是兼容期 session hint，不是 prefix-cache awareness 的证据。
-Exact 路由接入后，它将变成可选输入。
+`X-FishMesh-Prefix-Key` 仍是可选兼容 session hint；下面的 exact 演示刻意不发送它，以证明不同 user
+message 之间的缓存复用。
 
 ## 路由契约
 
@@ -94,45 +94,79 @@ Exact 路由接入后，它将变成可选输入。
 FishMesh 不声称发明新调度算法。工程贡献是把真实 engine state、有界状态、可靠降级和轻量流式
 数据面完整交付，并且能够通过标准 llm-d 运行时进入平台环境。
 
-## 运行当前 baseline
+## 五分钟 Lite 演示
 
-验证仓库和集群：
+演示前提见 [`deploy/lite-exact/README.md`](deploy/lite-exact/README.md)：已有 K3s、模型 PV 和可导入
+的 Gateway 镜像。先确认安全默认值 `bounded-affinity`，再临时启用 exact overlay。Standard mode / llm-d
+集成本轮后置。
+
+验证仓库和 bounded-affinity 基线：
 
 ```bash
 make ci
 
 kubectl --kubeconfig ~/.kube/fishmesh.yaml get nodes
-kubectl --kubeconfig ~/.kube/fishmesh.yaml \
-  -n kubellm get deploy,pod,svc,endpointslice
+kubectl --kubeconfig ~/.kube/fishmesh.yaml -n kubellm get deployment
 ```
 
-转发已经部署的 Gateway：
+安装 exact overlay 并等待真实 KV 信号链路就绪。已提交 overlay 使用 `r6d2-r1`：
 
 ```bash
-kubectl --kubeconfig ~/.kube/fishmesh.yaml \
-  -n kubellm port-forward svc/fishmesh-gateway 8080:8080
+make image VERSION=r6d2-r1
+kubectl --kubeconfig ~/.kube/fishmesh.yaml apply -k deploy/lite-exact
+kubectl --kubeconfig ~/.kube/fishmesh.yaml -n kubellm rollout status deploy/qwen-vllm --timeout=10m
+kubectl --kubeconfig ~/.kube/fishmesh.yaml -n kubellm rollout status deploy/fishmesh-gateway --timeout=5m
+kubectl --kubeconfig ~/.kube/fishmesh.yaml -n kubellm port-forward svc/fishmesh-gateway 8080:8080
 ```
 
-发送流式请求。该 header 对连通性不是必需的；在当前 baseline 下，它用于 session affinity：
+另开终端，用相同的长 system prompt 和不同 user message 发送两个流式请求。**不要**发送
+`X-FishMesh-Prefix-Key`，并分别保存响应头：
 
 ```bash
-curl -N http://127.0.0.1:8080/v1/chat/completions \
+SYSTEM_PROMPT="$(printf 'FishMesh demo policy: answer concisely, state assumptions, preserve streaming semantics, and never reveal hidden reasoning. %.0s' {1..32})"
+
+curl -sS -D /tmp/fishmesh-first.headers -N http://127.0.0.1:8080/v1/chat/completions \
   -H 'Content-Type: application/json' \
-  -H 'X-FishMesh-Prefix-Key: demo-session' \
   -d '{
     "model": "qwen2.5-0.5b-instruct",
-    "messages": [{"role": "user", "content": "简要介绍一下 FishMesh。"}],
+    "messages": [
+      {"role": "system", "content": "'"${SYSTEM_PROMPT}"'"},
+      {"role": "user", "content": "first request"}],
     "stream": true,
     "max_tokens": 64
   }'
+
+curl -sS -D /tmp/fishmesh-second.headers -N http://127.0.0.1:8080/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "qwen2.5-0.5b-instruct",
+    "messages": [
+      {"role": "system", "content": "'"${SYSTEM_PROMPT}"'"},
+      {"role": "user", "content": "second request"}],
+    "stream": true,
+    "max_tokens": 64
+  }'
+
+grep -iE 'x-fishmesh-(exact-status|policy|route-reason|cached-prefix-tokens)' \
+  /tmp/fishmesh-first.headers /tmp/fishmesh-second.headers
 ```
+
+首请求在 replay 变为 fresh 前可以正确返回 `match-unavailable` 和 `exact-load-fallback-v1`。有效预热后，
+第二请求应返回 `available`、`exact-cache-load-v1`、`exact-cache-load` 及非零
+`X-FishMesh-Cached-Prefix-Tokens`。`available` 但 cached tokens 为零是真实零命中，不等于 unavailable。
+结束后恢复默认值：`kubectl --kubeconfig ~/.kube/fishmesh.yaml apply -k deploy/baseline/base`。
+
+参考集群已运行 `deploy/monitoring` 中的 Prometheus + Grafana：Gateway 有真实 scrape target，规则已经加载，
+`FishMesh Gateway` dashboard 已自动 provision。它有意不部署 Alertmanager/通知接收器，所以规则会计算并可见，
+但不会向外投递。见 [`deploy/monitoring/README.md`](deploy/monitoring/README.md) 与
+[`docs/notes/runbook.md`](docs/notes/runbook.md)。
 
 ## 交付优先级
 
 | 优先级 | 范围 | 决定 |
 | --- | --- | --- |
 | 主产品 | Gateway、requestpath、routing、discovery、observation、circuit、admission、transport | 产品化 |
-| 新核心 | tokenization、KVEvents/index、exact-cache-load policy | R6A 已通过，R6B 按契约实施 |
+| 新核心 | tokenization、KVEvents/index、exact-cache-load policy | 已完成；Lite exact overlay 可用 |
 | 标准集成 | llmd adapter、`fishmesh-epp`、Gateway/InferencePool 部署 | 保留，Lite MVP 后完成 |
 | 开发工具 | simulator、loadgen | 冻结功能，只用于回归/benchmark |
 | 冻结 | analyst、Diagnostics Context | 只接受安全/构建修复，从默认镜像/部署移除 |
@@ -143,15 +177,13 @@ curl -N http://127.0.0.1:8080/v1/chat/completions \
 
 ## 路线图
 
-1. **R6A——真实 KV 信号门禁（已完成）：** 在现有 K3s 集群验证 Render/KVEvents/replay、
-   跨会话 128-token 命中、eviction、restart 清理与显式失效/恢复。
-2. **R6B——能力域：** contract-first 的 tokenization/kvcache、有界 index、纯 cache/load
-   策略、requestpath 接入和 llm-d precise match 翻译。
-3. **R6C——Lite 交付：** gateway-only 镜像、一键部署、安全/资源、dashboard、alerts、runbook
-   和真实 rollout/failure 验收。
-4. **R6D——有限对照：** Service、FishMesh load-only、FishMesh exact 和 llm-d precise，只跑
-   cache-cold、shared-system-prefix 和 overload 三类工程场景。
-5. **R6E——Standard 交付：** Gateway/HTTPRoute/InferencePool/EPP 部署与 wire-level 契约。
+1. **R6A–R6C（已完成）：** 真实 Render/KVEvents/replay、能力域、exact requestpath、
+   gateway-only Lite 镜像和真实 rollout/failure 验收。Prometheus/Grafana 面板和规则已实集群接入，
+   但尚未部署外部告警通知。
+2. **R6D（已完成）：** 有限的 Service/load-only/exact profile，包含受控 c=1 前缀分段；数据仅是
+   correctness/profile 证据。
+3. **Lite release 收尾（进行中）：** 用户 demo、发布制品及升级/回滚说明。
+4. **R6E——Standard 交付（后置）：** Gateway/HTTPRoute/InferencePool/EPP 部署与 wire-level 契约。
 
 实验只用于决定实现、验证验收或防止回归。现有 simulator 和历史实验不是独立产品路线。
 

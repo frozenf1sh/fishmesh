@@ -1,0 +1,45 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fishmesh-gateway-alert-rules
+  labels:
+    prometheus_rule: "1"
+  annotations:
+    fishmesh.io/validation: loaded-by-fishmesh-prometheus
+data:
+  fishmesh-gateway.rules.yaml: |
+    groups:
+      - name: fishmesh-gateway
+        rules:
+          - alert: FishMeshGatewayUnavailable
+            expr: up{namespace="kubellm",pod=~"fishmesh-gateway-.*"} == 0
+            for: 5m
+            labels:
+              severity: critical
+            annotations:
+              summary: FishMesh Gateway scrape target is unavailable
+              runbook_url: docs/notes/runbook.md#gateway-unavailable
+          - alert: FishMeshExactSignalUnavailable
+            expr: sum(fishmesh_gateway_kv_cache_instance_valid) == 0
+            for: 2m
+            labels:
+              severity: warning
+            annotations:
+              summary: No KV cache instance is safe for exact routing
+              runbook_url: docs/notes/runbook.md#exact-signal-unavailable
+          - alert: FishMeshKVReplayStale
+            expr: max(fishmesh_gateway_kv_cache_freshness_seconds) > 30
+            for: 2m
+            labels:
+              severity: warning
+            annotations:
+              summary: KV replay freshness exceeds the Lite safety window
+              runbook_url: docs/notes/runbook.md#kv-replay-stale
+          - alert: FishMeshExactDegradationRateHigh
+            expr: sum(rate(fishmesh_gateway_exact_degradations_total[5m])) > 0.1
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: Exact routing is repeatedly degrading to load-aware
+              runbook_url: docs/notes/runbook.md#exact-signal-unavailable

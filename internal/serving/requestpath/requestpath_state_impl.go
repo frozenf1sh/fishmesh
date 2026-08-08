@@ -38,18 +38,24 @@ func (s *service) reconcileLoop(ctx context.Context) {
 func (s *service) reconcileFromResolver(ctx context.Context) {
 	backends, err := s.resolver.Snapshot(ctx)
 	if err == nil {
-		s.reconcileBackends(backends)
+		s.reconcileBackends(ctx, backends)
 	}
 }
 
-func (s *service) reconcileBackends(backends []backend.Backend) {
+func (s *service) reconcileBackends(ctx context.Context, backends []backend.Backend) {
 	// 1. 先把策略和 circuit 对齐到同一份 discovery membership。
 	if reconciler, ok := s.strategy.(routing.BackendReconciler); ok {
 		reconciler.ReconcileBackends(backends)
 	}
 	s.circuits.Reconcile(backends)
 
-	// 2. 仅回收已经离开 membership 且没有在途请求的本地计数器。
+	// 2. exact subscriber 也必须随 EndpointSlice 主动换代。失败保持 KV unknown，后续请求会
+	// 显式降级到 load-aware；不能因为后台 replay 尚未可用而撤销 discovery membership。
+	if s.kvReconcile != nil {
+		_ = s.kvReconcile(ctx, backends)
+	}
+
+	// 3. 仅回收已经离开 membership 且没有在途请求的本地计数器。
 	active := make(map[backend.ID]struct{}, len(backends)+1)
 	active[s.config.Service.ID] = struct{}{}
 	for _, candidate := range backends {
@@ -67,7 +73,7 @@ func (s *service) reconcileBackends(backends []backend.Backend) {
 	}
 	s.mu.Unlock()
 
-	// 3. 锁外通知 transport/metrics，避免跨 domain 回调形成锁顺序。
+	// 4. 锁外通知 transport/metrics，避免跨 domain 回调形成锁顺序。
 	s.notifyRemoved(removed)
 }
 

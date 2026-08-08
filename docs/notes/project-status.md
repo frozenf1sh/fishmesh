@@ -1,21 +1,42 @@
 # FishMesh 项目当前状态
 
-最后项目状态更新时间：2026-08-12；集群最后真实验收时间：2026-08-12。仓库为
+最后项目状态更新时间：2026-08-13；集群最后真实验收时间：2026-08-13。仓库为
 `frozenf1sh/fishmesh`（private），当前 `main` 分支
 包含可信 serving baseline、bounded-affinity-v1、request-path reliability 和工程优先的项目
 章程。
 
 request-path reliability、Serving Domain R1–R4、无 GPU simulator 基础、R5C llm-d 本地集成和
-R6A 真实 KV 信号门禁、R6B-1 至 R6B-6 与 R6C 已完成：真实 Render、同步 KV index、pure routing、
+R6A 真实 KV 信号门禁、R6B-1 至 R6B-6、R6C、R6D 与 R6D2 已完成：真实 Render、同步 KV index、pure routing、
 requestpath 编排、有界 body/SSE delivery、组合根、真实 ZMQ/replay 和可安装 Lite 产品面均已闭环。R6C
 在真实双 vLLM 集群以不带 session key 的两个相同 system prompt、不同 user message 请求，记录到第二请求
 `available`、`exact-cache-load-v1` 和 80 cached prefix tokens；删除实际命中 Pod 后，过渡请求显式降级、
-替代 Pod replay 后恢复 exact 命中。R5D 标准 Gateway/EPP 部署不取消，但后移到 Lite exact KV MVP 之后。
+替代 Pod replay 后恢复 exact 命中。R6D 以每组 3×200 默认 loadgen requests 对比 direct Service、
+load-only 与 exact：exact 保持 explicit degradation correctness，但在单卡短生成 profile 的 TTFT/吞吐
+不优于 Service，结论仅限 profile evidence。R6D2 修复 vLLM rollout 后 EndpointSlice membership 未主动换代
+KV subscriber 的缺口，并以独立 cache generation、单 Pod prewarm 的 c=1 控制完成 512/2048 两档
+Service/exact 对照：exact P50 TTFT 分别低 21.89%/20.65%，但绝对收益 6.845/6.580 ms 均未超过约 10 ms
+routing overhead，故没有声称 prefix breakpoint。R5D 标准 Gateway/EPP 部署不取消，但后移到 Lite exact KV MVP 之后。
 方向基准见 `docs/design/project-charter.md`，新决策见 `docs/design/decisions/002-lite-exact-kv-routing.md`。
 
-基础配置仍为 `bounded-affinity`，`X-FishMesh-Prefix-Key` 继续只作为 session affinity hint；当前运行集群
-已通过 `deploy/lite-exact` 显式启用 `exact-cache-load`。exact 模式通过
+基础配置仍为 `bounded-affinity`，`X-FishMesh-Prefix-Key` 继续只作为 session affinity hint；R6D2 收尾后
+集群已恢复 `deploy/experiments/r6d-bounded-affinity`。exact 模式通过
 EndpointSlice/Pod UID 建立实例、订阅 KVEvents/replay；unknown/stale 永不伪装成零命中。
+
+Lite 监控已在参考集群完成部署和接入：`deploy/monitoring` 创建 namespace-scoped Prometheus、Grafana、
+持久卷、dashboard、rule 文件与最小服务发现 RBAC。Prometheus 的 Gateway target 为 `up`，四条规则均已
+加载且 inactive；Grafana 已 provision Prometheus datasource 和 `FishMesh Gateway` dashboard。该最小栈不
+部署 Alertmanager/外部 notification receiver，故规则可见且会评估，但不声称已完成值班告警投递。接入和
+体验步骤见 `deploy/monitoring/README.md` 与 `docs/notes/runbook.md`。
+
+README 与 README_CN 现以五分钟 Lite demo 为入口：确认 `bounded-affinity` 默认基线后临时安装
+`lite-exact`，用不带 session key 的同一长 system prompt、不同 user message 请求读取 exact 决策头，
+再恢复基线；监控面板可同时观察请求、TTFT、KV 有效性/freshness、降级与 RSS。Standard mode（R6E/llm-d
+部署）仍明确后置。
+
+Lite 的发布/回滚边界已记录在 `docs/notes/release-notes.md`：当前已实证的是 macOS arm64 构建机
+交叉构建并离线导入 GPU 节点的 Linux amd64 Gateway；Dockerfile 的 arm64 target、远程 multi-arch
+manifest 与 SBOM attestation 是发布前流程，尚无真实 release 验证。升级和回滚以 manifest/image digest
+及实际 ConfigMap 为证据，并在 exact 信号异常时恢复 `bounded-affinity`，不改变 unknown/stale 的降级语义。
 
 ## 当前运行拓扑
 
@@ -38,7 +59,7 @@ OrbStack 内置的 Kubernetes 集群不是这个多节点 control plane。官方
   `qwen-vllm` 仍然是 headless Service，EndpointSlice 实验直接读取它的 Ready 地址；
 - `fishmesh-gateway` 是一个 Go streaming proxy，运行在 GPU 节点。它不申请 GPU，
   但因为第一个镜像是 amd64 而 control plane 是 ARM64，所以被放在该节点；
-- Gateway 当前运行只含 Gateway 二进制的 `fishmesh-gateway:r6c-lite-r1`，Lite overlay 启用
+- Gateway 当前运行只含 Gateway 二进制的 `fishmesh-gateway:r6d2-r1`；Lite exact overlay 启用
   EndpointSlice + KVEvents/replay exact routing。它使用专用 SA，只有 EndpointSlice
   `get/list/watch`，无 Pods/Secrets 权限；unknown/stale 仍回退 load-aware；
 - analyst、simulator 和 loadgen 已冻结且不在当前产品部署或 Gateway 镜像中；遗留 analyst
@@ -230,13 +251,24 @@ VM 的影响更大：Kubernetes API 和 reconciliation 也会停止，应按完�
   Pod 后旧事件流退出、剩余 backend 的 zero miss 仍为 exact，替代 Pod replay 的过渡明确降级，随后
   恢复 80-token exact hit。llm-d 的 controller-runtime logger 由 Gateway 入口显式 discard，修复后的
   live/recovery 日志未再出现 stack warning。Flannel 仍不执行 NetworkPolicy，策略只作为 CNI 迁移后待启用项。
+- R6D 有限性能对照：复用默认 loadgen workload，对 Service/load-only/exact 各执行 3×200 requests，
+  以 SSE TTFT、两 vLLM Pod token counter delta、Gateway process CPU/RSS 与 policy headers 形成一页表。
+  exact 的 8/600 restart/replay 过渡请求显式降级，592/600 使用 exact policy，未观察错误 exact 声明；
+  但其 P50/P95 TTFT 分别比 Service 高 32.19%/12.82%，generation throughput 低 7.91%。单 RTX 4060
+  time-slicing、Qwen2.5-0.5B、两个共享副本的结果仅作 correctness/profile evidence；当前 metrics 不提供
+  可按 treatment 归因的 per-event latency。实验后已恢复 bounded-affinity。
+- R6D2 前缀长度分段对照：修复 requestpath 后台 reconcile 漏掉 KV lifecycle 的缺口；vLLM rollout 后无需
+  业务请求即可为新 EndpointSlice Pod 建立 `Valid=true` subscriber。按独立 cache generation、单 Pod
+  prewarm 验证 c=1，完成 512/2048 的 Service/exact 各 200 requests：exact P50/P95 分别为
+  24.429/24.936、25.279/26.680 ms，Service 为 31.274/35.442、31.859/37.059 ms。收益低于约 10 ms
+  routing overhead，未声称拐点；GPU dmon 峰值 68°C，无 watchdog 告警，最终恢复 bounded-affinity。
 
 ## 下一步待办
 
 1. 之后按 llmd 的顺序逐域接入，每个切片单独更新阶段文档、
    提交和推送；
-2. Lite MVP 后完成 R6D：执行 Service/load-only/FishMesh exact/llm-d precise 的有限同环境对照；
-3. R6D 后再完成原 R5D Standard mode，并执行 Gateway/EPP 生产集成；
+2. 完成 R6E/原 R5D Standard mode，并执行 Gateway/EPP/llm-d precise 生产兼容性闭环；
+3. 如需性能归因，先单独定义 per-event latency 与逐请求 cached-prefix 可观测契约，再执行有限复测；
    的有限同环境对照；
 4. 在声称 NetworkPolicy 已生效前迁移到支持 policy enforcement 的 CNI；当前 Flannel 不能执行
    声明式 NetworkPolicy。

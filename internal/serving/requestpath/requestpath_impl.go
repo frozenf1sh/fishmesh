@@ -74,7 +74,7 @@ func (s *service) Select(ctx context.Context, request Request) (Lease, error) {
 	// 1. 读取 discovery，并先让所有成员范围状态看到同一份 backend 列表。
 	backends, err := s.resolver.Snapshot(ctx)
 	if err == nil {
-		s.reconcileBackends(backends)
+		s.reconcileBackends(ctx, backends)
 	} else {
 		backends = nil
 	}
@@ -115,7 +115,7 @@ func (s *service) State(ctx context.Context) State {
 		}
 		return state
 	}
-	s.reconcileBackends(backends)
+	s.reconcileBackends(ctx, backends)
 	state, _ := s.buildSnapshot(backends)
 	return state
 }

@@ -1,0 +1,75 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fishmesh-gateway-dashboard
+  labels:
+    grafana_dashboard: "1"
+  annotations:
+    fishmesh.io/validation: deployed-with-prometheus-and-grafana
+data:
+  fishmesh-gateway.json: |
+    {
+      "annotations": {"list": []},
+      "editable": true,
+      "panels": [
+        {
+          "datasource": {"type": "prometheus", "uid": "$datasource"},
+          "fieldConfig": {"defaults": {"unit": "reqps"}, "overrides": []},
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+          "id": 1,
+          "targets": [{"expr": "sum(rate(fishmesh_gateway_requests_total[5m]))", "refId": "A"}],
+          "title": "Gateway request rate",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "$datasource"},
+          "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+          "id": 2,
+          "targets": [{"expr": "histogram_quantile(0.95, sum by (le) (rate(fishmesh_gateway_first_sse_event_seconds_bucket[5m])))", "refId": "A"}],
+          "title": "TTFT P95",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "$datasource"},
+          "fieldConfig": {"defaults": {"min": 0, "max": 1}, "overrides": []},
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+          "id": 3,
+          "targets": [{"expr": "fishmesh_gateway_kv_cache_instance_valid", "legendFormat": "{{backend_id}}", "refId": "A"}],
+          "title": "KV instances safe for exact routing",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "$datasource"},
+          "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+          "id": 4,
+          "targets": [{"expr": "fishmesh_gateway_kv_cache_freshness_seconds", "legendFormat": "{{backend_id}}", "refId": "A"}],
+          "title": "KV replay freshness",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "$datasource"},
+          "fieldConfig": {"defaults": {}, "overrides": []},
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
+          "id": 5,
+          "targets": [{"expr": "sum by (status) (rate(fishmesh_gateway_exact_degradations_total[5m]))", "legendFormat": "{{status}}", "refId": "A"}],
+          "title": "Exact degradations by status",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "$datasource"},
+          "fieldConfig": {"defaults": {"unit": "bytes"}, "overrides": []},
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
+          "id": 6,
+          "targets": [{"expr": "process_resident_memory_bytes", "refId": "A"}],
+          "title": "Gateway RSS",
+          "type": "timeseries"
+        }
+      ],
+      "schemaVersion": 39,
+      "templating": {"list": [{"current": {}, "label": "Prometheus", "name": "datasource", "query": "prometheus", "type": "datasource"}]},
+      "title": "FishMesh Gateway",
+      "uid": "fishmesh-gateway",
+      "version": 1
+    }

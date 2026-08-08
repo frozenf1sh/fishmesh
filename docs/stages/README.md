@@ -31,5 +31,11 @@
 | 23 | R6B-5 有界 Body 与 Exact 交付 | body replay、SSE 透传、Exact 状态/决策头与可重复闭环测试 |
 | 24 | R6B-6 组合根真实 KV 接入 | EndpointSlice/Pod UID 组合、真实 ZMQ/replay、单组 full-attention 兼容与集群双请求命中 |
 | 25 | R6C Lite 产品化 | Gateway 独立镜像、Lite exact overlay、最小 RBAC/资源边界、KV 指标与滚动/断流恢复演练 |
+| 25-R6D | 有限性能对照 | Service/load-only/exact 各三轮默认 loadgen profile、边界结论与 bounded-affinity 恢复 |
+| 26-R6D2 | 前缀长度分段对照 | 修复 rollout 后 KV subscriber 生命周期；受控 c=1 的 512/2048 Service/exact 对照、温度纪律与无拐点结论 |
+| 27 | Lite 监控与故障 Runbook | 可导入 Grafana dashboard、Prometheus rule 配置与证据优先的故障处置；参考集群尚未启用或验证监控栈 |
+| 28 | Lite 五分钟 Demo 与完成度对齐 | 中英文 README 明确 bounded-affinity 默认值、exact 演示及未验证监控边界；Standard mode 后置 |
+| 29 | Lite 发布与回滚说明 | 多架构/SBOM 发布流程、版本矩阵和 digest 驱动的升级与回滚；仅 amd64 离线路径已实证 |
+| 30 | Lite 监控栈部署与接入 | Prometheus/Grafana 实装、真实 Gateway scrape/规则/dashboard 验证；未配置外部通知 |
 
 每个阶段完成后都会补充独立中文说明，并在文末明确下一阶段边界。

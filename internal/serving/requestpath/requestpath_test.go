@@ -2,6 +2,7 @@ package requestpath
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -47,6 +48,65 @@ type invalidStrategy struct{}
 func (invalidStrategy) Name() routing.Mode { return routing.ModePrefixAffinity }
 func (invalidStrategy) Select(string, routing.Snapshot) (routing.Decision, error) {
 	return routing.Decision{Backend: backend.Backend{ID: "invalid", URL: "/relative"}}, nil
+}
+
+func TestReconcileBackendsRefreshesExactKVInstancesWithoutRequest(t *testing.T) {
+	first := backend.Backend{ID: "first", URL: testBackendURL}
+	second := backend.Backend{ID: "second", URL: "http://second:8000"}
+	resolver := &mutableResolver{backends: []backend.Backend{first}}
+	reconciled := make(chan []backend.Backend, 16)
+	path, err := New(Config{Service: backend.Backend{ID: "service", URL: "http://service:8000"}, ReconcileInterval: 20 * time.Millisecond}, Dependencies{
+		Resolver: resolver, Strategy: routing.NewExactCacheLoad(), Circuits: newTestBreaker(t),
+		Tokenizer: failingTokenizer{}, KVCache: &recordingKVCache{},
+		KVReconcile: func(_ context.Context, backends []backend.Backend) error {
+			reconciled <- append([]backend.Backend(nil), backends...)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer path.Close()
+
+	// 不发送 HTTP 请求或调用 State；后台循环本身必须把启动时 membership 交给 KV lifecycle。
+	assertReconciledBackend(t, reconciled, first.ID)
+	resolver.replace([]backend.Backend{second})
+	assertReconciledBackend(t, reconciled, second.ID)
+}
+
+func assertReconciledBackend(t *testing.T, reconciled <-chan []backend.Backend, want backend.ID) {
+	t.Helper()
+	timeout := time.NewTimer(time.Second)
+	defer timeout.Stop()
+	for {
+		select {
+		case backends := <-reconciled:
+			if len(backends) == 1 && backends[0].ID == want {
+				return
+			}
+		case <-timeout.C:
+			t.Fatalf("timed out waiting for KV reconcile of %q", want)
+		}
+	}
+}
+
+func TestReconcileBackendsKeepsMembershipWhenExactKVRefreshFails(t *testing.T) {
+	candidate := backend.Backend{ID: "direct", URL: testBackendURL}
+	resolver := &mutableResolver{backends: []backend.Backend{candidate}}
+	path, err := New(Config{Service: backend.Backend{ID: "service", URL: "http://service:8000"}}, Dependencies{
+		Resolver: resolver, Strategy: routing.NewExactCacheLoad(), Circuits: newTestBreaker(t),
+		Tokenizer: failingTokenizer{}, KVCache: &recordingKVCache{},
+		KVReconcile: func(context.Context, []backend.Backend) error { return errors.New("replay unavailable") },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer path.Close()
+
+	state := path.State(context.Background())
+	if len(state.Backends) != 1 || state.Backends[0].ID != candidate.ID {
+		t.Fatalf("exact KV refresh failure changed membership: %+v", state.Backends)
+	}
 }
 
 func TestSelectUsesExplicitFallbackReasons(t *testing.T) {

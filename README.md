@@ -73,13 +73,13 @@ The deployed baseline already provides:
 - strict configuration, probes, graceful shutdown, least-privilege RBAC and race-tested request lifecycle;
 - a pinned llm-d Router v0.9.0 adapter and `fishmesh-epp` composition root with local contract tests.
 
-The R6A real-signal gate has passed: vLLM Render/KVEvents/replay produced a per-Pod 128-token match for two
-different sessions sharing one system prompt, and real eviction, subscriber recovery and Pod replacement removed
-stale locality. Exact routing is still not a completed Gateway feature; R6B now implements the tokenization and
-KV-cache capability domains before changing the request path.
+The R6A–R6B real-signal and request-path work is complete: vLLM Render/KVEvents/replay produced a per-Pod
+cross-session match for a shared system prompt, and the Gateway consumes that state for `exact-cache-load-v1`.
+Real eviction, subscriber recovery and Pod replacement remove stale locality; unknown or stale state explicitly
+degrades to load-aware routing rather than masquerading as a zero-token match.
 
-The current `X-FishMesh-Prefix-Key` header is therefore a compatibility session hint, not proof of prefix-cache
-awareness. It will become optional once exact routing is integrated.
+`X-FishMesh-Prefix-Key` remains an optional compatibility session hint; the exact demo below deliberately omits it
+to demonstrate cache reuse across distinct user messages.
 
 ## Routing contract
 
@@ -97,46 +97,80 @@ The target policy remains deliberately explainable:
 FishMesh does not claim a novel routing algorithm. The engineering contribution is a bounded, observable and
 operable path from real engine state to a lightweight streaming data plane, plus a standard llm-d integration.
 
-## Run the current baseline
+## Five-minute Lite demo
 
-Verify the repository and cluster:
+This demo assumes the Lite prerequisites in [`deploy/lite-exact/README.md`](deploy/lite-exact/README.md): a K3s
+cluster, the model PV and an importable Gateway image. It first proves the safe default (`bounded-affinity`), then
+temporarily enables the explicit exact overlay. Standard mode / llm-d integration is intentionally deferred.
+
+Verify the repository and the bounded-affinity baseline:
 
 ```bash
 make ci
 
 kubectl --kubeconfig ~/.kube/fishmesh.yaml get nodes
-kubectl --kubeconfig ~/.kube/fishmesh.yaml \
-  -n kubellm get deploy,pod,svc,endpointslice
+kubectl --kubeconfig ~/.kube/fishmesh.yaml -n kubellm get deployment
 ```
 
-Forward the deployed Gateway:
+Install the exact overlay and wait for its real KV signal path. The checked-in overlay uses `r6d2-r1`.
 
 ```bash
-kubectl --kubeconfig ~/.kube/fishmesh.yaml \
-  -n kubellm port-forward svc/fishmesh-gateway 8080:8080
+make image VERSION=r6d2-r1
+kubectl --kubeconfig ~/.kube/fishmesh.yaml apply -k deploy/lite-exact
+kubectl --kubeconfig ~/.kube/fishmesh.yaml -n kubellm rollout status deploy/qwen-vllm --timeout=10m
+kubectl --kubeconfig ~/.kube/fishmesh.yaml -n kubellm rollout status deploy/fishmesh-gateway --timeout=5m
+kubectl --kubeconfig ~/.kube/fishmesh.yaml -n kubellm port-forward svc/fishmesh-gateway 8080:8080
 ```
 
-Send a streaming request. The header is optional for connectivity; while the current baseline is active it
-provides session affinity:
+In a second terminal, make two streaming requests with the same long system prompt and different user messages.
+Do **not** send `X-FishMesh-Prefix-Key`; save response headers separately.
 
 ```bash
-curl -N http://127.0.0.1:8080/v1/chat/completions \
+SYSTEM_PROMPT="$(printf 'FishMesh demo policy: answer concisely, state assumptions, preserve streaming semantics, and never reveal hidden reasoning. %.0s' {1..32})"
+
+curl -sS -D /tmp/fishmesh-first.headers -N http://127.0.0.1:8080/v1/chat/completions \
   -H 'Content-Type: application/json' \
-  -H 'X-FishMesh-Prefix-Key: demo-session' \
   -d '{
     "model": "qwen2.5-0.5b-instruct",
-    "messages": [{"role": "user", "content": "Introduce FishMesh briefly."}],
+    "messages": [
+      {"role": "system", "content": "'"${SYSTEM_PROMPT}"'"},
+      {"role": "user", "content": "first request"}],
     "stream": true,
     "max_tokens": 64
   }'
+
+curl -sS -D /tmp/fishmesh-second.headers -N http://127.0.0.1:8080/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "qwen2.5-0.5b-instruct",
+    "messages": [
+      {"role": "system", "content": "'"${SYSTEM_PROMPT}"'"},
+      {"role": "user", "content": "second request"}],
+    "stream": true,
+    "max_tokens": 64
+  }'
+
+grep -iE 'x-fishmesh-(exact-status|policy|route-reason|cached-prefix-tokens)' \
+  /tmp/fishmesh-first.headers /tmp/fishmesh-second.headers
 ```
+
+The first request may correctly show `match-unavailable` with `exact-load-fallback-v1` while replay becomes fresh.
+After a valid prewarm, the second should show `available`, `exact-cache-load-v1`, `exact-cache-load`, and a
+non-zero `X-FishMesh-Cached-Prefix-Tokens`. `available` with zero cached tokens is a real zero match; it is not the
+same state as unavailable. Restore the default when finished:
+`kubectl --kubeconfig ~/.kube/fishmesh.yaml apply -k deploy/baseline/base`.
+
+The reference cluster runs the `deploy/monitoring` Prometheus + Grafana stack. It has a live Gateway scrape target,
+loaded rules and a provisioned `FishMesh Gateway` dashboard. It intentionally has no Alertmanager/notification
+receiver, so rules are evaluated and visible but are not delivered externally. See
+[`deploy/monitoring/README.md`](deploy/monitoring/README.md) and [`docs/notes/runbook.md`](docs/notes/runbook.md).
 
 ## Delivery priorities
 
 | Priority | Scope | Decision |
 | --- | --- | --- |
 | Primary | Gateway, request path, routing, discovery, observation, circuit, admission and transport | Productize |
-| New core | tokenization, KVEvents/index and exact-cache-load policy | R6A passed; implement contract-first in R6B |
+| New core | tokenization, KVEvents/index and exact-cache-load policy | Complete; Lite exact overlay is available |
 | Standard | llm-d adapter, `fishmesh-epp`, Gateway/InferencePool deployment | Keep; complete after Lite MVP |
 | Development only | simulator and load generator | Freeze features; retain for regression/benchmark |
 | Frozen | analyst and Diagnostics context | Security/build fixes only; remove from default image/deploy |
@@ -147,15 +181,12 @@ first frozen and split out of release artifacts; physical deletion, if useful, i
 
 ## Roadmap
 
-1. **R6A — real KV signal gate (complete):** Render/KVEvents/replay, 128-token cross-session match, eviction,
-   restart cleanup and explicit invalid/recovery were verified on the existing K3s cluster.
-2. **R6B — capability domains:** contract-first tokenization and KV cache packages, bounded index, pure
-   cache/load policy, request-path integration and llm-d precise-match translation.
-3. **R6C — Lite delivery:** gateway-only image, one-command deployment, security/resources, dashboard, alerts,
-   runbook and real rollout/failure acceptance.
-4. **R6D — bounded comparison:** Service, FishMesh load-only, FishMesh exact and llm-d precise under cold,
-   shared-system-prefix and overload workloads.
-5. **R6E — Standard delivery:** complete Gateway/HTTPRoute/InferencePool/EPP deployment and wire-level contracts.
+1. **R6A–R6C (complete):** real Render/KVEvents/replay, bounded capability domains, exact request path,
+   gateway-only Lite image and real rollout/failure acceptance. Monitoring assets are present but not live-validated.
+2. **R6D (complete):** bounded Service/load-only/exact profiles, including controlled c=1 prefix segments; results
+   are correctness/profile evidence only.
+3. **Lite release closeout (in progress):** user demo, release artifacts and upgrade/rollback guidance.
+4. **R6E — Standard delivery (deferred):** Gateway/HTTPRoute/InferencePool/EPP deployment and wire-level contracts.
 
 Experiments only decide an implementation, verify acceptance or prevent regression. Existing simulator and
 historical experiment artifacts are not independent product tracks.

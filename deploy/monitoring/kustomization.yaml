@@ -1,0 +1,16 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: kubellm
+resources:
+  - grafana-dashboard.yaml
+  - prometheus-alert-rules.yaml
+  - prometheus-config.yaml
+  - prometheus-rbac.yaml
+  - prometheus.yaml
+  - grafana-provisioning.yaml
+  - grafana.yaml
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: fishmesh
+      app.kubernetes.io/component: monitoring
+    includeSelectors: false
