@@ -30,6 +30,8 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: fishmesh-grafana
+      annotations:
+        fishmesh.io/dashboard-revision: r6f-v2
     spec:
       serviceAccountName: fishmesh-grafana
       securityContext:

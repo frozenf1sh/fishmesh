@@ -28,6 +28,14 @@ Lite 监控已在参考集群完成部署和接入：`deploy/monitoring` 创建 
 部署 Alertmanager/外部 notification receiver，故规则可见且会评估，但不声称已完成值班告警投递。接入和
 体验步骤见 `deploy/monitoring/README.md` 与 `docs/notes/runbook.md`。
 
+R6F 已补齐性能归因所需的最小观测契约：只有带有效 publisher timestamp、已成功同步 apply 的 KV
+event batch 才记录 `fishmesh_gateway_kv_event_publish_to_apply_seconds`，并以 `live`/`replay` 分开；
+它是 publisher-to-apply lag，不是网络 RTT，replay 可能包含历史 event 的较大年龄。只有
+`X-FishMesh-Exact-Status: available` 的选择才记录 `fishmesh_gateway_exact_cached_prefix_tokens`；其中 0
+是真实零命中，unknown/stale 不会被计作零样本。真实两请求验收记录首请求 `available/0`、第二请求
+`available/768`，cached-prefix histogram count/sum 为 `2/768`；live event histogram 有 4 个样本、
+sum `0.002878708s`。验收后恢复 bounded-affinity，未将该低负载 evidence 扩展为性能结论。
+
 README 与 README_CN 现以五分钟 Lite demo 为入口：确认 `bounded-affinity` 默认基线后临时安装
 `lite-exact`，用不带 session key 的同一长 system prompt、不同 user message 请求读取 exact 决策头，
 再恢复基线；监控面板可同时观察请求、TTFT、KV 有效性/freshness、降级与 RSS。Standard mode（R6E/llm-d
@@ -268,7 +276,6 @@ VM 的影响更大：Kubernetes API 和 reconciliation 也会停止，应按完�
 1. 之后按 llmd 的顺序逐域接入，每个切片单独更新阶段文档、
    提交和推送；
 2. 完成 R6E/原 R5D Standard mode，并执行 Gateway/EPP/llm-d precise 生产兼容性闭环；
-3. 如需性能归因，先单独定义 per-event latency 与逐请求 cached-prefix 可观测契约，再执行有限复测；
-   的有限同环境对照；
+3. 使用 R6F 的 per-event latency 与逐请求 cached-prefix 可观测契约，再执行有限同环境复测；
 4. 在声称 NetworkPolicy 已生效前迁移到支持 policy enforcement 的 CNI；当前 Flannel 不能执行
    声明式 NetworkPolicy。

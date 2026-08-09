@@ -24,8 +24,11 @@ kubectl -n kubellm create secret generic fishmesh-grafana-admin \
   --from-literal=admin-password="$(openssl rand -base64 32)"
 ```
 
-The supplied dashboard shows request rate, TTFT P95, exact-safe KV instances, replay freshness, degradation rate
-and Gateway RSS. The rules are loaded directly from the mounted ConfigMap; no `PrometheusRule` CRD is required.
+The supplied dashboard shows request rate, TTFT P95, exact-safe KV instances, replay freshness, degradation rate,
+Gateway RSS, live/replay publisher-to-apply lag P95, and exact cached-prefix-token P50/P95. Publisher-to-apply lag
+is not ZMQ network RTT: replay can correctly show the age of historical publisher timestamps. Cached-prefix tokens
+only include `Exact-Status: available`; a zero is a real miss, while unavailable state is excluded. The rules are
+loaded directly from the mounted ConfigMap; no `PrometheusRule` CRD is required.
 
 If integrating these assets into another existing monitoring stack instead, arrange all of the following:
 

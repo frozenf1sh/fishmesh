@@ -19,6 +19,11 @@ kubectl --kubeconfig ~/.kube/fishmesh.yaml -n kubellm get secret fishmesh-grafan
 FishMesh Gateway**。Prometheus 的 `/targets` 应显示 `fishmesh-gateway` 为 `up`；`/alerts` 显示四条
 FishMesh 规则。规则状态与通知投递不同：此 Lite 栈没有 Alertmanager。
 
+R6F 后面板还显示两个严格区分的 histogram：**KV publisher-to-apply lag P95** 与 **Exact cached
+prefix tokens**。前者仅来自成功 apply、带 publisher timestamp 的 batch，并按 `live`/`replay` 分开；
+replay 的大值可能只是历史 event 到当前重放的年龄，不能当作 ZMQ 网络 RTT。后者只统计
+`X-FishMesh-Exact-Status: available` 的选择；零表示真实 miss，`match-unavailable` 不会进入该图。
+
 ## 先做什么
 
 1. 保存 Gateway `/metrics`、Gateway logs、Pod 描述和响应头；不要记录 prompt、token IDs 或 session key。

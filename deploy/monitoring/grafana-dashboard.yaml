@@ -65,11 +65,32 @@ data:
           "targets": [{"expr": "process_resident_memory_bytes", "refId": "A"}],
           "title": "Gateway RSS",
           "type": "timeseries"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "$datasource"},
+          "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 24},
+          "id": 7,
+          "targets": [{"expr": "histogram_quantile(0.95, sum by (le, source) (rate(fishmesh_gateway_kv_event_publish_to_apply_seconds_bucket[5m])))", "legendFormat": "{{source}}", "refId": "A"}],
+          "title": "KV publisher-to-apply lag P95",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "$datasource"},
+          "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 24},
+          "id": 8,
+          "targets": [
+            {"expr": "histogram_quantile(0.50, sum by (le) (rate(fishmesh_gateway_exact_cached_prefix_tokens_bucket[5m])))", "legendFormat": "P50", "refId": "A"},
+            {"expr": "histogram_quantile(0.95, sum by (le) (rate(fishmesh_gateway_exact_cached_prefix_tokens_bucket[5m])))", "legendFormat": "P95", "refId": "B"}
+          ],
+          "title": "Exact cached prefix tokens",
+          "type": "timeseries"
         }
       ],
       "schemaVersion": 39,
       "templating": {"list": [{"current": {}, "label": "Prometheus", "name": "datasource", "query": "prometheus", "type": "datasource"}]},
       "title": "FishMesh Gateway",
       "uid": "fishmesh-gateway",
-      "version": 1
+      "version": 2
     }

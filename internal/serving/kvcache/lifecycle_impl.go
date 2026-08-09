@@ -20,6 +20,7 @@ type eventStream struct {
 	source   EventSource
 	store    cacheStore
 	clock    Clock
+	observer EventObserver
 
 	processMu        sync.Mutex
 	mu               sync.RWMutex
@@ -47,7 +48,12 @@ func newEventStream(
 	source EventSource,
 	store cacheStore,
 	clock Clock,
+	observers ...EventObserver,
 ) *eventStream {
+	var observer EventObserver
+	if len(observers) > 0 {
+		observer = observers[0]
+	}
 	return &eventStream{
 		parent:   parent,
 		config:   config,
@@ -55,7 +61,7 @@ func newEventStream(
 		source:   source,
 		store:    store,
 		clock:    clock,
-		reason:   ReasonReplayNotConfirmed,
+		reason:   ReasonReplayNotConfirmed, observer: observer,
 	}
 }
 
@@ -215,21 +221,28 @@ func (s *eventStream) accept(ctx context.Context, event Event, replayed bool) er
 	}
 
 	// sequence 只在同步 Apply 成功后推进；这是与上游无回执 worker queue 的关键差异。
+	appliedAt := s.clock()
+	var observation EventObservation
+	hasObservation := !result.publishedAt.IsZero() && !result.publishedAt.After(appliedAt)
+	if hasObservation {
+		observation = EventObservation{Backend: s.instance.Backend, Replayed: replayed, PublishToApply: appliedAt.Sub(result.publishedAt)}
+	}
+
 	s.mu.Lock()
 	s.hasSeq = true
 	s.lastSeq = event.Sequence
-	s.lastEventAt = s.clock()
-	if !result.publishedAt.IsZero() {
-		s.lastEventLag = s.lastEventAt.Sub(result.publishedAt)
-		if s.lastEventLag < 0 {
-			s.lastEventLag = 0
-		}
+	s.lastEventAt = appliedAt
+	if hasObservation {
+		s.lastEventLag = observation.PublishToApply
 	}
 	s.appliedBatches++
 	if replayed {
 		s.replayBatches++
 	}
 	s.mu.Unlock()
+	if hasObservation && s.observer != nil {
+		s.observer.ObserveKVEvent(observation)
+	}
 	return nil
 }
 

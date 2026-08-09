@@ -46,8 +46,9 @@ type Config struct {
 
 // Dependencies 是组合根注入的 transport 与时钟。
 type Dependencies struct {
-	EventSource EventSource
-	Clock       Clock
+	EventSource   EventSource
+	Clock         Clock
+	EventObserver EventObserver
 }
 
 // DefaultConfig 返回与阶段 18 已验证的 vLLM 文本链路一致的有界配置。

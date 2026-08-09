@@ -59,13 +59,13 @@ patches:
     patch: |-
       - op: replace
         path: /spec/template/spec/containers/0/image
-        value: fishmesh-gateway:r6d2-r1
+        value: fishmesh-gateway:r6f-r2
       - op: replace
         path: /spec/template/spec/automountServiceAccountToken
         value: true
       - op: add
         path: /spec/template/metadata/annotations/fishmesh.io~1gateway-image-revision
-        value: r6d2-r1
+        value: r6f-r2
       - op: add
         path: /spec/template/metadata/annotations/fishmesh.io~1runtime-profile
         value: lite-exact

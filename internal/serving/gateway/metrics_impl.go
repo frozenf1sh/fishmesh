@@ -53,8 +53,10 @@ type Metrics struct {
 	kvCacheAppliedBatches *prometheus.GaugeVec
 	kvCacheReplayBatches  *prometheus.GaugeVec
 	kvCacheStatus         *prometheus.GaugeVec
+	kvEventPublishToApply *prometheus.HistogramVec
 	exactRequests         *prometheus.CounterVec
 	exactDegradations     *prometheus.CounterVec
+	exactCachedPrefix     prometheus.Histogram
 	kvCacheMu             sync.Mutex
 	kvCacheIDs            map[string]struct{}
 	kvCacheStatuses       map[string]string
@@ -186,13 +188,21 @@ func (m *Metrics) initializeKVCacheMetrics() {
 	m.kvCacheStatus = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: metricNamespace, Subsystem: metricSubsystem, Name: metricKVCacheStatus, Help: "Current typed KV cache state reason (one active reason has value 1).",
 	}, []string{labelBackendID, labelKVCacheStatus})
+	m.kvEventPublishToApply = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: metricNamespace, Subsystem: metricSubsystem, Name: metricKVEventPublishToApplySeconds,
+		Help: "vLLM publisher timestamp to successful local KV index apply duration; it includes clock skew and is not network RTT.", Buckets: kvEventPublishToApplyBuckets(),
+	}, []string{labelBackendID, labelKVEventSource})
 	m.exactRequests = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricNamespace, Subsystem: metricSubsystem, Name: metricExactRequestsTotal, Help: "Exact routing selections by stable signal status.",
 	}, []string{labelExactStatus})
 	m.exactDegradations = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricNamespace, Subsystem: metricSubsystem, Name: metricExactDegradationsTotal, Help: "Exact routing selections that explicitly degraded to load-aware routing.",
 	}, []string{labelExactStatus})
-	m.registry.MustRegister(m.kvCacheValid, m.kvCacheFreshness, m.kvCacheLastSequence, m.kvCacheAppliedBatches, m.kvCacheReplayBatches, m.kvCacheStatus, m.exactRequests, m.exactDegradations)
+	m.exactCachedPrefix = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Namespace: metricNamespace, Subsystem: metricSubsystem, Name: metricExactCachedPrefixTokens,
+		Help: "Cached prefix tokens on an exact selection with available KV signal; zero is a real cache miss, not unavailable state.", Buckets: exactCachedPrefixTokenBuckets(),
+	})
+	m.registry.MustRegister(m.kvCacheValid, m.kvCacheFreshness, m.kvCacheLastSequence, m.kvCacheAppliedBatches, m.kvCacheReplayBatches, m.kvCacheStatus, m.kvEventPublishToApply, m.exactRequests, m.exactDegradations, m.exactCachedPrefix)
 }
 
 // updateBackendObservations 只使用 backend ID 等有界标签，不写入请求 routing key。
@@ -281,6 +291,8 @@ func (m *Metrics) deleteKVCache(backendID string) {
 	m.kvCacheLastSequence.DeleteLabelValues(backendID)
 	m.kvCacheAppliedBatches.DeleteLabelValues(backendID)
 	m.kvCacheReplayBatches.DeleteLabelValues(backendID)
+	m.kvEventPublishToApply.DeleteLabelValues(backendID, kvEventSourceLive)
+	m.kvEventPublishToApply.DeleteLabelValues(backendID, kvEventSourceReplay)
 	if status, exists := m.kvCacheStatuses[backendID]; exists {
 		m.kvCacheStatus.DeleteLabelValues(backendID, status)
 		delete(m.kvCacheStatuses, backendID)
@@ -369,10 +381,28 @@ func (m *Metrics) observeSelection(mode routing.Mode, lease requestpath.Lease) {
 	}
 	if mode == routing.ModeExactCacheLoad {
 		m.exactRequests.WithLabelValues(string(lease.State.Exact)).Inc()
+		if lease.State.Exact == requestpath.ExactAvailable {
+			m.exactCachedPrefix.Observe(float64(lease.State.CachedPrefixTokens))
+		}
 		if lease.State.Exact != requestpath.ExactAvailable && lease.State.Exact != requestpath.ExactNotRequested {
 			m.exactDegradations.WithLabelValues(string(lease.State.Exact)).Inc()
 		}
 	}
+}
+
+// ObserveKVEvent 将组合根从 kvcache 接收的成功 apply 延迟投影为有界 Prometheus 标签。
+// replayed=false/true 是唯一来源维度；缺失或未来 publisher timestamp 在 kvcache 内已经被拒绝，
+// 因此此方法不会把 unknown event 改写成零延迟。
+func (m *Metrics) ObserveKVEvent(backendID string, replayed bool, publishToApply time.Duration) {
+	source := kvEventSourceLive
+	if replayed {
+		source = kvEventSourceReplay
+	}
+	m.kvEventPublishToApply.WithLabelValues(backendID, source).Observe(publishToApply.Seconds())
+}
+
+func (m *Metrics) observeKVEvent(backendID string, replayed bool, publishToApply time.Duration) {
+	m.ObserveKVEvent(backendID, replayed, publishToApply)
 }
 
 // observeCompletion 只更新选择时确实属于 direct backend 的 circuit label。

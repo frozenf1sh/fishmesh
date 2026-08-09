@@ -50,6 +50,60 @@ func TestEventStreamDoesNotCommitFailedApply(t *testing.T) {
 	}
 }
 
+func TestEventStreamObservesOnlyTimestampedSuccessfulApply(t *testing.T) {
+	now := time.Date(2026, 8, 13, 9, 0, 0, 0, time.UTC)
+	instance := testInstance("backend-a", "uid-a", "pod-a")
+	observations := make([]EventObservation, 0, 1)
+	observer := eventObserverFunc(func(observation EventObservation) {
+		observations = append(observations, observation)
+	})
+
+	store := &fakeStore{applyResult: applyResult{publishedAt: now.Add(-3 * time.Millisecond)}}
+	stream := newEventStream(context.Background(), DefaultConfig(), instance, &replaySource{}, store, func() time.Time { return now }, observer)
+	if err := stream.accept(context.Background(), testEvent(instance, 0), false); err != nil {
+		t.Fatalf("accept timestamped event: %v", err)
+	}
+	if len(observations) != 1 || observations[0].Backend != instance.Backend || observations[0].Replayed || observations[0].PublishToApply != 3*time.Millisecond {
+		t.Fatalf("timestamped success observation = %+v", observations)
+	}
+	if state := stream.Snapshot(); state.LastEventLag != 3*time.Millisecond {
+		t.Fatalf("last event lag = %s, want 3ms", state.LastEventLag)
+	}
+
+	store.applyResult = applyResult{}
+	if err := stream.accept(context.Background(), testEvent(instance, 1), true); err != nil {
+		t.Fatalf("accept event without timestamp: %v", err)
+	}
+	if len(observations) != 1 {
+		t.Fatalf("event without publisher timestamp emitted observation: %+v", observations)
+	}
+
+	store.applyErr = errors.New("index write failed")
+	if err := stream.accept(context.Background(), testEvent(instance, 2), false); err == nil {
+		t.Fatal("failed apply was accepted")
+	}
+	if len(observations) != 1 {
+		t.Fatalf("failed apply emitted observation: %+v", observations)
+	}
+}
+
+func TestEventStreamDoesNotObserveFuturePublisherTimestampAsZeroLag(t *testing.T) {
+	now := time.Date(2026, 8, 13, 9, 0, 0, 0, time.UTC)
+	instance := testInstance("backend-a", "uid-a", "pod-a")
+	observations := make([]EventObservation, 0, 1)
+	store := &fakeStore{applyResult: applyResult{publishedAt: now.Add(time.Millisecond)}}
+	stream := newEventStream(context.Background(), DefaultConfig(), instance, &replaySource{}, store, func() time.Time { return now }, eventObserverFunc(func(observation EventObservation) {
+		observations = append(observations, observation)
+	}))
+
+	if err := stream.accept(context.Background(), testEvent(instance, 0), false); err != nil {
+		t.Fatalf("accept event with future publisher timestamp: %v", err)
+	}
+	if len(observations) != 0 || stream.Snapshot().LastEventLag != 0 {
+		t.Fatalf("future publisher timestamp was converted into zero-lag observation: %+v / %+v", observations, stream.Snapshot())
+	}
+}
+
 func (s *replaySource) setEvents(events ...Event) {
 	s.mu.Lock()
 	s.replayEvents = append([]Event(nil), events...)
@@ -150,6 +204,12 @@ func TestReconcileReplacesPodUIDAfterStoppingAndClearingOldInstance(t *testing.T
 
 func testEvent(instance Instance, sequence uint64) Event {
 	return Event{Topic: instanceTopic(instance), Sequence: sequence, Payload: []byte{1}}
+}
+
+type eventObserverFunc func(EventObservation)
+
+func (f eventObserverFunc) ObserveKVEvent(observation EventObservation) {
+	f(observation)
 }
 
 func waitForState(t *testing.T, service *service, backendID string, accepted func(InstanceState) bool) {

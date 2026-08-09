@@ -45,6 +45,16 @@ type requestComponents struct {
 	metrics   *gateway.Metrics
 }
 
+// kvEventMetricsObserver 是组合根的协议翻译点：kvcache 只发布稳定值对象，Gateway metrics 只接收
+// 已成功 apply 的低基数值。它不进入 requestpath/routing，因此观测不能影响选路或降级。
+type kvEventMetricsObserver struct {
+	metrics *gateway.Metrics
+}
+
+func (o kvEventMetricsObserver) ObserveKVEvent(observation kvcache.EventObservation) {
+	o.metrics.ObserveKVEvent(string(observation.Backend), observation.Replayed, observation.PublishToApply)
+}
+
 // buildRuntime 是唯一实现装配点。domain 构造函数不读取环境变量，Gateway 也不创建具体实现。
 func buildRuntime(config servingconfig.Config, logger *slog.Logger) (*runtime, error) {
 	if err := config.Validate(); err != nil {
@@ -88,7 +98,9 @@ func buildRuntime(config servingconfig.Config, logger *slog.Logger) (*runtime, e
 			assembled.Close()
 			return nil, fmt.Errorf("create exact tokenizer: %w", err)
 		}
-		index, err = kvcache.NewVLLM(context.Background(), config.KVCache, kvcache.Dependencies{EventSource: kvcache.NewZMQSource()})
+		index, err = kvcache.NewVLLM(context.Background(), config.KVCache, kvcache.Dependencies{
+			EventSource: kvcache.NewZMQSource(), EventObserver: kvEventMetricsObserver{metrics: components.metrics},
+		})
 		if err != nil {
 			assembled.Close()
 			return nil, fmt.Errorf("create exact KV cache: %w", err)

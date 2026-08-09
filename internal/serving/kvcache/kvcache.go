@@ -106,6 +106,21 @@ type Event struct {
 	Payload  []byte
 }
 
+// EventObservation 是一个已经同步写入本地 index 的 KV event batch 的低基数观测值。
+// PublishToApply 受 vLLM publisher 与 Gateway 时钟偏差影响，不表示纯 ZMQ 网络 RTT；没有有效
+// publisher timestamp 的 batch 不产生该值，调用方不得将缺失解释为零延迟。
+type EventObservation struct {
+	Backend        backend.ID
+	Replayed       bool
+	PublishToApply time.Duration
+}
+
+// EventObserver 是 kvcache 在成功 apply 后通知 delivery/metrics 边界的最小替换接口。
+// 回调在事件 owner 的同步路径之外执行；实现不得阻塞、重入 index 或改变 routing 决策。
+type EventObserver interface {
+	ObserveKVEvent(EventObservation)
+}
+
 // EventSource 隔离 ZMQ transport，并以同步回调提供自然背压。
 // Follow 持续消费直到 context 取消或连接失败；Replay 必须在收到 END 后才返回 nil。
 type EventSource interface {

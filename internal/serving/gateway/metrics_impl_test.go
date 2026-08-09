@@ -48,3 +48,48 @@ func TestMetricsProjectExactKVStateWithoutSensitiveLabels(t *testing.T) {
 		t.Fatalf("metrics exposed sensitive exact input: %s", output)
 	}
 }
+
+func TestMetricsObserveKVEventAndAvailableCachedPrefixWithoutUnknownZero(t *testing.T) {
+	metrics := NewMetrics()
+	metrics.observeKVEvent("backend-a", false, 3*time.Millisecond)
+	metrics.observeKVEvent("backend-a", true, 5*time.Millisecond)
+	metrics.observeSelection(routing.ModeExactCacheLoad, requestpath.Lease{
+		Decision: routing.Decision{Backend: backend.Backend{ID: "backend-a"}},
+		State:    requestpath.State{Exact: requestpath.ExactAvailable, CachedPrefixTokens: 0},
+	})
+	metrics.observeSelection(routing.ModeExactCacheLoad, requestpath.Lease{
+		Decision: routing.Decision{Backend: backend.Backend{ID: "backend-a"}},
+		State:    requestpath.State{Exact: requestpath.ExactMatchUnavailable, CachedPrefixTokens: 99},
+	})
+
+	response := httptest.NewRecorder()
+	metrics.handler().ServeHTTP(response, httptest.NewRequest("GET", "/metrics", nil))
+	output := response.Body.String()
+	for _, want := range []string{
+		`fishmesh_gateway_kv_event_publish_to_apply_seconds_count{backend_id="backend-a",source="live"} 1`,
+		`fishmesh_gateway_kv_event_publish_to_apply_seconds_count{backend_id="backend-a",source="replay"} 1`,
+		`fishmesh_gateway_exact_cached_prefix_tokens_count 1`,
+		`fishmesh_gateway_exact_cached_prefix_tokens_sum 0`,
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("metric %q missing:\n%s", want, output)
+		}
+	}
+	for _, forbidden := range []string{"pod_uid", "prompt", "token_ids", "topic"} {
+		if strings.Contains(output, forbidden) {
+			t.Fatalf("metrics exposed sensitive event data %q:\n%s", forbidden, output)
+		}
+	}
+}
+
+func TestMetricsDeleteBackendRemovesKVEventHistogramLabels(t *testing.T) {
+	metrics := NewMetrics()
+	metrics.observeKVEvent("backend-a", false, time.Millisecond)
+	metrics.DeleteBackend("backend-a", string(routing.ModeExactCacheLoad))
+
+	response := httptest.NewRecorder()
+	metrics.handler().ServeHTTP(response, httptest.NewRequest("GET", "/metrics", nil))
+	if strings.Contains(response.Body.String(), `fishmesh_gateway_kv_event_publish_to_apply_seconds_count{backend_id="backend-a"`) {
+		t.Fatalf("removed backend retained KV event histogram labels:\n%s", response.Body.String())
+	}
+}

@@ -16,6 +16,7 @@ type fakeStore struct {
 	matched     map[backend.ID]int
 	totalBlocks int
 	applyErr    error
+	applyResult applyResult
 	applied     []Event
 	cleared     []string
 }
@@ -37,7 +38,7 @@ func (s *fakeStore) Apply(_ context.Context, _ Instance, event Event) (applyResu
 		return applyResult{}, s.applyErr
 	}
 	s.applied = append(s.applied, event)
-	return applyResult{}, nil
+	return s.applyResult, nil
 }
 
 func (s *fakeStore) Clear(_ context.Context, podIdentifier string) error {

@@ -58,7 +58,7 @@ func (s *service) reconcileChanges(
 		if existing := current[backendID]; existing != nil {
 			retired = append(retired, existing)
 		}
-		stream := newEventStream(s.ctx, s.config, instance, s.source, s.store, s.clock)
+		stream := newEventStream(s.ctx, s.config, instance, s.source, s.store, s.clock, s.observer)
 		next[backendID] = stream
 		additions = append(additions, stream)
 	}

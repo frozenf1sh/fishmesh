@@ -37,5 +37,6 @@
 | 28 | Lite 五分钟 Demo 与完成度对齐 | 中英文 README 明确 bounded-affinity 默认值、exact 演示及未验证监控边界；Standard mode 后置 |
 | 29 | Lite 发布与回滚说明 | 多架构/SBOM 发布流程、版本矩阵和 digest 驱动的升级与回滚；仅 amd64 离线路径已实证 |
 | 30 | Lite 监控栈部署与接入 | Prometheus/Grafana 实装、真实 Gateway scrape/规则/dashboard 验证；未配置外部通知 |
+| 31 | R6F KVEvents 与逐请求观测契约 | 成功 apply 的 publisher-to-apply histogram、available-only cached-prefix histogram 与真实双请求验收 |
 
 每个阶段完成后都会补充独立中文说明，并在文末明确下一阶段边界。

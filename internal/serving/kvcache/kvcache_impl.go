@@ -15,12 +15,13 @@ var _ Index = (*service)(nil)
 // service 组合有界 KV store 与逐 Pod 可靠事件流。
 // reconcileMu 串行化 Pod 生命周期事务；mu 只保护 streams publication 和 closed。
 type service struct {
-	config Config
-	store  cacheStore
-	source EventSource
-	clock  Clock
-	ctx    context.Context
-	cancel context.CancelFunc
+	config   Config
+	store    cacheStore
+	source   EventSource
+	clock    Clock
+	observer EventObserver
+	ctx      context.Context
+	cancel   context.CancelFunc
 
 	reconcileMu sync.Mutex
 	mu          sync.RWMutex
@@ -48,19 +49,18 @@ func NewVLLM(ctx context.Context, config Config, dependencies Dependencies) (Ind
 	if clock == nil {
 		clock = defaultClock
 	}
-	return newService(ctx, config, dependencies.EventSource, clock, store), nil
+	return newService(ctx, config, dependencies.EventSource, clock, store, dependencies.EventObserver), nil
 }
 
-func newService(ctx context.Context, config Config, source EventSource, clock Clock, store cacheStore) *service {
+func newService(ctx context.Context, config Config, source EventSource, clock Clock, store cacheStore, observers ...EventObserver) *service {
 	serviceContext, cancel := context.WithCancel(ctx)
+	var observer EventObserver
+	if len(observers) > 0 {
+		observer = observers[0]
+	}
 	return &service{
-		config:  config,
-		store:   store,
-		source:  source,
-		clock:   clock,
-		ctx:     serviceContext,
-		cancel:  cancel,
-		streams: make(map[backend.ID]*eventStream),
+		config: config, store: store, source: source, clock: clock, observer: observer,
+		ctx: serviceContext, cancel: cancel, streams: make(map[backend.ID]*eventStream),
 	}
 }
 
