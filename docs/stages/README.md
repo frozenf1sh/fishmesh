@@ -38,5 +38,6 @@
 | 29 | Lite 发布与回滚说明 | 多架构/SBOM 发布流程、版本矩阵和 digest 驱动的升级与回滚；仅 amd64 离线路径已实证 |
 | 30 | Lite 监控栈部署与接入 | Prometheus/Grafana 实装、真实 Gateway scrape/规则/dashboard 验证；未配置外部通知 |
 | 31 | R6F KVEvents 与逐请求观测契约 | 成功 apply 的 publisher-to-apply histogram、available-only cached-prefix histogram 与真实双请求验收 |
+| 32 | R6G Go 对话与压测客户端 | 独立 chat/request/bench 客户端、隐私安全 history/JSONL 与 bounded-affinity 真实短验收 |
 
 每个阶段完成后都会补充独立中文说明，并在文末明确下一阶段边界。

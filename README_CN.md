@@ -161,6 +161,30 @@ grep -iE 'x-fishmesh-(exact-status|policy|route-reason|cached-prefix-tokens)' \
 但不会向外投递。见 [`deploy/monitoring/README.md`](deploy/monitoring/README.md) 与
 [`docs/notes/runbook.md`](docs/notes/runbook.md)。
 
+## 本地对话与有界 profile
+
+`fishmesh-client` 是独立的本地 Go 客户端，不进入 Gateway 镜像，也不扩张已冻结的开发用 loadgen。它会流式
+输出文本，并在 stderr 输出固定 allowlist 的 `X-FishMesh-*` 决策头、TTFT 和总耗时。保持上面的
+port-forward 运行后，用显式 history 路径启动普通多轮对话：
+
+```bash
+go run ./cmd/fishmesh-client chat \
+  --history ~/.local/state/fishmesh/chat.json \
+  --system '请简洁回答。'
+```
+
+短时、受边界约束的 profile 会向 JSONL 追加 metadata、每个 request attempt（失败也保留）和 summary：
+
+```bash
+go run ./cmd/fishmesh-client bench \
+  --mode shared-prefix --output /tmp/fishmesh-profile.jsonl
+```
+
+默认是 200 请求、并发 4、32 tokens 和 90 秒超时；超过默认并发必须显式给出
+`--allow-high-concurrency`。客户端只把可选 `FISHMESH_API_KEY` 放进出站 Authorization header，绝不会把
+它、prompt、原始 SSE payload 或任意 upstream header 写入 history/JSONL；也不会切路由模式、清 cache、滚动
+Pod 或自行启动并行 GPU workload。
+
 ## 交付优先级
 
 | 优先级 | 范围 | 决定 |

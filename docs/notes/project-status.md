@@ -36,6 +36,14 @@ event batch 才记录 `fishmesh_gateway_kv_event_publish_to_apply_seconds`，并
 `available/768`，cached-prefix histogram count/sum 为 `2/768`；live event histogram 有 4 个样本、
 sum `0.002878708s`。验收后恢复 bounded-affinity，未将该低负载 evidence 扩展为性能结论。
 
+R6G 已提供独立的 `fishmesh-client`：`chat` 以用户显式路径原子保存普通 OpenAI messages history，
+`request` 可输出完整流与固定 FishMesh 决策头，`bench` 提供 uniform/shared-prefix/hot-prefix/conversation
+四种确定性 workload，并以 append-only JSONL 保留 metadata、每个成功/失败 attempt 和 summary。API key 只从
+cmd 组合根的 `FISHMESH_API_KEY` 出站使用，history/JSONL 不包含 key、prompt、raw SSE 或任意 upstream headers。
+真实集群低负载验收在 bounded-affinity、Gateway 1/1 和 vLLM 2/2 Ready 下完成单请求、2 request/并发 1 profile
+与单轮 chat，三者都完整 SSE/HTTP 200；profile 正确把 `exact_status=not-requested` 排除 cached-prefix sample，且
+验收后路由模式仍为 bounded-affinity。此结果是客户端正确性证据，不是性能结论。
+
 README 与 README_CN 现以五分钟 Lite demo 为入口：确认 `bounded-affinity` 默认基线后临时安装
 `lite-exact`，用不带 session key 的同一长 system prompt、不同 user message 请求读取 exact 决策头，
 再恢复基线；监控面板可同时观察请求、TTFT、KV 有效性/freshness、降级与 RSS。Standard mode（R6E/llm-d
@@ -276,6 +284,6 @@ VM 的影响更大：Kubernetes API 和 reconciliation 也会停止，应按完�
 1. 之后按 llmd 的顺序逐域接入，每个切片单独更新阶段文档、
    提交和推送；
 2. 完成 R6E/原 R5D Standard mode，并执行 Gateway/EPP/llm-d precise 生产兼容性闭环；
-3. 使用 R6F 的 per-event latency 与逐请求 cached-prefix 可观测契约，再执行有限同环境复测；
+3. 使用 R6F 的 per-event latency、逐请求 cached-prefix 可观测契约及 R6G JSONL，再执行有限同环境复测；
 4. 在声称 NetworkPolicy 已生效前迁移到支持 policy enforcement 的 CNI；当前 Flannel 不能执行
    声明式 NetworkPolicy。

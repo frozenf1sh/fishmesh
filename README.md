@@ -165,6 +165,31 @@ loaded rules and a provisioned `FishMesh Gateway` dashboard. It intentionally ha
 receiver, so rules are evaluated and visible but are not delivered externally. See
 [`deploy/monitoring/README.md`](deploy/monitoring/README.md) and [`docs/notes/runbook.md`](docs/notes/runbook.md).
 
+## Local conversation and bounded profiles
+
+`fishmesh-client` is a separate local Go client, not part of the Gateway image or the frozen development loadgen.
+It streams text while printing the fixed `X-FishMesh-*` decision-header allowlist, TTFT and total duration to stderr.
+Keep the port-forward above running, then use an explicit history path for a normal multi-turn conversation:
+
+```bash
+go run ./cmd/fishmesh-client chat \
+  --history ~/.local/state/fishmesh/chat.json \
+  --system 'Answer concisely.'
+```
+
+For a short, bounded profile, it writes append-only JSONL metadata, every attempt (including failures), and a
+summary. Defaults are 200 requests, concurrency 4, 32 tokens and a 90-second timeout; higher concurrency requires
+an explicit acknowledgement.
+
+```bash
+go run ./cmd/fishmesh-client bench \
+  --mode shared-prefix --output /tmp/fishmesh-profile.jsonl
+```
+
+The client reads an optional `FISHMESH_API_KEY` only for the outgoing authorization header. It never writes that key,
+prompts, raw SSE payloads or arbitrary upstream headers into history or benchmark JSONL. It does not switch routing
+modes, clear cache, roll Pods or start parallel GPU workloads.
+
 ## Delivery priorities
 
 | Priority | Scope | Decision |
