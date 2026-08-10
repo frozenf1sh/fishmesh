@@ -12,6 +12,7 @@ import (
 	"github.com/frozenf1sh/fishmesh/internal/serving/identity"
 	"github.com/frozenf1sh/fishmesh/internal/serving/kvcache"
 	"github.com/frozenf1sh/fishmesh/internal/serving/observation"
+	"github.com/frozenf1sh/fishmesh/internal/serving/prediction"
 	"github.com/frozenf1sh/fishmesh/internal/serving/requestpath"
 	"github.com/frozenf1sh/fishmesh/internal/serving/routing"
 	"github.com/frozenf1sh/fishmesh/internal/serving/tokenization"
@@ -41,6 +42,7 @@ type Config struct {
 	RequestPath     requestpath.Config
 	Tokenization    tokenization.Config
 	KVCache         kvcache.Config
+	Prediction      prediction.Config
 }
 
 // Validate 执行不需要外部 I/O 的跨配置约束检查。
@@ -82,6 +84,12 @@ func (c Config) Validate() error {
 		if err := c.KVCache.Validate(); err != nil {
 			return fmt.Errorf("exact KV cache: %w", err)
 		}
+		if err := c.Routing.ExactCacheLoad.Validate(); err != nil {
+			return fmt.Errorf("exact routing cost: %w", err)
+		}
+	}
+	if err := c.Prediction.Validate(); err != nil {
+		return fmt.Errorf("prediction: %w", err)
 	}
 	if c.Routing.Mode == routing.ModeBoundedAffinity {
 		bounded := c.Routing.BoundedAffinity

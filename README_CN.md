@@ -183,7 +183,8 @@ go run ./cmd/fishmesh-client bench \
 默认是 200 请求、并发 4、32 tokens 和 90 秒超时；超过默认并发必须显式给出
 `--allow-high-concurrency`。客户端只把可选 `FISHMESH_API_KEY` 放进出站 Authorization header，绝不会把
 它、prompt、原始 SSE payload 或任意 upstream header 写入 history/JSONL；也不会切路由模式、清 cache、滚动
-Pod 或自行启动并行 GPU workload。
+Pod 或自行启动并行 GPU workload。`chat` 与 `request` 在终端默认以颜色突出关键诊断值；脚本可用
+`--color never` 保持纯文本，明确需要 ANSI 管道输出时可用 `--color always`。benchmark JSONL 始终无颜色。
 
 ## 交付优先级
 

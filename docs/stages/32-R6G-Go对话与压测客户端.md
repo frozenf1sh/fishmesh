@@ -18,6 +18,8 @@ R6G 增加 `fishmesh-client`，供人类对话、单次请求验证和有限负�
    显式 `--allow-high-concurrency`。它不会 rollout、clear cache、切换路由模式或自行启动第二个 workload。
 6. `available + cached-prefix=0` 是真实 miss；`match-unavailable`/其他 unavailable 状态不参与
    cached-prefix hit/miss 汇总。R6F 的 histogram 与 client JSONL 对此语义一致。
+7. 面向人的 request/chat 诊断在终端默认可用 ANSI 色彩突出 TTFT、policy、route reason、exact status 与
+   backend；非终端输出保持纯文本，并可由 `--color auto|always|never` 显式控制。JSONL 恒为无颜色机器格式。
 
 ## 2. CLI 面
 

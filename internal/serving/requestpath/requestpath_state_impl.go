@@ -8,6 +8,7 @@ import (
 
 	"github.com/frozenf1sh/fishmesh/internal/serving/backend"
 	"github.com/frozenf1sh/fishmesh/internal/serving/circuit"
+	"github.com/frozenf1sh/fishmesh/internal/serving/prediction"
 	"github.com/frozenf1sh/fishmesh/internal/serving/routing"
 )
 
@@ -15,6 +16,7 @@ type leaseState struct {
 	service   *service
 	backendID backend.ID
 	counter   *atomic.Int64
+	ticket    prediction.Ticket
 
 	once   sync.Once
 	result Completion
@@ -48,6 +50,9 @@ func (s *service) reconcileBackends(ctx context.Context, backends []backend.Back
 		reconciler.ReconcileBackends(backends)
 	}
 	s.circuits.Reconcile(backends)
+	if s.predictor != nil {
+		s.predictor.Reconcile(backendIDs(backends))
+	}
 
 	// 2. exact subscriber 也必须随 EndpointSlice 主动换代。失败保持 KV unknown，后续请求会
 	// 显式降级到 load-aware；不能因为后台 replay 尚未可用而撤销 discovery membership。

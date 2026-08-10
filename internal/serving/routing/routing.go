@@ -23,6 +23,7 @@ const (
 	PolicyBoundedAffinityV1   Policy = "bounded-affinity-v1"
 	PolicyServiceFallbackV1   Policy = "service-fallback-v1"
 	PolicyExactCacheLoadV1    Policy = "exact-cache-load-v1"
+	PolicyExactCacheLoadV2    Policy = "exact-cache-load-v2"
 	PolicyExactLoadFallbackV1 Policy = "exact-load-fallback-v1"
 
 	ReasonServiceDefault         Reason = "service-default"
@@ -64,11 +65,34 @@ type BoundedAffinityConfig struct {
 	Clock           func() time.Time
 }
 
+// ExactCacheLoadConfig 将各类已知压力折算为等价未缓存 token。它只决定同一已知 KV 状态下的
+// 取舍，不接受或掩盖未知 load；具体数值必须在目标硬件/profile 上校准。
+type ExactCacheLoadConfig struct {
+	QueueTokenPenalty    int64
+	RunningTokenPenalty  int64
+	InflightTokenPenalty int64
+}
+
 // Config 是组合根创建具体 routing strategy 的配置。
 type Config struct {
 	Mode            Mode
 	Service         backend.Backend
 	BoundedAffinity BoundedAffinityConfig
+	ExactCacheLoad  ExactCacheLoadConfig
+}
+
+// DefaultExactCacheLoadConfig 返回尚未经过具体 GPU 校准的保守 token-equivalent 起点。
+// 队列中的请求尚未开始 prefill，因此其 penalty 高于已经运行或仅由本 Gateway 观察到的请求。
+func DefaultExactCacheLoadConfig() ExactCacheLoadConfig {
+	return ExactCacheLoadConfig{QueueTokenPenalty: 512, RunningTokenPenalty: 128, InflightTokenPenalty: 64}
+}
+
+// Validate 拒绝会把压力变成负成本的配置；零允许在受控实验中单独关闭一个已知项。
+func (c ExactCacheLoadConfig) Validate() error {
+	if c.QueueTokenPenalty < 0 || c.RunningTokenPenalty < 0 || c.InflightTokenPenalty < 0 {
+		return fmt.Errorf("exact-cache-load token penalties must not be negative")
+	}
+	return nil
 }
 
 // Snapshot is the immutable input for one routing decision.
@@ -159,10 +183,14 @@ func New(mode Mode, service backend.Backend) (Strategy, error) {
 
 // NewConfigured 创建显式配置的策略，避免组合根理解策略内部默认分支。
 func NewConfigured(config Config) (Strategy, error) {
-	if config.Mode != ModeBoundedAffinity {
+	switch config.Mode {
+	case ModeExactCacheLoad:
+		return NewConfiguredExactCacheLoad(config.ExactCacheLoad)
+	case ModeBoundedAffinity:
+		return NewBoundedAffinity(config.BoundedAffinity)
+	default:
 		return New(config.Mode, config.Service)
 	}
-	return NewBoundedAffinity(config.BoundedAffinity)
 }
 
 // EligibleBackends returns a copy without lifecycle- or circuit-blocked entries.

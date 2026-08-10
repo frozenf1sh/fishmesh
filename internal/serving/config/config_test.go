@@ -69,6 +69,40 @@ func TestLoadEnvironmentMapsBoundedAffinityDomains(t *testing.T) {
 	}
 }
 
+func TestLoadEnvironmentMapsExactCostDomains(t *testing.T) {
+	t.Setenv("FISHMESH_ROUTING_MODE", "exact-cache-load")
+	t.Setenv("FISHMESH_ENDPOINT_DISCOVERY", "endpointslice")
+	t.Setenv("FISHMESH_EXACT_QUEUE_TOKEN_PENALTY", "320")
+	t.Setenv("FISHMESH_EXACT_RUNNING_TOKEN_PENALTY", "80")
+	t.Setenv("FISHMESH_EXACT_INFLIGHT_TOKEN_PENALTY", "40")
+	config, err := LoadEnvironment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	exact := config.Routing.ExactCacheLoad
+	if exact.QueueTokenPenalty != 320 || exact.RunningTokenPenalty != 80 || exact.InflightTokenPenalty != 40 {
+		t.Fatalf("unexpected exact cost config: %+v", exact)
+	}
+}
+
+func TestLoadEnvironmentRejectsNegativeExactCostPenalty(t *testing.T) {
+	t.Setenv("FISHMESH_EXACT_QUEUE_TOKEN_PENALTY", "-1")
+	if _, err := LoadEnvironment(); err == nil || !strings.Contains(err.Error(), envExactQueueTokenPenalty) {
+		t.Fatalf("negative exact cost penalty was accepted: %v", err)
+	}
+}
+
+func TestLoadEnvironmentMapsPredictionShadowMode(t *testing.T) {
+	t.Setenv(envPredictionMode, "shadow")
+	config, err := LoadEnvironment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.Prediction.Mode != "shadow" {
+		t.Fatalf("prediction mode = %q, want shadow", config.Prediction.Mode)
+	}
+}
+
 func TestEndpointSliceRequiresServiceIdentity(t *testing.T) {
 	config, err := LoadEnvironment()
 	if err != nil {

@@ -31,8 +31,58 @@ func TestExactCacheLoadPrefersFewestUncachedThenLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if decision.Backend.ID != "a" || decision.Reason != ReasonExactCacheLoad || decision.Policy != PolicyExactCacheLoadV1 {
+	if decision.Backend.ID != "a" || decision.Reason != ReasonExactCacheLoad || decision.Policy != PolicyExactCacheLoadV2 {
 		t.Fatalf("decision = %+v, want exact selection of a", decision)
+	}
+}
+
+func TestExactCacheLoadCostLetsKnownQueueOutweighCacheBenefit(t *testing.T) {
+	strategy, err := NewConfiguredExactCacheLoad(ExactCacheLoadConfig{QueueTokenPenalty: 64, RunningTokenPenalty: 0, InflightTokenPenalty: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision, err := strategy.Select("session", Snapshot{
+		Backends: testBackends(),
+		Loads: map[backend.ID]Load{
+			"a": {Valid: true, QueueDepth: 2},
+			"b": {Valid: true},
+		},
+		Exact: ExactInput{PromptTokens: 128, Matches: map[backend.ID]CacheMatch{
+			"a": {Valid: true, MatchedTokens: 128},
+			"b": {Valid: true, MatchedTokens: 32},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Backend.ID != "b" || decision.Policy != PolicyExactCacheLoadV2 {
+		t.Fatalf("decision = %+v, want queue-aware selection of b", decision)
+	}
+}
+
+func TestExactCacheLoadDoesNotInventUnknownLoadAsZero(t *testing.T) {
+	strategy, err := NewConfiguredExactCacheLoad(ExactCacheLoadConfig{QueueTokenPenalty: 64, RunningTokenPenalty: 64, InflightTokenPenalty: 32})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision, err := strategy.Select("session", Snapshot{
+		Backends: testBackends(), Inflight: map[backend.ID]int64{"a": 1},
+		Loads: map[backend.ID]Load{"a": {Valid: false}, "b": {Valid: true, QueueDepth: 1}},
+		Exact: ExactInput{PromptTokens: 128, Matches: map[backend.ID]CacheMatch{
+			"a": {Valid: true, MatchedTokens: 128}, "b": {Valid: true, MatchedTokens: 128},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Backend.ID != "a" {
+		t.Fatalf("decision = %+v, unknown external load must not receive an invented penalty", decision)
+	}
+}
+
+func TestExactCacheLoadConfigRejectsNegativePenalty(t *testing.T) {
+	if _, err := NewConfiguredExactCacheLoad(ExactCacheLoadConfig{QueueTokenPenalty: -1}); err == nil {
+		t.Fatal("negative penalty was accepted")
 	}
 }
 

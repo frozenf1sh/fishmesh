@@ -13,6 +13,7 @@ import (
 	"github.com/frozenf1sh/fishmesh/internal/serving/discovery"
 	"github.com/frozenf1sh/fishmesh/internal/serving/kvcache"
 	"github.com/frozenf1sh/fishmesh/internal/serving/observation"
+	"github.com/frozenf1sh/fishmesh/internal/serving/prediction"
 	"github.com/frozenf1sh/fishmesh/internal/serving/routing"
 	"github.com/frozenf1sh/fishmesh/internal/serving/tokenization"
 )
@@ -29,6 +30,7 @@ type service struct {
 	kvCache      kvcache.Index
 	kvReconcile  func(context.Context, []backend.Backend) error
 	onRemove     func(backend.ID)
+	predictor    prediction.Tracker
 	cancel       context.CancelFunc
 	done         chan struct{}
 	close        sync.Once
@@ -58,7 +60,7 @@ func New(config Config, dependencies Dependencies) (Path, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	service := &service{
 		config: config, resolver: dependencies.Resolver, observations: dependencies.Observations,
-		strategy: dependencies.Strategy, circuits: dependencies.Circuits, tokenizer: dependencies.Tokenizer, kvCache: dependencies.KVCache, kvReconcile: dependencies.KVReconcile, onRemove: dependencies.OnBackendRemoved,
+		strategy: dependencies.Strategy, circuits: dependencies.Circuits, tokenizer: dependencies.Tokenizer, kvCache: dependencies.KVCache, kvReconcile: dependencies.KVReconcile, onRemove: dependencies.OnBackendRemoved, predictor: dependencies.Predictor,
 		cancel: cancel, done: make(chan struct{}), active: map[backend.ID]struct{}{config.Service.ID: {}},
 		counters: map[backend.ID]*atomic.Int64{config.Service.ID: {}},
 	}
@@ -96,11 +98,16 @@ func (s *service) Select(ctx context.Context, request Request) (Lease, error) {
 	}
 
 	// 所有退出路径都由 Complete 幂等释放。
+	var ticket prediction.Ticket
+	if s.predictor != nil && exactStatus == ExactAvailable && decision.Policy == routing.PolicyExactCacheLoadV2 {
+		input := predictionInput(snapshot, exact, decision.Backend.ID)
+		ticket, state.Prediction = s.predictor.Begin(input)
+	}
 	counter := s.inflightCounter(decision.Backend.ID)
 	counter.Add(1)
 	return Lease{
 		Decision: decision, State: state,
-		state: &leaseState{service: s, backendID: decision.Backend.ID, counter: counter},
+		state: &leaseState{service: s, backendID: decision.Backend.ID, counter: counter, ticket: ticket},
 	}, nil
 }
 
@@ -284,6 +291,30 @@ func routingLoads(backends []backend.Backend, observations map[backend.ID]observ
 		}
 	}
 	return loads
+}
+
+// predictionInput 在 orchestration 层把 routing 的纯快照投影为预测域的数值值对象。
+// hard-overload backend 沿用 exact 的安全排除；unknown load 保持 LoadValid=false。
+func predictionInput(snapshot routing.Snapshot, exact routing.ExactInput, selected backend.ID) prediction.BeginInput {
+	candidates := make([]prediction.Candidate, 0, len(snapshot.Backends))
+	for _, candidate := range routing.EligibleBackends(snapshot) {
+		load := snapshot.Loads[candidate.ID]
+		if load.HardOverload {
+			continue
+		}
+		match := exact.Matches[candidate.ID]
+		features := prediction.Features{
+			UncachedTokens: int64(exact.PromptTokens - match.MatchedTokens), QueueDepth: load.QueueDepth,
+			Running: load.Running, LocalInflight: snapshot.Inflight[candidate.ID], LoadValid: load.Valid,
+		}
+		candidates = append(candidates, prediction.Candidate{Backend: candidate.ID, Features: features})
+	}
+	for _, candidate := range candidates {
+		if candidate.Backend == selected {
+			return prediction.BeginInput{Selected: selected, Features: candidate.Features, Candidates: candidates}
+		}
+	}
+	return prediction.BeginInput{}
 }
 
 func nonNegativeCount(sample observation.Sample[float64]) (int64, bool) {

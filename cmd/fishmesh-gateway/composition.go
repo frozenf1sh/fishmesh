@@ -20,6 +20,7 @@ import (
 	"github.com/frozenf1sh/fishmesh/internal/serving/identity"
 	"github.com/frozenf1sh/fishmesh/internal/serving/kvcache"
 	"github.com/frozenf1sh/fishmesh/internal/serving/observation"
+	"github.com/frozenf1sh/fishmesh/internal/serving/prediction"
 	"github.com/frozenf1sh/fishmesh/internal/serving/requestpath"
 	"github.com/frozenf1sh/fishmesh/internal/serving/routing"
 	"github.com/frozenf1sh/fishmesh/internal/serving/tokenization"
@@ -109,10 +110,18 @@ func buildRuntime(config servingconfig.Config, logger *slog.Logger) (*runtime, e
 		reconcile = exactKVReconcile(index, config.Tokenization.Model)
 	}
 
-	// 5. 组合 RequestPath；backend 移除后在锁外统一清理 transport、metrics 和 KV instance。
+	// 5. prediction 只以 shadow 模式记录实际 TTFT；routing 不依赖该实现。
+	predictor, err := prediction.New(config.Prediction)
+	if err != nil {
+		assembled.Close()
+		return nil, fmt.Errorf("create TTFT predictor: %w", err)
+	}
+
+	// 6. 组合 RequestPath；backend 移除后在锁外统一清理 transport、metrics 和 KV instance。
 	pathService, err := requestpath.New(config.RequestPath, requestpath.Dependencies{
 		Resolver: resolver, Observations: observations, Strategy: components.strategy, Circuits: components.breaker,
 		Tokenizer: tokenizer, KVCache: index, KVReconcile: reconcile,
+		Predictor: predictor,
 		OnBackendRemoved: func(backendID backend.ID) {
 			components.pool.Remove(backendID)
 			components.metrics.DeleteBackend(string(backendID), string(config.Routing.Mode))

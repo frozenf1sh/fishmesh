@@ -57,6 +57,8 @@ type Metrics struct {
 	exactRequests         *prometheus.CounterVec
 	exactDegradations     *prometheus.CounterVec
 	exactCachedPrefix     prometheus.Histogram
+	predictionShadows     *prometheus.CounterVec
+	predictionErrors      prometheus.Histogram
 	kvCacheMu             sync.Mutex
 	kvCacheIDs            map[string]struct{}
 	kvCacheStatuses       map[string]string
@@ -130,7 +132,14 @@ func (m *Metrics) initializeRoutingMetrics() {
 	m.routeFallbacks = prometheus.NewCounter(prometheus.CounterOpts{
 		Namespace: metricNamespace, Subsystem: metricSubsystem, Name: metricRouteFallbacksTotal, Help: "Routing decisions that fell back to the Service backend.",
 	})
-	m.registry.MustRegister(m.circuitOpen, m.circuitOpens, m.routingDecisions, m.routingReasons, m.affinitySpillovers, m.routeFallbacks)
+	m.predictionShadows = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: metricNamespace, Subsystem: metricSubsystem, Name: metricPredictionShadowsTotal, Help: "TTFT shadow prediction results without changing routing.",
+	}, []string{labelStatus, labelPredictionOutcome})
+	m.predictionErrors = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Namespace: metricNamespace, Subsystem: metricSubsystem, Name: metricPredictionAbsoluteErrorSeconds, Help: "Absolute error between actual first-event TTFT and the selected backend shadow estimate.",
+		Buckets: firstSSEEventBuckets(),
+	})
+	m.registry.MustRegister(m.circuitOpen, m.circuitOpens, m.routingDecisions, m.routingReasons, m.affinitySpillovers, m.routeFallbacks, m.predictionShadows, m.predictionErrors)
 }
 
 func (m *Metrics) initializeObservationMetrics() {
@@ -388,6 +397,29 @@ func (m *Metrics) observeSelection(mode routing.Mode, lease requestpath.Lease) {
 			m.exactDegradations.WithLabelValues(string(lease.State.Exact)).Inc()
 		}
 	}
+	shadow := lease.State.Prediction
+	if shadow.Status != "" {
+		outcome := "unavailable"
+		if shadow.WouldSelect != "" {
+			outcome = "different"
+			if shadow.WouldSelect == lease.Decision.Backend.ID {
+				outcome = "same"
+			}
+		}
+		m.predictionShadows.WithLabelValues(string(shadow.Status), outcome).Inc()
+	}
+}
+
+// observePrediction 只在首 SSE 事件存在且选中 backend 有可用影子估计时记录误差。
+func (m *Metrics) observePrediction(_ requestpath.Lease, observation requestpath.FirstTokenObservation) {
+	if !observation.Valid {
+		return
+	}
+	errorSeconds := observation.Error.Seconds()
+	if errorSeconds < 0 {
+		errorSeconds = -errorSeconds
+	}
+	m.predictionErrors.Observe(errorSeconds)
 }
 
 // ObserveKVEvent 将组合根从 kvcache 接收的成功 apply 延迟投影为有界 Prometheus 标签。

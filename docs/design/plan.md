@@ -250,6 +250,16 @@ adapter、策略、部署和大规模包移动。
 若目标未达成，优先优化 body copy、tokenization 调用、index bounds 和 proxy hot path，不通过
 删除正确性检查换性能。
 
+### R6H：成本式 Exact 路由（本地实现，集群验证后置）
+
+将 exact 策略从“先比较缓存、再比较负载”的词典序，改为统一的等价未缓存 token 成本：未缓存 token、
+已知 queue、已知 running 与 Gateway local in-flight 各自按显式 penalty 相加。hard overload、KV
+unknown/stale 的 load-aware 降级和 session hint 平局语义不变；不引入任意用户前缀的主动复制预热。
+
+GPU 节点恢复后才执行受控验收：先确认 observation 与 KV replay 均 fresh，再分别验证 cold 平局、共享
+前缀命中、busy cache owner、stale/replay 与 bounded-affinity 恢复。参数只可由该 profile 校准，当前两
+个 time-sliced 副本的数据不得外推为生产性能结论。
+
 ### R6E：Standard mode 闭环
 
 - 完成原 R5D 的标准栈部署；

@@ -99,7 +99,7 @@ func (s *Server) proxyUpstream(writer http.ResponseWriter, request *http.Request
 	copyResponseHeaders(writer.Header(), response.Header)
 	s.writeUpstreamHeader(writer, upstream)
 	writer.WriteHeader(response.StatusCode)
-	copyResult := s.copyResponse(writer, response.Body, startedAt)
+	copyResult := s.copyResponse(writer, response.Body, lease, startedAt)
 	return s.classifyStreamResult(request, requestID, lease, response.StatusCode, copyResult)
 }
 
@@ -136,13 +136,15 @@ func (*Server) writeUpstreamHeader(writer http.ResponseWriter, upstream *url.URL
 	writer.Header().Set(headerUpstream, upstream.Host)
 }
 
-func (s *Server) copyResponse(writer http.ResponseWriter, body io.Reader, startedAt time.Time) bodyCopyResult {
+func (s *Server) copyResponse(writer http.ResponseWriter, body io.Reader, lease requestpath.Lease, startedAt time.Time) bodyCopyResult {
 	detector := &sseDetector{}
 	firstEventRecorded := false
 	return copyResponseBody(writer, body, func() {
 		if !firstEventRecorded {
 			firstEventRecorded = true
-			s.metrics.ttftSeconds.Observe(time.Since(startedAt).Seconds())
+			ttft := time.Since(startedAt)
+			s.metrics.ttftSeconds.Observe(ttft.Seconds())
+			s.metrics.observePrediction(lease, lease.ObserveFirstToken(ttft))
 		}
 	}, detector)
 }

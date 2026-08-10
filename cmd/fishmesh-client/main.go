@@ -17,7 +17,23 @@ import (
 const (
 	defaultEndpoint = "http://127.0.0.1:8080"
 	defaultModel    = "qwen2.5-0.5b-instruct"
+
+	colorAuto   colorMode = "auto"
+	colorAlways colorMode = "always"
+	colorNever  colorMode = "never"
+
+	ansiEscape = "\x1b["
+	ansiReset  = ansiEscape + "0m"
+	ansiCyan   = ansiEscape + "36m"
+	ansiGreen  = ansiEscape + "32m"
+	ansiYellow = ansiEscape + "33m"
+	ansiBlue   = ansiEscape + "34m"
+	ansiPurple = ansiEscape + "35m"
+	ansiDim    = ansiEscape + "2m"
 )
+
+// colorMode 只控制面向人的诊断输出；机器可读输出永远不包含 ANSI 控制序列。
+type colorMode string
 
 func main() {
 	if err := run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr); err != nil {
@@ -61,11 +77,16 @@ func runRequest(arguments []string, output, diagnostics io.Writer) error {
 	prompt := set.String("prompt", "", "required user prompt")
 	system := set.String("system", "", "optional system prompt")
 	prefixKey := set.String("prefix-key", "", "optional compatibility session hint")
+	color := set.String("color", string(colorAuto), "auto|always|never terminal diagnostic colors")
 	if err := set.Parse(arguments); err != nil {
 		return err
 	}
 	if *prompt == "" {
 		return errors.New("--prompt is required")
+	}
+	colorEnabled, err := colorForDiagnostics(*color, diagnostics)
+	if err != nil {
+		return err
 	}
 	service, err := newClient(*endpoint, *model, *maxTokens, *timeout)
 	if err != nil {
@@ -78,7 +99,7 @@ func runRequest(arguments []string, output, diagnostics io.Writer) error {
 	messages = append(messages, client.Message{Role: client.RoleUser, Content: *prompt})
 	result, err := service.Send(context.Background(), client.Request{Messages: messages, PrefixKey: *prefixKey, StreamOutput: output})
 	fmt.Fprintln(output)
-	fmt.Fprintf(diagnostics, "ttft=%s duration=%s %s\n", result.TTFT.Round(time.Millisecond), result.Duration.Round(time.Millisecond), result.Headers.String())
+	fprintlnDiagnosticEvidence(diagnostics, result, colorEnabled)
 	return err
 }
 
@@ -90,6 +111,7 @@ func runChat(arguments []string, input io.Reader, output, diagnostics io.Writer)
 	system := set.String("system", "", "initial system prompt for an empty history")
 	prefixKey := set.String("prefix-key", "", "optional compatibility session hint")
 	clear := set.Bool("clear", false, "remove the selected history and exit")
+	color := set.String("color", string(colorAuto), "auto|always|never terminal diagnostic colors")
 	if err := set.Parse(arguments); err != nil {
 		return err
 	}
@@ -98,6 +120,10 @@ func runChat(arguments []string, input io.Reader, output, diagnostics io.Writer)
 	}
 	if *clear {
 		return client.ClearHistory(*historyPath)
+	}
+	colorEnabled, err := colorForDiagnostics(*color, diagnostics)
+	if err != nil {
+		return err
 	}
 	messages, err := client.LoadHistory(*historyPath)
 	if err != nil {
@@ -120,7 +146,7 @@ func runChat(arguments []string, input io.Reader, output, diagnostics io.Writer)
 		requestMessages := append(append([]client.Message(nil), messages...), client.Message{Role: client.RoleUser, Content: prompt})
 		result, requestErr := service.Send(context.Background(), client.Request{Messages: requestMessages, PrefixKey: *prefixKey, StreamOutput: output})
 		fmt.Fprintln(output)
-		fmt.Fprintf(diagnostics, "ttft=%s duration=%s %s\n", result.TTFT.Round(time.Millisecond), result.Duration.Round(time.Millisecond), result.Headers.String())
+		fprintlnDiagnosticEvidence(diagnostics, result, colorEnabled)
 		if requestErr != nil {
 			return requestErr
 		}
@@ -130,6 +156,64 @@ func runChat(arguments []string, input io.Reader, output, diagnostics io.Writer)
 		}
 	}
 	return scanner.Err()
+}
+
+// colorForDiagnostics 默认不向重定向 stderr 或测试 writer 写终端控制序列，避免污染日志和脚本输入。
+func colorForDiagnostics(raw string, diagnostics io.Writer) (bool, error) {
+	mode, err := parseColorMode(raw)
+	if err != nil {
+		return false, err
+	}
+	switch mode {
+	case colorAlways:
+		return true, nil
+	case colorNever:
+		return false, nil
+	default:
+		file, ok := diagnostics.(*os.File)
+		if !ok {
+			return false, nil
+		}
+		info, err := file.Stat()
+		return err == nil && info.Mode()&os.ModeCharDevice != 0, nil
+	}
+}
+
+// parseColorMode 只接受固定 CLI 枚举，避免由任意字符串触发不可预测的 ANSI 行为。
+func parseColorMode(raw string) (colorMode, error) {
+	mode := colorMode(raw)
+	switch mode {
+	case colorAuto, colorAlways, colorNever:
+		return mode, nil
+	default:
+		return "", fmt.Errorf("unsupported --color value %q (use auto, always, or never)", raw)
+	}
+}
+
+// fprintlnDiagnosticEvidence 将模型正文和精简的 allowlist 路由证据分写，流式正文不混入控制信息。
+func fprintlnDiagnosticEvidence(diagnostics io.Writer, result client.Result, color bool) {
+	fmt.Fprintln(diagnostics, formatDiagnosticEvidence(result, color))
+}
+
+// formatDiagnosticEvidence 只突出人类排障关键值，不改变固定 header allowlist 或 JSONL schema。
+func formatDiagnosticEvidence(result client.Result, color bool) string {
+	headers := result.Headers
+	return fmt.Sprintf("ttft=%s duration=%s routing_mode=%s route_reason=%s policy=%s exact_status=%s cached_prefix_tokens=%d backend_id=%s preferred_backend_id=%s upstream=%s spillover_reason=%s",
+		colorize(result.TTFT.Round(time.Millisecond).String(), ansiCyan, color),
+		colorize(result.Duration.Round(time.Millisecond).String(), ansiDim, color),
+		colorize(headers.RoutingMode, ansiBlue, color),
+		colorize(headers.RouteReason, ansiYellow, color),
+		colorize(headers.Policy, ansiGreen, color),
+		colorize(headers.ExactStatus, ansiYellow, color),
+		headers.CachedPrefixTokens,
+		colorize(headers.BackendID, ansiPurple, color), headers.PreferredBackendID, headers.Upstream, headers.SpilloverReason)
+}
+
+func colorize(value, sequence string, enabled bool) string {
+	if !enabled || value == "" {
+		return value
+	}
+	return sequence + value + ansiReset
 }
 
 func runBenchmark(arguments []string, diagnostics io.Writer) error {

@@ -188,7 +188,9 @@ go run ./cmd/fishmesh-client bench \
 
 The client reads an optional `FISHMESH_API_KEY` only for the outgoing authorization header. It never writes that key,
 prompts, raw SSE payloads or arbitrary upstream headers into history or benchmark JSONL. It does not switch routing
-modes, clear cache, roll Pods or start parallel GPU workloads.
+modes, clear cache, roll Pods or start parallel GPU workloads. `chat` and `request` color the important diagnostic
+values on a terminal by default; use `--color never` for plain output or `--color always` when intentionally piping
+ANSI output. Benchmark JSONL is always plain.
 
 ## Delivery priorities
 

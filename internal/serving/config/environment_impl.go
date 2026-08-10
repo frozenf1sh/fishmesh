@@ -15,6 +15,7 @@ import (
 	"github.com/frozenf1sh/fishmesh/internal/serving/identity"
 	"github.com/frozenf1sh/fishmesh/internal/serving/kvcache"
 	"github.com/frozenf1sh/fishmesh/internal/serving/observation"
+	"github.com/frozenf1sh/fishmesh/internal/serving/prediction"
 	"github.com/frozenf1sh/fishmesh/internal/serving/requestpath"
 	"github.com/frozenf1sh/fishmesh/internal/serving/routing"
 	"github.com/frozenf1sh/fishmesh/internal/serving/tokenization"
@@ -31,6 +32,9 @@ type environmentValues struct {
 	affinityMaxEntries, maxInflight, maxConnections int
 	circuitMinimumRequests                          int
 	affinityInflightDelta                           int64
+	exactQueueTokenPenalty                          int64
+	exactRunningTokenPenalty                        int64
+	exactInflightTokenPenalty                       int64
 	affinityQueueDelta, circuitAlpha, circuitError  float64
 }
 
@@ -49,6 +53,7 @@ func LoadEnvironment() (Config, error) {
 
 func loadEnvironmentValues() (environmentValues, error) {
 	values := environmentValues{}
+	exactDefaults := routing.DefaultExactCacheLoadConfig()
 	parsers := []func() error{
 		func() error {
 			return assignDuration(envEndpointRefreshInterval, defaultEndpointRefresh, &values.endpointRefresh)
@@ -90,6 +95,15 @@ func loadEnvironmentValues() (environmentValues, error) {
 		func() error {
 			return assignFloat(envAffinityQueueDepthDelta, defaultAffinityQueueDepthDelta, &values.affinityQueueDelta)
 		},
+		func() error {
+			return assignNonNegativeInt64(envExactQueueTokenPenalty, exactDefaults.QueueTokenPenalty, &values.exactQueueTokenPenalty)
+		},
+		func() error {
+			return assignNonNegativeInt64(envExactRunningTokenPenalty, exactDefaults.RunningTokenPenalty, &values.exactRunningTokenPenalty)
+		},
+		func() error {
+			return assignNonNegativeInt64(envExactInflightTokenPenalty, exactDefaults.InflightTokenPenalty, &values.exactInflightTokenPenalty)
+		},
 		func() error { return assignFloat(envCircuitEWMAAlpha, defaultCircuitEWMAAlpha, &values.circuitAlpha) },
 		func() error {
 			return assignFloat(envCircuitErrorThreshold, defaultCircuitErrorThreshold, &values.circuitError)
@@ -110,6 +124,7 @@ func loadEnvironmentValues() (environmentValues, error) {
 }
 
 func (v environmentValues) buildConfig() (Config, error) {
+	predictionDefaults := prediction.DefaultConfig()
 	service := backend.Backend{ID: serviceBackendID, URL: valueOrDefault(envUpstreamURL, defaultUpstreamURL)}
 	if err := service.Validate(); err != nil {
 		return Config{}, err
@@ -144,6 +159,8 @@ func (v environmentValues) buildConfig() (Config, error) {
 		Prometheus:      observation.PrometheusConfig{},
 		Routing: routing.Config{Mode: routingMode, Service: service, BoundedAffinity: routing.BoundedAffinityConfig{
 			TTL: v.affinityTTL, MaxEntries: v.affinityMaxEntries, InflightDelta: v.affinityInflightDelta, QueueDepthDelta: v.affinityQueueDelta,
+		}, ExactCacheLoad: routing.ExactCacheLoadConfig{
+			QueueTokenPenalty: v.exactQueueTokenPenalty, RunningTokenPenalty: v.exactRunningTokenPenalty, InflightTokenPenalty: v.exactInflightTokenPenalty,
 		}},
 		Circuit:      circuit.Config{EWMAAlpha: v.circuitAlpha, ErrorThreshold: v.circuitError, MinimumRequests: v.circuitMinimumRequests, OpenDuration: v.circuitOpenDuration},
 		Admission:    admission.Config{MaxInflight: v.maxInflight},
@@ -151,6 +168,10 @@ func (v environmentValues) buildConfig() (Config, error) {
 		RequestPath:  requestpath.Config{Service: service, RequireFreshDiscovery: discoveryMode == discovery.ModeEndpointSlice, DiscoveryMaxAge: v.endpointMaxAge, ReconcileInterval: reconcileInterval},
 		Tokenization: tokenization.DefaultConfig(valueOrDefault(envExactRenderURL, defaultExactRenderURL), valueOrDefault(envExactModel, defaultExactModel)),
 		KVCache:      kvcache.DefaultConfig(),
+		Prediction: prediction.Config{
+			Mode: prediction.Mode(valueOrDefault(envPredictionMode, string(prediction.ModeOff))), MaxSamples: predictionDefaults.MaxSamples,
+			MaxSampleAge: predictionDefaults.MaxSampleAge, MinimumSamples: predictionDefaults.MinimumSamples,
+		},
 	}
 	return config, nil
 }
@@ -235,6 +256,16 @@ func assignInt64(key string, fallback int64, destination *int64) error {
 		return fmt.Errorf("%s must be an integer: %q: %w", key, value, err)
 	}
 	*destination = parsed
+	return nil
+}
+
+func assignNonNegativeInt64(key string, fallback int64, destination *int64) error {
+	if err := assignInt64(key, fallback, destination); err != nil {
+		return err
+	}
+	if *destination < 0 {
+		return fmt.Errorf("%s must not be negative: %d", key, *destination)
+	}
 	return nil
 }
 

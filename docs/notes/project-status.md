@@ -1,6 +1,6 @@
 # FishMesh 项目当前状态
 
-最后项目状态更新时间：2026-08-13；集群最后真实验收时间：2026-08-13。仓库为
+最后项目状态更新时间：2026-08-14；集群最后真实验收时间：2026-08-13。仓库为
 `frozenf1sh/fishmesh`（private），当前 `main` 分支
 包含可信 serving baseline、bounded-affinity-v1、request-path reliability 和工程优先的项目
 章程。
@@ -43,6 +43,25 @@ cmd 组合根的 `FISHMESH_API_KEY` 出站使用，history/JSONL 不包含 key�
 真实集群低负载验收在 bounded-affinity、Gateway 1/1 和 vLLM 2/2 Ready 下完成单请求、2 request/并发 1 profile
 与单轮 chat，三者都完整 SSE/HTTP 200；profile 正确把 `exact_status=not-requested` 排除 cached-prefix sample，且
 验收后路由模式仍为 bounded-affinity。此结果是客户端正确性证据，不是性能结论。
+
+R6G 的面向人诊断已补充终端色彩：默认 `auto` 只在 TTY 突出 TTFT、policy、reason、exact status 和 backend，
+重定向输出及 JSONL 仍为纯文本，可由 `--color always|never` 显式覆盖。当前集群保持
+`bounded-affinity`；无 prefix key 的请求会以 `missing-key-least-loaded` 在同等负载下稳定选择一个后端，故改动
+system prompt/history 不应被解释为应切换 upstream 的信号。
+
+R6H 已在本地开始成本式 exact 路由改造，GPU 节点关闭期间不访问集群：`exact-cache-load-v2` 将未缓存
+token、有效 vLLM queue/running 和 Gateway local in-flight 显式折算为等价未缓存 token，仍先排除 hard
+overload，仍将 KV unknown/stale 降级而不当作零命中。当前生产 ConfigMap 的 observation mode 是 `none`，
+所以此前 exact 实际只能依赖 cache 与 local in-flight，不能声称已按真实 vLLM load 平衡。R6H 本地实现
+完成后，等待 GPU 恢复再启用新镜像/观测配置，按受控 profile 校准 penalty 并保留失败/温度证据。
+
+R6H-2 已完成本地预测 TTFT 的影子观测契约：新的独立 `prediction` domain 对每个 backend 保留有界、
+15 分钟内的数值首 SSE TTFT 样本，以非负 ridge 最小二乘拟合未缓存 token、queue、running 和 Gateway
+local in-flight；至少 16 个样本且所有候选 load 已知才返回 `would-select`。它不读取或记录 prompt、
+Token IDs、routing key 和 SSE 内容，不进入 `routing`，不改变 `exact-cache-load-v2` 的实际选择、
+hard-overload 或 unknown/stale 的 load-aware 降级。默认 `FISHMESH_PREDICTION_MODE=off`；`shadow` 只增加
+低基数状态/误差指标，仍不产生 HTTP 决策变化。GPU 恢复后先用影子数据验证误差和安全边界，再决定是否新开
+实际预测选路切片；当前集群仍保持 bounded-affinity。
 
 README 与 README_CN 现以五分钟 Lite demo 为入口：确认 `bounded-affinity` 默认基线后临时安装
 `lite-exact`，用不带 session key 的同一长 system prompt、不同 user message 请求读取 exact 决策头，
@@ -285,5 +304,6 @@ VM 的影响更大：Kubernetes API 和 reconciliation 也会停止，应按完�
    提交和推送；
 2. 完成 R6E/原 R5D Standard mode，并执行 Gateway/EPP/llm-d precise 生产兼容性闭环；
 3. 使用 R6F 的 per-event latency、逐请求 cached-prefix 可观测契约及 R6G JSONL，再执行有限同环境复测；
-4. 在声称 NetworkPolicy 已生效前迁移到支持 policy enforcement 的 CNI；当前 Flannel 不能执行
+4. GPU 节点恢复后执行 R6H 成本式 exact 的 KV replay、负载压力、降级和 bounded-affinity 恢复验收；
+5. 在声称 NetworkPolicy 已生效前迁移到支持 policy enforcement 的 CNI；当前 Flannel 不能执行
    声明式 NetworkPolicy。

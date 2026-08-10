@@ -10,6 +10,7 @@ import (
 	"github.com/frozenf1sh/fishmesh/internal/serving/discovery"
 	"github.com/frozenf1sh/fishmesh/internal/serving/kvcache"
 	"github.com/frozenf1sh/fishmesh/internal/serving/observation"
+	"github.com/frozenf1sh/fishmesh/internal/serving/prediction"
 	"github.com/frozenf1sh/fishmesh/internal/serving/routing"
 	"github.com/frozenf1sh/fishmesh/internal/serving/tokenization"
 )
@@ -69,6 +70,8 @@ type State struct {
 	KVCache      map[backend.ID]KVCacheState
 	// CachedPrefixTokens 是本次 exact lookup 对最终 backend 的真实完整 block 前缀；unknown/stale 时为零且 Exact 不为 available。
 	CachedPrefixTokens int
+	// Prediction 是不参与本次实际选择的本地 TTFT 影子结论。
+	Prediction prediction.Shadow
 }
 
 // Completion 描述 lease 完成后发生的 circuit 状态变化。
@@ -104,6 +107,8 @@ type Dependencies struct {
 	KVCache          kvcache.Index
 	KVReconcile      func(context.Context, []backend.Backend) error
 	OnBackendRemoved func(backend.ID)
+	// Predictor 是可选的纯观测能力；nil 保持预测关闭，不能影响既有选路。
+	Predictor prediction.Tracker
 }
 
 // Path 是 standalone Gateway 的请求选择与结算边界。
@@ -124,4 +129,22 @@ func (l Lease) Complete(outcome Outcome) Completion {
 		l.state.result = l.state.service.complete(l.state.backendID, l.state.counter, outcome)
 	})
 	return l.state.result
+}
+
+// FirstTokenObservation 是 delivery 可安全投影的预测误差，不暴露预测域的可变状态。
+type FirstTokenObservation struct {
+	Valid     bool
+	Backend   backend.ID
+	Predicted time.Duration
+	Actual    time.Duration
+	Error     time.Duration
+}
+
+// ObserveFirstToken 在首个非终止 SSE 事件时记录一次 TTFT；它不改变已经固定的 Decision。
+func (l Lease) ObserveFirstToken(ttft time.Duration) FirstTokenObservation {
+	if l.state == nil {
+		return FirstTokenObservation{}
+	}
+	observation := l.state.ticket.ObserveFirstToken(ttft)
+	return FirstTokenObservation{Valid: observation.Valid, Backend: observation.Backend, Predicted: observation.Predicted, Actual: observation.Actual, Error: observation.Error}
 }
