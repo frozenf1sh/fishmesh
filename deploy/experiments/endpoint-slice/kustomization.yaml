@@ -11,7 +11,7 @@ patches:
     patch: |-
       - op: replace
         path: /data/FISHMESH_ROUTING_MODE
-        value: prefix-affinity
+        value: session-key
       - op: replace
         path: /data/FISHMESH_ENDPOINT_DISCOVERY
         value: endpointslice
@@ -32,7 +32,7 @@ patches:
         value: ""
       - op: replace
         path: /metadata/annotations/fishmesh.io~1routing-mode
-        value: prefix-affinity-endpointslice
+        value: session-key-endpointslice
       - op: replace
         path: /metadata/annotations/fishmesh.io~1config-version
         value: v3-endpointslice-experiment

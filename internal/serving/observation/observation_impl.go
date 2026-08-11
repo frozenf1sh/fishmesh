@@ -2,18 +2,11 @@ package observation
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"time"
 
 	"github.com/frozenf1sh/fishmesh/internal/serving/backend"
 	"github.com/frozenf1sh/fishmesh/internal/serving/identity"
-)
-
-const (
-	defaultInterval       = 15 * time.Second
-	defaultMaxAge         = 45 * time.Second
-	defaultRequestTimeout = 5 * time.Second
 )
 
 var _ Reader = (*service)(nil)
@@ -38,23 +31,14 @@ type service struct {
 }
 
 func New(config Config, dependencies Dependencies) (Reader, error) {
-	if dependencies.Resolver == nil {
-		return nil, fmt.Errorf("observation resolver must not be nil")
-	}
-	if dependencies.Collector == nil {
-		return nil, fmt.Errorf("observation collector must not be nil")
-	}
-	if config.Interval <= 0 {
-		config.Interval = defaultInterval
-	}
-	if config.MaxAge <= 0 {
-		config.MaxAge = defaultMaxAge
-	}
-	if config.RequestTimeout <= 0 {
-		config.RequestTimeout = defaultRequestTimeout
-	}
 	if config.Clock == nil {
 		config.Clock = time.Now
+	}
+	if err := dependencies.Validate(); err != nil {
+		return nil, err
+	}
+	if err := config.Validate(); err != nil {
+		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	service := &service{

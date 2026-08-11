@@ -1,9 +1,6 @@
 package admission
 
-import (
-	"fmt"
-	"sync"
-)
+import "sync"
 
 var _ Controller = (*controller)(nil)
 var _ Permit = (*permit)(nil)
@@ -19,8 +16,8 @@ type permit struct {
 
 // New 创建一个进程内准入控制器。
 func New(config Config) (Controller, error) {
-	if config.MaxInflight <= 0 {
-		return nil, fmt.Errorf("admission max inflight must be positive: %d", config.MaxInflight)
+	if err := config.Validate(); err != nil {
+		return nil, err
 	}
 	return &controller{permits: make(chan struct{}, config.MaxInflight)}, nil
 }

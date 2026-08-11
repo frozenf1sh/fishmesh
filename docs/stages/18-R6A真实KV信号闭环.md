@@ -25,7 +25,7 @@
 
 ### 2.1 声明式 vLLM overlay
 
-新增 `deploy/experiments/exact-kv-signal`，在基础 vLLM Deployment 上增加：
+新增 `deploy/experiments/kv-aware-signal`，在基础 vLLM Deployment 上增加：
 
 ```text
 --kv-events-config={
@@ -63,7 +63,7 @@ GPU 节点 `/tmp`，没有创建长期 Deployment，也没有进入 FishMesh rel
 
 ## 3. 一个关键的上游缺口
 
-只调用 `kvevents.SubscriberManager` 不足以形成生产 exact 信号。固定的上游版本存在三个边界：
+只调用 `kvevents.SubscriberManager` 不足以形成生产 KV-aware 信号。固定的上游版本存在三个边界：
 
 1. 接收并携带 sequence，但不检查 sequence gap；
 2. 没有调用 vLLM replay endpoint；
@@ -138,7 +138,7 @@ matched prefix      7 blocks / 112 tokens
 valid               true
 ```
 
-这验证了“先明确失效，再恢复 exact”，而不是断流期间继续使用旧索引。
+这验证了“先明确失效，再恢复 KV-aware”，而不是断流期间继续使用旧索引。
 
 ### 4.4 真实 eviction
 
@@ -195,11 +195,11 @@ ADR-002 的 R6A 数据源门禁通过，可以进入 R6B，依据是：
 - 不同会话共享 system prompt 得到 128-token 真实公共前缀；
 - removed event 后旧 match 归零；
 - Pod UID 变化后旧归属可清除，新 Pod 从独立 sequence 0 开始；
-- subscriber 暂停时 exact invalid，恢复后 replay 可补偿；
+- subscriber 暂停时 KV-aware invalid，恢复后 replay 可补偿；
 - 单次 Render 约 5–6 ms，lookup 约 0.08–0.14 ms，当前规模的内存仍很小且有界。
 - 一次最小事件复测的 publisher→consumer lag 为 0.678 ms，空索引探针 RSS 约 33.2 MiB。
 
-这只是数据链路通过，不代表 exact routing 已经交付。当前 Gateway 仍运行 bounded affinity，默认
+这只是数据链路通过，不代表 KV-aware routing 已经交付。当前 Gateway 仍运行 session-key，默认
 vLLM 清单也没有长期打开 KVEvents。
 
 ## 6. R6B 必须继承的约束
@@ -209,7 +209,7 @@ vLLM 清单也没有长期打开 KVEvents。
 3. 上游 parser/indexer 继续放在 adapter 内，不把其类型泄漏给 routing；
 4. initial replay 如果从 sequence 0 已无法覆盖，信号保持 invalid，不能用部分 buffer 冒充完整状态；
 5. idle event stream 不等于 stale，freshness 以主动 replay 心跳为依据；
-6. unknown/stale match 不等于零命中，requestpath 必须显式降级到 load-aware；
+6. unknown/stale match 不等于零命中，requestpath 必须显式降级到 load-balanced；
 7. topic 的 Pod IP 只用于兼容上游索引键，状态 owner 同时持有 Pod UID 并负责映射和回收；
 8. 第一批生产提交不实现策略和 Gateway，先按规范完成 tokenization 契约和值对象。
 

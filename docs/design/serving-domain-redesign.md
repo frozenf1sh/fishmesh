@@ -1,7 +1,7 @@
 # FishMesh Serving Domain 重新设计
 
 > 状态：R1–R4、R5A–R5C、R6A、R6B tokenization/KV cache 叶子能力已完成；R5D 顺序已由
-> ADR-002 调整，下一步进入 exact-cache-load 纯 routing。后续变更仍必须遵守
+> ADR-002 调整，下一步进入 kv-aware 纯 routing。后续变更仍必须遵守
 > [`code-organization.md`](code-organization.md)，并保持每个提交可构建、可回滚。
 
 ## 1. 结论
@@ -29,7 +29,7 @@ gateway -> endpoint ------> routing
 ```
 
 `routing` 被所有包依赖，不是因为所有包都需要路由策略，而是它同时拥有 Backend、Identity、
-Observation、Sample 和 Snapshot。与此同时，它又实现 hash、load-aware、bounded affinity 和
+Observation、Sample 和 Snapshot。与此同时，它又实现 hash、load-balanced、session-key 和
 circuit。类型所有权和行为所有权混在一起。
 
 更大的问题在 `gateway/server.go`：当前 651 行同时完成：
@@ -67,10 +67,9 @@ internal/serving/
 │   └── *_test.go
 ├── routing/                 # pure endpoint-selection policies
 │   ├── routing.go
-│   ├── service_impl.go
-│   ├── prefix_affinity_impl.go
-│   ├── load_aware_impl.go
-│   ├── bounded_affinity_impl.go
+│   ├── load_balanced_impl.go
+│   ├── session_key_impl.go
+│   ├── kv_aware_impl.go
 │   └── *_test.go
 ├── circuit/                 # per-backend local outcome circuit
 │   ├── circuit.go
@@ -120,7 +119,7 @@ cmd/fishmesh-epp/            # integrated 组合根（R5C 已完成）
 | `discovery` | membership snapshot、resource version、freshness | `Resolver.Snapshot/Status/Close` | 负载、路由、fallback |
 | `identity` | Pod/Node/声明资源映射结果 | `Provider.Resolve` | 实时 GPU score、调度 |
 | `observation` | `Sample[T]`、backend signals、采集 freshness | `Reader.Snapshot/Close`、collector contract | endpoint eligibility、综合评分 |
-| `routing` | mode、reason、affinity registry | `Strategy.Select`、有状态策略 reconcile | Kubernetes、HTTP、circuit、fallback |
+| `routing` | mode、reason、session-key registry | `Strategy.Select`、有状态策略 reconcile | Kubernetes、HTTP、circuit、fallback |
 | `circuit` | outcome EWMA、open-until、sample count | `Record/State/Reconcile` | HTTP 状态解释、选择策略 |
 | `admission` | 进程内 permit 数量 | `TryAcquire`，返回幂等 permit | 排队、tenant rate limit |
 | `transport` | 每 backend HTTP client/connection pool | `Client/Remove/Close` | backend 选择、retry 策略 |
@@ -158,6 +157,7 @@ flowchart TD
     CMD --> RP["requestpath orchestration"]
     CMD --> DISC["discovery"]
     CMD --> OBS["observation"]
+    CMD --> PRED["prediction shadow observation"]
     CMD --> ROUTE["routing"]
     CMD --> CIR["circuit"]
     CMD --> ADM["admission"]
@@ -171,6 +171,7 @@ flowchart TD
     RP --> OBS
     RP --> ROUTE
     RP --> CIR
+    RP --> PRED
     DISC --> BACK["backend"]
     OBS --> BACK
     OBS --> ID["identity"]
@@ -188,7 +189,9 @@ flowchart TD
 
 - `backend` 不 import 任何 FishMesh 包；
 - `routing` 只依赖 backend/observation 和标准库；
+- `prediction` 只依赖 backend 和标准库，只提供影子观测，不参与 routing 决策；
 - `requestpath` 不依赖 HTTP、Prometheus DTO 或 Kubernetes wire type；
+- `requestpath` 可以依赖 prediction，因为它是 prediction 观测结果的编排投影点；
 - `gateway` 不 import Kubernetes platform client；
 - `transport` 不 import routing；
 - `discovery/identity/observation` 不 import requestpath 或 gateway；
@@ -270,9 +273,11 @@ type Config struct {
 }
 ```
 
-环境变量字符串只存在于 `config/environment_impl.go`；每个 domain 的默认值和 `Validate` 靠近
-自己的 Config。组合根先加载总配置，再将小配置分别传给构造函数。这样不会把 routing 阈值传给
-HTTP handler，也不会让 transport 知道 EndpointSlice 配置。
+环境变量字符串只存在于 `config/environment_impl.go`；所有 standalone Serving 的产品默认值由
+`config.DefaultConfig()` 集中声明，domain 只拥有自己的 Config 类型、校验规则和运行时依赖。
+组合根先加载总配置，再将小配置分别传给构造函数；环境变量只覆盖中央默认值。这样不会把 routing
+阈值传给 HTTP handler，也不会让 transport 知道 EndpointSlice 配置，更不会因为某个 domain 的
+构造函数偷偷补值而产生第二套运行契约。
 
 ## 8. 迁移顺序
 
@@ -320,9 +325,9 @@ HTTP handler，也不会让 transport 知道 EndpointSlice 配置。
 - standalone 与 integrated adapter 对相同候选和负载输入运行 selection/reason conformance；
 - 两种运行时的 fallback、retry 和 stream lifecycle 分别按各自协议测试。
 
-R5C 完成后，项目根据 [`ADR-002`](decisions/002-lite-exact-kv-routing.md) 重新评估交付物：
+R5C 完成后，项目根据 [`ADR-002`](decisions/002-lite-kv-aware-routing.md) 重新评估交付物：
 `fishmesh-epp` 继续作为 Standard mode，但不再把 Lite Gateway 降为仅开发载体。原计划 R5D 的
-完整标准部署后移到 R6E，先用真实集群闭环 Lite exact KV 主能力。
+完整标准部署后移到 R6E，先用真实集群闭环 Lite KV-aware 主能力。
 
 每个 R 阶段单独更新阶段文档、提交和推送。禁止在纯搬包提交中顺便改变 route reason、fallback、
 timeout、连接复用或 circuit 算法。
@@ -366,12 +371,12 @@ Backend 值对象不需要 `BackendService` 接口；只为目录对称创建接
 - 所有现有 race/fault/K3s smoke 行为保持不变；
 - simulator 和未来 EPP adapter 不需要 import standalone Gateway。
 
-## 11. R6 增量设计：Exact KV 能力域
+## 11. R6 增量设计：KV-aware 能力域
 
 R6 不推翻 R1–R4 的 owner 和依赖方向，只增加两个有真实替换边界的叶子能力：
 
 ```text
-tokenization -> exact prompt Token IDs
+tokenization -> KV-aware prompt Token IDs
 kvcache      -> per-backend cached-prefix snapshot
 ```
 
@@ -381,7 +386,8 @@ kvcache      -> per-backend cached-prefix snapshot
 tokenization -> standard library（vLLM Render 类型只在 adapter）
 kvcache      -> backend（llm-d-kv-cache/vLLM event 类型只在 adapter）
 routing      -> backend + observation + kvcache values
-requestpath  -> discovery + observation + tokenization + kvcache + routing + circuit
+prediction   -> backend
+requestpath  -> discovery + observation + prediction + tokenization + kvcache + routing + circuit
 llmd         -> backend + observation + kvcache values + routing
 gateway      -> admission + requestpath + transport
 ```
@@ -400,7 +406,7 @@ R6B 严格按叶子到编排实施：
 2. vLLM Render adapter；
 3. `kvcache` contract/value/test；
 4. KVEvents/index/lifecycle adapter；
-5. routing exact-cache-load 纯策略；
+5. routing kv-aware 纯策略；
 6. requestpath 降级编排；
 7. Gateway bounded body 与原始 body replay；
 8. llmd `PrefixCacheMatchInfo` 翻译。

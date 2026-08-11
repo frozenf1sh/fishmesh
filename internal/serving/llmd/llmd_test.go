@@ -12,17 +12,17 @@ import (
 func TestNewNormalizesConfigurationAndSharesClock(t *testing.T) {
 	now := time.Date(2026, time.August, 10, 12, 0, 0, 0, time.UTC)
 	clock := func() time.Time { return now }
-	config := DefaultConfig()
-	config.RoutingKeyHeader = " X-FishMesh-Session "
+	config := testConfig()
+	config.SessionKeyHeader = " X-FishMesh-Session "
 	config.Clock = clock
 
-	plugin, err := New("bounded-affinity", config)
+	plugin, err := New("session-key", config)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
 	created := plugin.(*scorer)
-	if created.routingKeyHeader != "x-fishmesh-session" {
-		t.Fatalf("routingKeyHeader = %q", created.routingKeyHeader)
+	if created.sessionKeyHeader != "x-fishmesh-session" {
+		t.Fatalf("sessionKeyHeader = %q", created.sessionKeyHeader)
 	}
 	if got := created.clock(); !got.Equal(now) {
 		t.Fatalf("metrics clock = %v, want %v", got, now)
@@ -31,11 +31,11 @@ func TestNewNormalizesConfigurationAndSharesClock(t *testing.T) {
 
 func TestFactoryParsesParameters(t *testing.T) {
 	decoder := json.NewDecoder(bytes.NewBufferString(`{
-		"routingKeyHeader":"X-Session",
+		"sessionKeyHeader":"X-Session",
 		"metricsMaxAge":"20s",
 		"inFlightLoadProducerName":"inflight",
-		"affinityTTL":"2m",
-		"maxAffinityEntries":500,
+		"sessionKeyTTL":"2m",
+		"maxSessionKeyEntries":500,
 		"inflightDelta":3,
 		"queueDepthDelta":2
 	}`))
@@ -45,7 +45,7 @@ func TestFactoryParsesParameters(t *testing.T) {
 		t.Fatalf("factory() error = %v", err)
 	}
 	created := plugin.(*scorer)
-	if created.routingKeyHeader != "x-session" || created.metricsMaxAge != 20*time.Second {
+	if created.sessionKeyHeader != "x-session" || created.metricsMaxAge != 20*time.Second {
 		t.Fatalf("factory config = %+v", created)
 	}
 	if got := created.inflightKey.String(); got != "InFlightLoadDataKey/inflight" {
@@ -60,8 +60,8 @@ func TestFactoryRejectsUnknownAndInvalidParameters(t *testing.T) {
 	}{
 		{name: "unknown field", body: `{"unknown":true}`},
 		{name: "invalid metrics age", body: `{"metricsMaxAge":"soon"}`},
-		{name: "invalid affinity ttl", body: `{"affinityTTL":"later"}`},
-		{name: "invalid limits", body: `{"maxAffinityEntries":0}`},
+		{name: "invalid session-key ttl", body: `{"sessionKeyTTL":"later"}`},
+		{name: "invalid limits", body: `{"maxSessionKeyEntries":0}`},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -79,9 +79,9 @@ func TestNewRejectsInvalidConfiguration(t *testing.T) {
 		plugin string
 		config Config
 	}{
-		{name: "empty name", config: DefaultConfig()},
-		{name: "metrics age", plugin: "invalid", config: Config{BoundedAffinity: routing.DefaultBoundedAffinityConfig()}},
-		{name: "bounded affinity", plugin: "invalid", config: Config{MetricsMaxAge: time.Second}},
+		{name: "empty name", config: testConfig()},
+		{name: "metrics age", plugin: "invalid", config: Config{SessionKey: testSessionKeyConfig()}},
+		{name: "session-key", plugin: "invalid", config: Config{MetricsMaxAge: time.Second}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -90,5 +90,24 @@ func TestNewRejectsInvalidConfiguration(t *testing.T) {
 				t.Fatal("New() error = nil")
 			}
 		})
+	}
+}
+
+func testConfig() Config {
+	return Config{
+		SessionKeyHeader: "x-fishmesh-session-key",
+		MetricsMaxAge:    45 * time.Second,
+		SessionKey:       testSessionKeyConfig(),
+		Clock:            time.Now,
+	}
+}
+
+func testSessionKeyConfig() routing.SessionKeyConfig {
+	return routing.SessionKeyConfig{
+		TTL:             5 * time.Minute,
+		MaxEntries:      10_000,
+		InflightDelta:   2,
+		QueueDepthDelta: 1,
+		Clock:           time.Now,
 	}
 }

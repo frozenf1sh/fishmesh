@@ -3,6 +3,7 @@ package discovery
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -20,6 +21,16 @@ const (
 
 // Mode 选择静态列表或 Kubernetes EndpointSlice 实现。
 type Mode string
+
+// Validate 检查 discovery 实现是否属于当前进程支持的集合。
+func (m Mode) Validate() error {
+	switch m {
+	case ModeStatic, ModeEndpointSlice:
+		return nil
+	default:
+		return fmt.Errorf("unsupported discovery mode %q", m)
+	}
+}
 
 // Status describes whether a discovery snapshot can be used.
 type Status string

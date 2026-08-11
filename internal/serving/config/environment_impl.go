@@ -13,7 +13,6 @@ import (
 	"github.com/frozenf1sh/fishmesh/internal/serving/discovery"
 	"github.com/frozenf1sh/fishmesh/internal/serving/gateway"
 	"github.com/frozenf1sh/fishmesh/internal/serving/identity"
-	"github.com/frozenf1sh/fishmesh/internal/serving/kvcache"
 	"github.com/frozenf1sh/fishmesh/internal/serving/observation"
 	"github.com/frozenf1sh/fishmesh/internal/serving/prediction"
 	"github.com/frozenf1sh/fishmesh/internal/serving/requestpath"
@@ -23,90 +22,98 @@ import (
 )
 
 type environmentValues struct {
-	endpointRefresh, endpointMaxAge                 time.Duration
-	observationInterval, observationMaxAge          time.Duration
-	requestTimeout, shutdownTimeout                 time.Duration
-	maxRequestBody                                  int64
-	affinityTTL, circuitOpenDuration                time.Duration
-	keepAlive                                       bool
-	affinityMaxEntries, maxInflight, maxConnections int
-	circuitMinimumRequests                          int
-	affinityInflightDelta                           int64
-	exactQueueTokenPenalty                          int64
-	exactRunningTokenPenalty                        int64
-	exactInflightTokenPenalty                       int64
-	affinityQueueDelta, circuitAlpha, circuitError  float64
+	endpointRefresh, endpointMaxAge                   time.Duration
+	observationInterval, observationMaxAge            time.Duration
+	requestTimeout, shutdownTimeout                   time.Duration
+	maxRequestBody                                    int64
+	sessionKeyTTL, circuitOpenDuration                time.Duration
+	keepAlive                                         bool
+	sessionKeyMaxEntries, maxInflight, maxConnections int
+	circuitMinimumRequests                            int
+	sessionKeyInflightDelta                           int64
+	kvAwareQueueTokenPenalty                          int64
+	kvAwareRunningTokenPenalty                        int64
+	kvAwareInflightTokenPenalty                       int64
+	sessionKeyQueueDelta, circuitAlpha, circuitError  float64
 }
 
 // LoadEnvironment 读取全部 FISHMESH_* 配置并返回按 domain 拆分的结果。
 func LoadEnvironment() (Config, error) {
-	values, err := loadEnvironmentValues()
+	defaults := DefaultConfig()
+	values, err := loadEnvironmentValues(defaults)
 	if err != nil {
 		return Config{}, err
 	}
-	config, err := values.buildConfig()
+	config, err := values.buildConfig(defaults)
 	if err != nil {
 		return Config{}, err
 	}
 	return config, config.Validate()
 }
 
-func loadEnvironmentValues() (environmentValues, error) {
+func loadEnvironmentValues(defaults Config) (environmentValues, error) {
 	values := environmentValues{}
-	exactDefaults := routing.DefaultExactCacheLoadConfig()
 	parsers := []func() error{
 		func() error {
-			return assignDuration(envEndpointRefreshInterval, defaultEndpointRefresh, &values.endpointRefresh)
-		},
-		func() error { return assignDuration(envEndpointMaxAge, defaultEndpointMaxAge, &values.endpointMaxAge) },
-		func() error {
-			return assignDuration(envObservationInterval, defaultObservationInterval, &values.observationInterval)
+			return assignDuration(envEndpointRefreshInterval, defaults.Discovery.EndpointSlice.RefreshInterval, &values.endpointRefresh)
 		},
 		func() error {
-			return assignDuration(envObservationMaxAge, defaultObservationMaxAge, &values.observationMaxAge)
-		},
-		func() error { return assignDuration(envRequestTimeout, defaultRequestTimeout, &values.requestTimeout) },
-		func() error {
-			return assignInt64(envMaxRequestBodyBytes, defaultMaxRequestBodyBytes, &values.maxRequestBody)
+			return assignDuration(envEndpointMaxAge, defaults.RequestPath.DiscoveryMaxAge, &values.endpointMaxAge)
 		},
 		func() error {
-			return assignDuration(envShutdownTimeout, defaultShutdownTimeout, &values.shutdownTimeout)
-		},
-		func() error { return assignDuration(envAffinityTTL, defaultAffinityTTL, &values.affinityTTL) },
-		func() error {
-			return assignDuration(envCircuitOpenDuration, defaultCircuitOpenDuration, &values.circuitOpenDuration)
-		},
-		func() error { return assignBool(envUpstreamKeepAlive, false, &values.keepAlive) },
-		func() error {
-			return assignInt(envAffinityMaxEntries, defaultAffinityMaxEntries, false, &values.affinityMaxEntries)
+			return assignDuration(envObservationInterval, defaults.Observation.Interval, &values.observationInterval)
 		},
 		func() error {
-			return assignInt(envMaxInflightRequests, defaultMaxInflightRequests, true, &values.maxInflight)
+			return assignDuration(envObservationMaxAge, defaults.Observation.MaxAge, &values.observationMaxAge)
 		},
 		func() error {
-			return assignInt(envMaxConnsPerHost, defaultMaxConnsPerHost, true, &values.maxConnections)
+			return assignDuration(envRequestTimeout, defaults.Gateway.RequestTimeout, &values.requestTimeout)
 		},
 		func() error {
-			return assignInt(envCircuitMinimumRequests, defaultCircuitMinimumRequests, true, &values.circuitMinimumRequests)
+			return assignInt64(envMaxRequestBodyBytes, defaults.Gateway.MaxRequestBodyBytes, &values.maxRequestBody)
 		},
 		func() error {
-			return assignInt64(envAffinityInflightDelta, defaultAffinityInflightDelta, &values.affinityInflightDelta)
+			return assignDuration(envShutdownTimeout, defaults.Process.ShutdownTimeout, &values.shutdownTimeout)
 		},
 		func() error {
-			return assignFloat(envAffinityQueueDepthDelta, defaultAffinityQueueDepthDelta, &values.affinityQueueDelta)
+			return assignDuration(envSessionKeyTTL, defaults.Routing.SessionKey.TTL, &values.sessionKeyTTL)
 		},
 		func() error {
-			return assignNonNegativeInt64(envExactQueueTokenPenalty, exactDefaults.QueueTokenPenalty, &values.exactQueueTokenPenalty)
+			return assignDuration(envCircuitOpenDuration, defaults.Circuit.OpenDuration, &values.circuitOpenDuration)
+		},
+		func() error { return assignBool(envUpstreamKeepAlive, defaults.Transport.KeepAlive, &values.keepAlive) },
+		func() error {
+			return assignInt(envSessionKeyMaxEntries, defaults.Routing.SessionKey.MaxEntries, false, &values.sessionKeyMaxEntries)
 		},
 		func() error {
-			return assignNonNegativeInt64(envExactRunningTokenPenalty, exactDefaults.RunningTokenPenalty, &values.exactRunningTokenPenalty)
+			return assignInt(envMaxInflightRequests, defaults.Admission.MaxInflight, true, &values.maxInflight)
 		},
 		func() error {
-			return assignNonNegativeInt64(envExactInflightTokenPenalty, exactDefaults.InflightTokenPenalty, &values.exactInflightTokenPenalty)
+			return assignInt(envMaxConnsPerHost, defaults.Transport.MaxConnsPerHost, true, &values.maxConnections)
 		},
-		func() error { return assignFloat(envCircuitEWMAAlpha, defaultCircuitEWMAAlpha, &values.circuitAlpha) },
 		func() error {
-			return assignFloat(envCircuitErrorThreshold, defaultCircuitErrorThreshold, &values.circuitError)
+			return assignInt(envCircuitMinimumRequests, defaults.Circuit.MinimumRequests, true, &values.circuitMinimumRequests)
+		},
+		func() error {
+			return assignInt64(envSessionKeyInflightDelta, defaults.Routing.SessionKey.InflightDelta, &values.sessionKeyInflightDelta)
+		},
+		func() error {
+			return assignFloat(envSessionKeyQueueDepthDelta, defaults.Routing.SessionKey.QueueDepthDelta, &values.sessionKeyQueueDelta)
+		},
+		func() error {
+			return assignNonNegativeInt64(envKVAwareQueueTokenPenalty, defaults.Routing.KVAware.QueueTokenPenalty, &values.kvAwareQueueTokenPenalty)
+		},
+		func() error {
+			return assignNonNegativeInt64(envKVAwareRunningTokenPenalty, defaults.Routing.KVAware.RunningTokenPenalty, &values.kvAwareRunningTokenPenalty)
+		},
+		func() error {
+			return assignNonNegativeInt64(envKVAwareInflightTokenPenalty, defaults.Routing.KVAware.InflightTokenPenalty, &values.kvAwareInflightTokenPenalty)
+		},
+		func() error {
+			return assignFloat(envCircuitEWMAAlpha, defaults.Circuit.EWMAAlpha, &values.circuitAlpha)
+		},
+		func() error {
+			return assignFloat(envCircuitErrorThreshold, defaults.Circuit.ErrorThreshold, &values.circuitError)
 		},
 	}
 	for _, parse := range parsers {
@@ -123,9 +130,9 @@ func loadEnvironmentValues() (environmentValues, error) {
 	return values, nil
 }
 
-func (v environmentValues) buildConfig() (Config, error) {
-	predictionDefaults := prediction.DefaultConfig()
-	service := backend.Backend{ID: serviceBackendID, URL: valueOrDefault(envUpstreamURL, defaultUpstreamURL)}
+func (v environmentValues) buildConfig(defaults Config) (Config, error) {
+	service := defaults.RequestPath.Service
+	service.URL = valueOrDefault(envUpstreamURL, service.URL)
 	if err := service.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -133,54 +140,55 @@ func (v environmentValues) buildConfig() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	discoveryMode := discovery.Mode(valueOrDefault(envEndpointDiscovery, string(discovery.ModeStatic)))
-	routingMode := routing.Mode(valueOrDefault(envRoutingMode, string(defaultRoutingMode)))
-	if discoveryMode == discovery.ModeStatic && routingMode == routing.ModeService && len(staticBackends) == 0 {
+	discoveryMode := discovery.Mode(valueOrDefault(envEndpointDiscovery, string(defaults.Discovery.Mode)))
+	routingMode := routing.Mode(valueOrDefault(envRoutingMode, string(defaults.Routing.Mode)))
+	if discoveryMode == discovery.ModeStatic && routingMode == routing.ModeLoadBalanced && len(staticBackends) == 0 {
 		staticBackends = []backend.Backend{service}
 	}
 	reconcileInterval := time.Duration(0)
 	if discoveryMode == discovery.ModeEndpointSlice {
 		reconcileInterval = v.endpointRefresh
 	}
-	namespace := valueOrDefault(envEndpointNamespace, defaultEndpointNamespace)
-	apiURL := strings.TrimSpace(os.Getenv(envKubernetesAPIURL))
-	tokenFile := valueOrDefault(envKubernetesTokenFile, defaultKubernetesTokenFile)
-	caFile := valueOrDefault(envKubernetesCAFile, defaultKubernetesCAFile)
+	namespace := valueOrDefault(envEndpointNamespace, defaults.Discovery.EndpointSlice.Namespace)
+	apiURL := valueOrDefault(envKubernetesAPIURL, defaults.Discovery.EndpointSlice.BaseURL)
+	tokenFile := valueOrDefault(envKubernetesTokenFile, defaults.Discovery.EndpointSlice.TokenFile)
+	caFile := valueOrDefault(envKubernetesCAFile, defaults.Discovery.EndpointSlice.CAFile)
 	config := Config{
-		Process: ProcessConfig{ListenAddress: valueOrDefault(envListenAddress, defaultListenAddress), ReadHeaderTimeout: defaultReadHeaderTimeout, ShutdownTimeout: v.shutdownTimeout},
+		Process: ProcessConfig{ListenAddress: valueOrDefault(envListenAddress, defaults.Process.ListenAddress), ReadHeaderTimeout: defaults.Process.ReadHeaderTimeout, ShutdownTimeout: v.shutdownTimeout},
 		Gateway: gateway.Config{RoutingMode: routingMode, KeepAlive: v.keepAlive, RequestTimeout: v.requestTimeout, MaxRequestBodyBytes: v.maxRequestBody},
 		Discovery: discovery.Config{Mode: discoveryMode, Static: staticBackends, EndpointSlice: discovery.EndpointSliceConfig{
-			Namespace: namespace, ServiceName: valueOrDefault(envEndpointService, defaultEndpointService), BaseURL: apiURL,
+			Namespace: namespace, ServiceName: valueOrDefault(envEndpointService, defaults.Discovery.EndpointSlice.ServiceName), BaseURL: apiURL,
 			TokenFile: tokenFile, CAFile: caFile, RefreshInterval: v.endpointRefresh,
 		}},
 		Identity:        identity.Config{Namespace: namespace, BaseURL: apiURL, TokenFile: tokenFile, CAFile: caFile},
-		ObservationMode: observation.Mode(valueOrDefault(envObservationMode, string(observation.ModeNone))),
-		Observation:     observation.Config{Interval: v.observationInterval, MaxAge: v.observationMaxAge},
-		Prometheus:      observation.PrometheusConfig{},
-		Routing: routing.Config{Mode: routingMode, Service: service, BoundedAffinity: routing.BoundedAffinityConfig{
-			TTL: v.affinityTTL, MaxEntries: v.affinityMaxEntries, InflightDelta: v.affinityInflightDelta, QueueDepthDelta: v.affinityQueueDelta,
-		}, ExactCacheLoad: routing.ExactCacheLoadConfig{
-			QueueTokenPenalty: v.exactQueueTokenPenalty, RunningTokenPenalty: v.exactRunningTokenPenalty, InflightTokenPenalty: v.exactInflightTokenPenalty,
+		ObservationMode: observation.Mode(valueOrDefault(envObservationMode, string(defaults.ObservationMode))),
+		Observation:     observation.Config{Interval: v.observationInterval, MaxAge: v.observationMaxAge, RequestTimeout: defaults.Observation.RequestTimeout, Clock: defaults.Observation.Clock},
+		Prometheus:      defaults.Prometheus,
+		Routing: routing.Config{Mode: routingMode, Service: service, SessionKey: routing.SessionKeyConfig{
+			TTL: v.sessionKeyTTL, MaxEntries: v.sessionKeyMaxEntries, InflightDelta: v.sessionKeyInflightDelta, QueueDepthDelta: v.sessionKeyQueueDelta, Clock: defaults.Routing.SessionKey.Clock,
+		}, KVAware: routing.KVAwareConfig{
+			QueueTokenPenalty: v.kvAwareQueueTokenPenalty, RunningTokenPenalty: v.kvAwareRunningTokenPenalty, InflightTokenPenalty: v.kvAwareInflightTokenPenalty,
 		}},
-		Circuit:      circuit.Config{EWMAAlpha: v.circuitAlpha, ErrorThreshold: v.circuitError, MinimumRequests: v.circuitMinimumRequests, OpenDuration: v.circuitOpenDuration},
+		Circuit:      circuit.Config{EWMAAlpha: v.circuitAlpha, ErrorThreshold: v.circuitError, MinimumRequests: v.circuitMinimumRequests, OpenDuration: v.circuitOpenDuration, Clock: defaults.Circuit.Clock},
 		Admission:    admission.Config{MaxInflight: v.maxInflight},
-		Transport:    transport.Config{KeepAlive: v.keepAlive, RequestTimeout: v.requestTimeout, MaxConnsPerHost: v.maxConnections},
+		Transport:    transport.Config{KeepAlive: v.keepAlive, RequestTimeout: v.requestTimeout, MaxConnsPerHost: v.maxConnections, IdleConnTimeout: defaults.Transport.IdleConnTimeout},
 		RequestPath:  requestpath.Config{Service: service, RequireFreshDiscovery: discoveryMode == discovery.ModeEndpointSlice, DiscoveryMaxAge: v.endpointMaxAge, ReconcileInterval: reconcileInterval},
-		Tokenization: tokenization.DefaultConfig(valueOrDefault(envExactRenderURL, defaultExactRenderURL), valueOrDefault(envExactModel, defaultExactModel)),
-		KVCache:      kvcache.DefaultConfig(),
+		Tokenization: tokenization.Config{BaseURL: valueOrDefault(envKVAwareRenderURL, defaults.Tokenization.BaseURL), Model: valueOrDefault(envKVAwareModel, defaults.Tokenization.Model), Timeout: defaults.Tokenization.Timeout, MaxRequestBytes: defaults.Tokenization.MaxRequestBytes, MaxResponseBytes: defaults.Tokenization.MaxResponseBytes, MaxTotalTokens: defaults.Tokenization.MaxTotalTokens},
+		KVCache:      defaults.KVCache,
 		Prediction: prediction.Config{
-			Mode: prediction.Mode(valueOrDefault(envPredictionMode, string(prediction.ModeOff))), MaxSamples: predictionDefaults.MaxSamples,
-			MaxSampleAge: predictionDefaults.MaxSampleAge, MinimumSamples: predictionDefaults.MinimumSamples,
+			Mode: valueOrDefaultMode(envPredictionMode, defaults.Prediction.Mode), MaxSamples: defaults.Prediction.MaxSamples,
+			MaxSampleAge: defaults.Prediction.MaxSampleAge, MinimumSamples: defaults.Prediction.MinimumSamples, Clock: defaults.Prediction.Clock,
 		},
 	}
 	return config, nil
 }
 
+func valueOrDefaultMode(key string, fallback prediction.Mode) prediction.Mode {
+	return prediction.Mode(valueOrDefault(key, string(fallback)))
+}
+
 func staticBackendsFromEnvironment() ([]backend.Backend, error) {
 	value := os.Getenv(envBackendEndpoints)
-	if strings.TrimSpace(value) == "" {
-		value = os.Getenv(envLegacyPrefixEndpoints)
-	}
 	items := csvValues(value)
 	backends := make([]backend.Backend, 0, len(items))
 	for index, rawURL := range items {

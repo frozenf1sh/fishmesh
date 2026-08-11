@@ -3,7 +3,6 @@ package requestpath
 import (
 	"context"
 	"errors"
-	"fmt"
 	"math"
 	"sync"
 	"sync/atomic"
@@ -42,20 +41,11 @@ type service struct {
 
 // New 校验依赖、初始化成员状态，并启动可关闭的定期 reconcile。
 func New(config Config, dependencies Dependencies) (Path, error) {
-	if err := config.Service.Validate(); err != nil {
-		return nil, fmt.Errorf("requestpath service fallback: %w", err)
+	if err := config.Validate(); err != nil {
+		return nil, err
 	}
-	if dependencies.Resolver == nil || dependencies.Strategy == nil || dependencies.Circuits == nil {
-		return nil, fmt.Errorf("requestpath resolver, strategy and circuits must not be nil")
-	}
-	if dependencies.Strategy.Name() == routing.ModeExactCacheLoad && (dependencies.Tokenizer == nil || dependencies.KVCache == nil) {
-		return nil, fmt.Errorf("exact-cache-load requestpath requires tokenizer and KV cache")
-	}
-	if dependencies.Strategy.Name() == routing.ModeExactCacheLoad && dependencies.KVReconcile == nil {
-		return nil, fmt.Errorf("exact-cache-load requestpath requires KV reconcile")
-	}
-	if config.RequireFreshDiscovery && config.DiscoveryMaxAge <= 0 {
-		return nil, fmt.Errorf("requestpath discovery max age must be positive")
+	if err := dependencies.Validate(); err != nil {
+		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	service := &service{
@@ -84,23 +74,23 @@ func (s *service) Select(ctx context.Context, request Request) (Lease, error) {
 	// 2. 合并观测、local in-flight 和 circuit，固定本次选择的健康候选。
 	state, snapshot := s.buildSnapshot(backends)
 
-	// 3. exact 模式使用真实 Token IDs 和 KV Match 构建纯 routing 输入；未知信号只降级，不伪装为零命中。
-	exact, exactStatus, err := s.buildExactInput(ctx, tokenization.Input{Route: tokenization.Route(request.Route), Body: request.Body}, routing.EligibleBackends(snapshot))
+	// 3. KV-aware 模式使用真实 Token IDs 和 KV Match 构建纯 routing 输入；未知信号只降级，不伪装为零命中。
+	kvInput, kvStatus, err := s.buildKVAwareInput(ctx, tokenization.Input{Route: tokenization.Route(request.Route), Body: request.Body}, routing.EligibleBackends(snapshot))
 	if err != nil {
 		return Lease{}, err
 	}
-	state.Exact, snapshot.Exact = exactStatus, exact
+	state.KV, snapshot.KVAware = kvStatus, kvInput
 
 	// 4. 先由纯策略选择，再为最终 backend 登记可幂等 lease。
 	decision := s.selectDecision(request.RoutingKey, snapshot, state.Discovery)
-	if exactStatus == ExactAvailable {
-		state.CachedPrefixTokens = exact.Matches[decision.Backend.ID].MatchedTokens
+	if kvStatus == KVAvailable {
+		state.CachedPrefixTokens = kvInput.Matches[decision.Backend.ID].MatchedTokens
 	}
 
 	// 所有退出路径都由 Complete 幂等释放。
 	var ticket prediction.Ticket
-	if s.predictor != nil && exactStatus == ExactAvailable && decision.Policy == routing.PolicyExactCacheLoadV2 {
-		input := predictionInput(snapshot, exact, decision.Backend.ID)
+	if s.predictor != nil && kvStatus == KVAvailable && decision.Policy == routing.PolicyKVAwareV1 {
+		input := predictionInput(snapshot, kvInput, decision.Backend.ID)
 		ticket, state.Prediction = s.predictor.Begin(input)
 	}
 	counter := s.inflightCounter(decision.Backend.ID)
@@ -146,7 +136,7 @@ func (s *service) Close() error {
 func (s *service) buildSnapshot(backends []backend.Backend) (State, routing.Snapshot) {
 	state := State{
 		Backends: append([]backend.Backend(nil), backends...), Observations: s.activeObservations(backends),
-		CircuitOpen: make(map[backend.ID]bool, len(backends)), Discovery: s.resolver.Status(), Exact: ExactNotRequested,
+		CircuitOpen: make(map[backend.ID]bool, len(backends)), Discovery: s.resolver.Status(), KV: KVNotRequested,
 	}
 	if s.kvCache != nil {
 		state.KVCache = projectKVCacheState(s.kvCache.State())
@@ -180,22 +170,22 @@ func projectKVCacheState(snapshot kvcache.StateSnapshot) map[backend.ID]KVCacheS
 	return states
 }
 
-func (s *service) buildExactInput(ctx context.Context, input tokenization.Input, candidates []backend.Backend) (routing.ExactInput, ExactStatus, error) {
-	if s.strategy.Name() != routing.ModeExactCacheLoad {
-		return routing.ExactInput{}, ExactNotRequested, nil
+func (s *service) buildKVAwareInput(ctx context.Context, input tokenization.Input, candidates []backend.Backend) (routing.KVAwareInput, KVStatus, error) {
+	if s.strategy.Name() != routing.ModeKVAware {
+		return routing.KVAwareInput{}, KVNotRequested, nil
 	}
 	profile, err := s.tokenizer.Tokenize(ctx, input)
 	if err != nil {
 		if isContextError(err) {
-			return routing.ExactInput{}, ExactTokenizationFailed, err
+			return routing.KVAwareInput{}, KVTokenizationFailed, err
 		}
-		return routing.ExactInput{}, ExactTokenizationFailed, nil
+		return routing.KVAwareInput{}, KVTokenizationFailed, nil
 	}
 	if err := s.kvReconcile(ctx, candidates); err != nil {
 		if isContextError(err) {
-			return routing.ExactInput{}, ExactLookupFailed, err
+			return routing.KVAwareInput{}, KVLookupFailed, err
 		}
-		return routing.ExactInput{}, ExactLookupFailed, nil
+		return routing.KVAwareInput{}, KVLookupFailed, nil
 	}
 
 	query := kvcache.Query{Model: profile.Model(), CacheSalt: profile.CacheSalt(), Backends: backendIDs(candidates)}
@@ -205,15 +195,15 @@ func (s *service) buildExactInput(ctx context.Context, input tokenization.Input,
 	snapshot, err := s.kvCache.Lookup(ctx, query)
 	if err != nil {
 		if isContextError(err) {
-			return routing.ExactInput{}, ExactLookupFailed, err
+			return routing.KVAwareInput{}, KVLookupFailed, err
 		}
-		return routing.ExactInput{}, ExactLookupFailed, nil
+		return routing.KVAwareInput{}, KVLookupFailed, nil
 	}
-	exact := routingInputFromMatches(profile.TotalTokens(), snapshot.Matches())
-	if !exact.UsableFor(candidates) {
-		return exact, ExactMatchUnavailable, nil
+	kvInput := routingInputFromMatches(profile.TotalTokens(), snapshot.Matches())
+	if !kvInput.UsableFor(candidates) {
+		return kvInput, KVMatchUnavailable, nil
 	}
-	return exact, ExactAvailable, nil
+	return kvInput, KVAvailable, nil
 }
 
 func (s *service) selectDecision(routingKey string, snapshot routing.Snapshot, status discovery.ResolverStatus) routing.Decision {
@@ -223,26 +213,26 @@ func (s *service) selectDecision(routingKey string, snapshot routing.Snapshot, s
 	if len(routing.EligibleBackends(snapshot)) == 0 {
 		return s.fallback(routing.ReasonCircuitFallback)
 	}
-	if s.strategy.Name() == routing.ModeExactCacheLoad && !snapshot.Exact.UsableFor(routing.EligibleBackends(snapshot)) {
-		return s.exactLoadFallback(routingKey, snapshot)
+	if s.strategy.Name() == routing.ModeKVAware && !snapshot.KVAware.UsableFor(routing.EligibleBackends(snapshot)) {
+		return s.kvAwareLoadFallback(routingKey, snapshot)
 	}
 	decision, err := s.strategy.Select(routingKey, snapshot)
 	if err != nil || decision.Backend.ID == "" {
 		return s.fallback(routing.ReasonStrategyFallback)
 	}
-	if err := decision.Backend.Validate(); err != nil {
+	if err := decision.Validate(); err != nil {
 		return s.fallback(routing.ReasonBackendFallback)
 	}
 	return decision
 }
 
-func (s *service) exactLoadFallback(routingKey string, snapshot routing.Snapshot) routing.Decision {
-	decision, err := routing.NewLoadAware().Select(routingKey, snapshot)
+func (s *service) kvAwareLoadFallback(routingKey string, snapshot routing.Snapshot) routing.Decision {
+	decision, err := routing.NewLoadBalanced().Select(routingKey, snapshot)
 	if err != nil || decision.Backend.ID == "" {
 		return s.fallback(routing.ReasonStrategyFallback)
 	}
-	decision.Reason = routing.ReasonExactSignalUnavailable
-	decision.Policy = routing.PolicyExactLoadFallbackV1
+	decision.Reason = routing.ReasonKVAwareSignalUnavailable
+	decision.Policy = routing.PolicyKVAwareLoadFallbackV1
 	return decision
 }
 
@@ -294,17 +284,17 @@ func routingLoads(backends []backend.Backend, observations map[backend.ID]observ
 }
 
 // predictionInput 在 orchestration 层把 routing 的纯快照投影为预测域的数值值对象。
-// hard-overload backend 沿用 exact 的安全排除；unknown load 保持 LoadValid=false。
-func predictionInput(snapshot routing.Snapshot, exact routing.ExactInput, selected backend.ID) prediction.BeginInput {
+// hard-overload backend 沿用 KV-aware 的安全排除；unknown load 保持 LoadValid=false。
+func predictionInput(snapshot routing.Snapshot, kvInput routing.KVAwareInput, selected backend.ID) prediction.BeginInput {
 	candidates := make([]prediction.Candidate, 0, len(snapshot.Backends))
 	for _, candidate := range routing.EligibleBackends(snapshot) {
 		load := snapshot.Loads[candidate.ID]
 		if load.HardOverload {
 			continue
 		}
-		match := exact.Matches[candidate.ID]
+		match := kvInput.Matches[candidate.ID]
 		features := prediction.Features{
-			UncachedTokens: int64(exact.PromptTokens - match.MatchedTokens), QueueDepth: load.QueueDepth,
+			UncachedTokens: int64(kvInput.PromptTokens - match.MatchedTokens), QueueDepth: load.QueueDepth,
 			Running: load.Running, LocalInflight: snapshot.Inflight[candidate.ID], LoadValid: load.Valid,
 		}
 		candidates = append(candidates, prediction.Candidate{Backend: candidate.ID, Features: features})
@@ -325,10 +315,10 @@ func nonNegativeCount(sample observation.Sample[float64]) (int64, bool) {
 	return int64(math.Ceil(sample.Value)), true
 }
 
-func routingInputFromMatches(promptTokens int, matches map[backend.ID]kvcache.Match) routing.ExactInput {
-	result := routing.ExactInput{PromptTokens: promptTokens, Matches: make(map[backend.ID]routing.CacheMatch, len(matches))}
+func routingInputFromMatches(promptTokens int, matches map[backend.ID]kvcache.Match) routing.KVAwareInput {
+	result := routing.KVAwareInput{PromptTokens: promptTokens, Matches: make(map[backend.ID]routing.KVMatch, len(matches))}
 	for backendID, match := range matches {
-		result.Matches[backendID] = routing.CacheMatch{Valid: match.Valid, MatchedTokens: match.MatchedTokens}
+		result.Matches[backendID] = routing.KVMatch{Valid: match.Valid, MatchedTokens: match.MatchedTokens}
 	}
 	return result
 }

@@ -1,0 +1,38 @@
+# This policy is deliberately excluded from kustomization.yaml. The current K3s
+# Flannel CNI does not enforce NetworkPolicy, so applying it would create a false
+# security claim. Include it only after moving to a policy-capable CNI and testing
+# DNS, HTTP Render/upstream, and the KV event/replay channels.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: fishmesh-gateway-lite-kv-aware-egress
+  namespace: kubellm
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: fishmesh-gateway
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: qwen-vllm
+      ports:
+        - protocol: TCP
+          port: 8000
+        - protocol: TCP
+          port: 5557
+        - protocol: TCP
+          port: 5558

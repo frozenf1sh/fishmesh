@@ -19,7 +19,6 @@ import (
 
 const (
 	maxMetricsBodyBytes = 8 << 20
-	defaultMetricsPath  = "/metrics"
 	headerAccept        = "Accept"
 	prometheusTextMedia = "text/plain; version=0.0.4"
 	httpURLScheme       = "http"
@@ -126,7 +125,7 @@ func metricsURL(raw, metricsPath string) (string, error) {
 		return "", fmt.Errorf("backend URL scheme must be http or https: %q", raw)
 	}
 	if strings.TrimSpace(metricsPath) == "" {
-		metricsPath = defaultMetricsPath
+		return "", fmt.Errorf("metrics path must not be empty")
 	}
 	parsed.Path = metricsPath
 	parsed.RawPath = ""

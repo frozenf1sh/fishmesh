@@ -45,18 +45,18 @@ func (r *mutableResolver) replace(backends []backend.Backend) {
 
 type invalidStrategy struct{}
 
-func (invalidStrategy) Name() routing.Mode { return routing.ModePrefixAffinity }
+func (invalidStrategy) Name() routing.Mode { return routing.ModeSessionKey }
 func (invalidStrategy) Select(string, routing.Snapshot) (routing.Decision, error) {
 	return routing.Decision{Backend: backend.Backend{ID: "invalid", URL: "/relative"}}, nil
 }
 
-func TestReconcileBackendsRefreshesExactKVInstancesWithoutRequest(t *testing.T) {
+func TestReconcileBackendsRefreshesKVAwareKVInstancesWithoutRequest(t *testing.T) {
 	first := backend.Backend{ID: "first", URL: testBackendURL}
 	second := backend.Backend{ID: "second", URL: "http://second:8000"}
 	resolver := &mutableResolver{backends: []backend.Backend{first}}
 	reconciled := make(chan []backend.Backend, 16)
 	path, err := New(Config{Service: backend.Backend{ID: "service", URL: "http://service:8000"}, ReconcileInterval: 20 * time.Millisecond}, Dependencies{
-		Resolver: resolver, Strategy: routing.NewExactCacheLoad(), Circuits: newTestBreaker(t),
+		Resolver: resolver, Strategy: newKVAwareStrategy(t), Circuits: newTestBreaker(t),
 		Tokenizer: failingTokenizer{}, KVCache: &recordingKVCache{},
 		KVReconcile: func(_ context.Context, backends []backend.Backend) error {
 			reconciled <- append([]backend.Backend(nil), backends...)
@@ -90,11 +90,11 @@ func assertReconciledBackend(t *testing.T, reconciled <-chan []backend.Backend, 
 	}
 }
 
-func TestReconcileBackendsKeepsMembershipWhenExactKVRefreshFails(t *testing.T) {
+func TestReconcileBackendsKeepsMembershipWhenKVAwareKVRefreshFails(t *testing.T) {
 	candidate := backend.Backend{ID: "direct", URL: testBackendURL}
 	resolver := &mutableResolver{backends: []backend.Backend{candidate}}
 	path, err := New(Config{Service: backend.Backend{ID: "service", URL: "http://service:8000"}}, Dependencies{
-		Resolver: resolver, Strategy: routing.NewExactCacheLoad(), Circuits: newTestBreaker(t),
+		Resolver: resolver, Strategy: newKVAwareStrategy(t), Circuits: newTestBreaker(t),
 		Tokenizer: failingTokenizer{}, KVCache: &recordingKVCache{},
 		KVReconcile: func(context.Context, []backend.Backend) error { return errors.New("replay unavailable") },
 	})
@@ -105,7 +105,7 @@ func TestReconcileBackendsKeepsMembershipWhenExactKVRefreshFails(t *testing.T) {
 
 	state := path.State(context.Background())
 	if len(state.Backends) != 1 || state.Backends[0].ID != candidate.ID {
-		t.Fatalf("exact KV refresh failure changed membership: %+v", state.Backends)
+		t.Fatalf("KV refresh failure changed membership: %+v", state.Backends)
 	}
 }
 
@@ -154,7 +154,7 @@ func TestLeaseCompletionClassifiesCircuitOutcomesAndIsIdempotent(t *testing.T) {
 		status:   discovery.ResolverStatus{Status: discovery.StatusOK, ReadyBackends: 1},
 	}
 	breaker := newTestBreaker(t)
-	strategy := routing.NewPrefixAffinity()
+	strategy := newSessionKeyStrategy(t)
 	path, err := New(Config{Service: backend.Backend{ID: "service", URL: "http://service:8000"}}, Dependencies{
 		Resolver: resolver, Strategy: strategy, Circuits: breaker,
 	})
@@ -192,7 +192,7 @@ func TestRemovedBackendWaitsForInflightLeaseBeforeCleanup(t *testing.T) {
 	var mu sync.Mutex
 	var removed []backend.ID
 	path, err := New(Config{Service: backend.Backend{ID: "service", URL: "http://service:8000"}}, Dependencies{
-		Resolver: resolver, Strategy: routing.NewPrefixAffinity(), Circuits: newTestBreaker(t),
+		Resolver: resolver, Strategy: newSessionKeyStrategy(t), Circuits: newTestBreaker(t),
 		OnBackendRemoved: func(id backend.ID) {
 			mu.Lock()
 			defer mu.Unlock()
@@ -228,7 +228,7 @@ func TestReadyRequiresUsableFreshDiscovery(t *testing.T) {
 	path, err := New(Config{
 		Service:               backend.Backend{ID: "service", URL: "http://service:8000"},
 		RequireFreshDiscovery: true, DiscoveryMaxAge: time.Minute,
-	}, Dependencies{Resolver: resolver, Strategy: routing.NewPrefixAffinity(), Circuits: newTestBreaker(t)})
+	}, Dependencies{Resolver: resolver, Strategy: newSessionKeyStrategy(t), Circuits: newTestBreaker(t)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -264,4 +264,26 @@ func newTestBreaker(t *testing.T) circuit.Breaker {
 		t.Fatal(err)
 	}
 	return breaker
+}
+
+func newSessionKeyStrategy(t *testing.T) routing.Strategy {
+	t.Helper()
+	strategy, err := routing.NewSessionKey(routing.SessionKeyConfig{
+		TTL: time.Minute, MaxEntries: 100, InflightDelta: 2, QueueDepthDelta: 1, Clock: time.Now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strategy
+}
+
+func newKVAwareStrategy(t *testing.T) routing.Strategy {
+	t.Helper()
+	strategy, err := routing.NewConfiguredKVAware(routing.KVAwareConfig{
+		QueueTokenPenalty: 512, RunningTokenPenalty: 128, InflightTokenPenalty: 64,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strategy
 }

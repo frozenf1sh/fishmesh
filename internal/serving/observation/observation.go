@@ -3,7 +3,9 @@ package observation
 
 import (
 	"context"
+	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/frozenf1sh/fishmesh/internal/serving/backend"
@@ -21,6 +23,16 @@ const (
 
 // Mode 选择是否启用 backend Prometheus 观测。
 type Mode string
+
+// Validate 检查观测实现是否属于当前进程支持的集合。
+func (m Mode) Validate() error {
+	switch m {
+	case ModeNone, ModePrometheus:
+		return nil
+	default:
+		return fmt.Errorf("unsupported observation mode %q", m)
+	}
+}
 
 // Status describes the aggregate quality of one backend observation.
 type Status string
@@ -70,6 +82,14 @@ type PrometheusConfig struct {
 	Clock       Clock
 }
 
+// Validate 检查 Prometheus adapter 的协议配置；HTTP client 和 clock 由实现层作为运行时依赖注入。
+func (c PrometheusConfig) Validate() error {
+	if strings.TrimSpace(c.MetricsPath) == "" {
+		return fmt.Errorf("prometheus metrics path must not be empty")
+	}
+	return nil
+}
+
 // Reader publishes immutable observation snapshots.
 type Reader interface {
 	Snapshot() map[backend.ID]Backend
@@ -89,4 +109,20 @@ type Dependencies struct {
 	Resolver  BackendSource
 	Collector Collector
 	Identity  identity.Enricher
+}
+
+// Validate 检查观测 reader 必须具备的固定数据源和 collector。
+func (d Dependencies) Validate() error {
+	if d.Resolver == nil || d.Collector == nil {
+		return fmt.Errorf("observation resolver and collector must not be nil")
+	}
+	return nil
+}
+
+// Validate 检查观测采样周期和 freshness 边界。Clock 允许为空，由构造函数补入标准时钟。
+func (c Config) Validate() error {
+	if c.Interval <= 0 || c.MaxAge <= 0 || c.RequestTimeout <= 0 {
+		return fmt.Errorf("observation interval, max age and request timeout must be positive")
+	}
+	return nil
 }

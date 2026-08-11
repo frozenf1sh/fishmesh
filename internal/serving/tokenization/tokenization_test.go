@@ -7,7 +7,7 @@ import (
 )
 
 func TestConfigValidate(t *testing.T) {
-	valid := DefaultConfig("http://renderer.kubellm.svc:8000", "qwen")
+	valid := testConfig("http://renderer.kubellm.svc:8000", "qwen")
 	tests := []struct {
 		name   string
 		mutate func(*Config)
@@ -94,7 +94,18 @@ func requireErrorCode(t *testing.T, err error, expected ErrorCode) *Error {
 }
 
 func shortTimeoutConfig(baseURL string) Config {
-	config := DefaultConfig(baseURL, "qwen")
+	config := testConfig(baseURL, "qwen")
 	config.Timeout = 20 * time.Millisecond
 	return config
+}
+
+func testConfig(baseURL, model string) Config {
+	return Config{
+		BaseURL:          baseURL,
+		Model:            model,
+		Timeout:          5 * time.Second,
+		MaxRequestBytes:  2 << 20,
+		MaxResponseBytes: 8 << 20,
+		MaxTotalTokens:   131072,
+	}
 }

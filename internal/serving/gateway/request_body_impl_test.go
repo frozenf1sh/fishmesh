@@ -41,7 +41,7 @@ type gatewayKVCache struct {
 
 func (c *gatewayKVCache) Lookup(context.Context, kvcache.Query) (kvcache.Snapshot, error) {
 	c.queried = true
-	// 零 Snapshot 故意代表 lookup 没有可信 Match，以验证真实请求会走显式 load-aware 降级。
+	// 零 Snapshot 故意代表 lookup 没有可信 Match，以验证真实请求会走显式 load-balanced 降级。
 	return kvcache.Snapshot{}, nil
 }
 
@@ -49,7 +49,7 @@ func (*gatewayKVCache) Reconcile(context.Context, []kvcache.Instance) error { re
 func (*gatewayKVCache) State() kvcache.StateSnapshot                        { return kvcache.StateSnapshot{} }
 func (*gatewayKVCache) Close() error                                        { return nil }
 
-func TestProxyBoundsAndReplaysBodyWhileExposingExactDegradation(t *testing.T) {
+func TestProxyBoundsAndReplaysBodyWhileExposingKVAwareDegradation(t *testing.T) {
 	requestBody := []byte(`{"model":"qwen","messages":[],"stream":true}`)
 	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		body, err := io.ReadAll(request.Body)
@@ -61,10 +61,10 @@ func TestProxyBoundsAndReplaysBodyWhileExposingExactDegradation(t *testing.T) {
 	}))
 	defer upstream.Close()
 	path := &recordingPath{lease: requestpath.Lease{
-		Decision: routing.Decision{Backend: backend.Backend{ID: "backend-a", URL: upstream.URL}, PreferredBackendID: "backend-a", Reason: routing.ReasonExactSignalUnavailable, Policy: routing.PolicyExactLoadFallbackV1},
-		State:    requestpath.State{Exact: requestpath.ExactMatchUnavailable},
+		Decision: routing.Decision{Backend: backend.Backend{ID: "backend-a", URL: upstream.URL}, PreferredBackendID: "backend-a", Reason: routing.ReasonKVAwareSignalUnavailable, Policy: routing.PolicyKVAwareLoadFallbackV1},
+		State:    requestpath.State{KV: requestpath.KVMatchUnavailable},
 	}}
-	server := newGatewayWithPath(t, path, routing.ModeExactCacheLoad, int64(len(requestBody)))
+	server := newGatewayWithPath(t, path, routing.ModeKVAware, int64(len(requestBody)))
 
 	response := httptest.NewRecorder()
 	server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodPost, "http://gateway/v1/chat/completions", bytes.NewReader(requestBody)))
@@ -74,7 +74,7 @@ func TestProxyBoundsAndReplaysBodyWhileExposingExactDegradation(t *testing.T) {
 	if !path.selected || path.request.Route != "/v1/chat/completions" || !bytes.Equal(path.request.Body, requestBody) {
 		t.Fatalf("requestpath input = %+v", path.request)
 	}
-	if response.Header().Get(headerRouteReason) != string(routing.ReasonExactSignalUnavailable) || response.Header().Get(headerExactStatus) != string(requestpath.ExactMatchUnavailable) || response.Header().Get(headerPolicy) != string(routing.PolicyExactLoadFallbackV1) {
+	if response.Header().Get(headerRouteReason) != string(routing.ReasonKVAwareSignalUnavailable) || response.Header().Get(headerKVStatus) != string(requestpath.KVMatchUnavailable) || response.Header().Get(headerPolicy) != string(routing.PolicyKVAwareLoadFallbackV1) {
 		t.Fatalf("decision headers = %v", response.Header())
 	}
 	if response.Header().Get(headerCachedPrefixTokens) != "0" {
@@ -84,7 +84,7 @@ func TestProxyBoundsAndReplaysBodyWhileExposingExactDegradation(t *testing.T) {
 
 func TestProxyRejectsOversizedBodyBeforeSelection(t *testing.T) {
 	path := &recordingPath{}
-	server := newGatewayWithPath(t, path, routing.ModeExactCacheLoad, 4)
+	server := newGatewayWithPath(t, path, routing.ModeKVAware, 4)
 	response := httptest.NewRecorder()
 	server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodPost, "http://gateway/v1/chat/completions", bytes.NewBufferString("12345")))
 	if response.Code != http.StatusRequestEntityTooLarge || path.selected {
@@ -92,7 +92,7 @@ func TestProxyRejectsOversizedBodyBeforeSelection(t *testing.T) {
 	}
 }
 
-func TestExactGatewayClosesRenderLookupSelectionAndSSELoop(t *testing.T) {
+func TestKVAwareGatewayClosesRenderLookupSelectionAndSSELoop(t *testing.T) {
 	var rendered bool
 	renderer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		rendered = request.URL.Path == "/v1/chat/completions/render"
@@ -104,7 +104,7 @@ func TestExactGatewayClosesRenderLookupSelectionAndSSELoop(t *testing.T) {
 		_, _ = writer.Write([]byte("data: {\"choices\":[{}]}\n\ndata: [DONE]\n\n"))
 	}))
 	defer upstream.Close()
-	tokenizer, err := tokenization.NewVLLMRenderer(tokenization.DefaultConfig(renderer.URL, "qwen"), tokenization.Dependencies{HTTPClient: renderer.Client()})
+	tokenizer, err := tokenization.NewVLLMRenderer(testTokenizationConfig(renderer.URL, "qwen"), tokenization.Dependencies{HTTPClient: renderer.Client()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,14 +119,14 @@ func TestExactGatewayClosesRenderLookupSelectionAndSSELoop(t *testing.T) {
 		t.Fatal(err)
 	}
 	path, err := requestpath.New(requestpath.Config{Service: backendValue}, requestpath.Dependencies{
-		Resolver: resolver, Strategy: routing.NewExactCacheLoad(), Circuits: breaker, Tokenizer: tokenizer, KVCache: cache, KVReconcile: func(context.Context, []backend.Backend) error { return nil },
+		Resolver: resolver, Strategy: testKVAwareStrategy(t), Circuits: breaker, Tokenizer: tokenizer, KVCache: cache, KVReconcile: func(context.Context, []backend.Backend) error { return nil },
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer path.Close()
 	defer resolver.Close()
-	server := newGatewayWithPath(t, path, routing.ModeExactCacheLoad, 1024)
+	server := newGatewayWithPath(t, path, routing.ModeKVAware, 1024)
 
 	requestBody := []byte(`{"model":"qwen","messages":[],"stream":true}`)
 	response := httptest.NewRecorder()
@@ -134,8 +134,30 @@ func TestExactGatewayClosesRenderLookupSelectionAndSSELoop(t *testing.T) {
 	if !rendered || !cache.queried || response.Code != http.StatusOK || response.Body.String() != "data: {\"choices\":[{}]}\n\ndata: [DONE]\n\n" {
 		t.Fatalf("rendered=%t lookup=%t status=%d body=%q", rendered, cache.queried, response.Code, response.Body.String())
 	}
-	if response.Header().Get(headerRouteReason) != string(routing.ReasonExactSignalUnavailable) || response.Header().Get(headerExactStatus) != string(requestpath.ExactMatchUnavailable) {
+	if response.Header().Get(headerRouteReason) != string(routing.ReasonKVAwareSignalUnavailable) || response.Header().Get(headerKVStatus) != string(requestpath.KVMatchUnavailable) {
 		t.Fatalf("degradation headers = %v", response.Header())
+	}
+}
+
+func testKVAwareStrategy(t *testing.T) routing.Strategy {
+	t.Helper()
+	strategy, err := routing.NewConfiguredKVAware(routing.KVAwareConfig{
+		QueueTokenPenalty: 512, RunningTokenPenalty: 128, InflightTokenPenalty: 64,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strategy
+}
+
+func testTokenizationConfig(baseURL, model string) tokenization.Config {
+	return tokenization.Config{
+		BaseURL:          baseURL,
+		Model:            model,
+		Timeout:          5 * time.Second,
+		MaxRequestBytes:  2 << 20,
+		MaxResponseBytes: 8 << 20,
+		MaxTotalTokens:   131072,
 	}
 }
 
@@ -145,7 +167,7 @@ func newGatewayWithPath(t testing.TB, path requestpath.Path, mode routing.Mode, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	pool := transport.New(transport.Config{RequestTimeout: time.Second, MaxConnsPerHost: 1})
+	pool := transport.New(transport.Config{RequestTimeout: time.Second, MaxConnsPerHost: 1, IdleConnTimeout: time.Second})
 	server, err := New(Config{RoutingMode: mode, RequestTimeout: time.Second, MaxRequestBodyBytes: bodyLimit}, Dependencies{
 		RequestPath: path, Admission: admissionController, Transport: pool, Metrics: NewMetrics(), Logger: testLogger(),
 	})

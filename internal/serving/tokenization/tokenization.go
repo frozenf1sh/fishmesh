@@ -29,11 +29,6 @@ const (
 	CodeInvalidResponse     ErrorCode = "invalid_response"
 	CodeUnsupportedFeature  ErrorCode = "unsupported_feature"
 	CodeTokenLimitExceeded  ErrorCode = "token_limit_exceeded"
-
-	defaultTimeout          = 5 * time.Second
-	defaultMaxRequestBytes  = 2 << 20
-	defaultMaxResponseBytes = 8 << 20
-	defaultMaxTotalTokens   = 131072
 )
 
 // Route 是原始推理请求的 OpenAI-compatible 路径。
@@ -154,16 +149,12 @@ type Dependencies struct {
 	HTTPClient *http.Client
 }
 
-// DefaultConfig 返回适合文本 MVP 的保守默认上限。调用方仍需提供 Render URL 和模型名。
-func DefaultConfig(baseURL, model string) Config {
-	return Config{
-		BaseURL:          baseURL,
-		Model:            model,
-		Timeout:          defaultTimeout,
-		MaxRequestBytes:  defaultMaxRequestBytes,
-		MaxResponseBytes: defaultMaxResponseBytes,
-		MaxTotalTokens:   defaultMaxTotalTokens,
+// Validate 检查 Render adapter 所需的固定外部能力。
+func (d Dependencies) Validate() error {
+	if d.HTTPClient == nil {
+		return fmt.Errorf("tokenization HTTP client must not be nil")
 	}
+	return nil
 }
 
 // Validate 检查 adapter 是否具有确定的模型和有限的资源预算。

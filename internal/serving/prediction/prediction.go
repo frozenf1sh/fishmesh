@@ -35,11 +35,6 @@ type Config struct {
 	Clock          func() time.Time
 }
 
-// DefaultConfig 返回保守的本地 profile 边界。默认关闭，不改变现有路由。
-func DefaultConfig() Config {
-	return Config{Mode: ModeOff, MaxSamples: 128, MaxSampleAge: 15 * time.Minute, MinimumSamples: 16}
-}
-
 // Validate 拒绝会造成无界保存或伪置信度的配置。
 func (c Config) Validate() error {
 	if c.Mode != ModeOff && c.Mode != ModeShadow {

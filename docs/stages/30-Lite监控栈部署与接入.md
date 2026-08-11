@@ -26,9 +26,9 @@ Deployment/Service/PVC，并将已有 dashboard/rules ConfigMap 挂载到对应�
 ```text
 fishmesh-gateway   up   http://10.42.1.199:8080/metrics
 FishMeshGatewayUnavailable: inactive
-FishMeshExactSignalUnavailable: inactive
+FishMeshKVAwareSignalUnavailable: inactive
 FishMeshKVReplayStale: inactive
-FishMeshExactDegradationRateHigh: inactive
+FishMeshKVAwareDegradationRateHigh: inactive
 ```
 
 通过 Grafana API 验证 datasource `fishmesh-prometheus` 指向 cluster Service，且 dashboard
@@ -46,7 +46,7 @@ kubectl --kubeconfig ~/.kube/fishmesh.yaml -n kubellm get secret fishmesh-grafan
 
 浏览器打开 `http://127.0.0.1:3000`，以 `admin` 登录，进入 **Dashboards → FishMesh → FishMesh Gateway**。
 用 README 的 Lite SSE demo 产生请求后刷新面板，即可看到 request rate、TTFT P95、KV valid/freshness、
-exact degradation 与 RSS。Prometheus 也可通过 `svc/fishmesh-prometheus` 端口转发检查 `/targets` 和
+KV-aware degradation 与 RSS。Prometheus 也可通过 `svc/fishmesh-prometheus` 端口转发检查 `/targets` 和
 `/alerts`。
 
 仓库门禁执行 `make ci` 和 `git diff --check`。R6E 仍不在本阶段范围内。

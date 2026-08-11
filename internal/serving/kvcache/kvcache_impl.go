@@ -29,7 +29,7 @@ type service struct {
 	closed      bool
 }
 
-// NewVLLM 构造一个本地、进程内的 vLLM exact KV index。
+// NewVLLM 构造一个本地、进程内的 vLLM KV cache index。
 // 构造函数不会发现 Pod；组合根必须通过 Reconcile 显式提供当前实例，并在退出时调用 Close。
 func NewVLLM(ctx context.Context, config Config, dependencies Dependencies) (Index, error) {
 	if ctx == nil {
@@ -38,8 +38,8 @@ func NewVLLM(ctx context.Context, config Config, dependencies Dependencies) (Ind
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
-	if dependencies.EventSource == nil {
-		return nil, fmt.Errorf("kvcache event source must not be nil")
+	if err := dependencies.Validate(); err != nil {
+		return nil, err
 	}
 	store, err := newVLLMStore(config)
 	if err != nil {
@@ -64,7 +64,7 @@ func newService(ctx context.Context, config Config, source EventSource, clock Cl
 	}
 }
 
-// Lookup 返回所有候选 backend 的 exact 状态；未知、过期或模型不一致的候选仍会出现在 Snapshot，
+// Lookup 返回所有候选 backend 的 KV-aware 状态；未知、过期或模型不一致的候选仍会出现在 Snapshot，
 // 但 Valid=false，调用方必须据此降级。
 func (s *service) Lookup(ctx context.Context, query Query) (Snapshot, error) {
 	// 1. 在执行 block hash 前先保护 query 的 CPU 和内存边界。

@@ -9,18 +9,6 @@ import (
 )
 
 const (
-	defaultBlockSizeTokens  = 16
-	defaultMaxIndexKeys     = 100_000
-	defaultMaxInstances     = 8
-	defaultMaxEventBytes    = 4 << 20
-	defaultMaxReplayEvents  = 4096
-	defaultMaxQueryTokens   = 131_072
-	defaultMaxCacheSaltByte = 1024
-	defaultReplayPeriod     = 2 * time.Second
-	defaultReplayTimeout    = 3 * time.Second
-	defaultFreshnessTTL     = 5 * time.Second
-	defaultReconnectDelay   = time.Second
-
 	zmqEndpointScheme = "tcp"
 )
 
@@ -51,22 +39,12 @@ type Dependencies struct {
 	EventObserver EventObserver
 }
 
-// DefaultConfig 返回与阶段 18 已验证的 vLLM 文本链路一致的有界配置。
-func DefaultConfig() Config {
-	return Config{
-		BlockSizeTokens:   defaultBlockSizeTokens,
-		MaxIndexKeys:      defaultMaxIndexKeys,
-		MaxInstances:      defaultMaxInstances,
-		MaxBackendsPerKey: defaultMaxInstances,
-		MaxEventBytes:     defaultMaxEventBytes,
-		MaxReplayEvents:   defaultMaxReplayEvents,
-		MaxQueryTokens:    defaultMaxQueryTokens,
-		MaxCacheSaltBytes: defaultMaxCacheSaltByte,
-		ReplayPeriod:      defaultReplayPeriod,
-		ReplayTimeout:     defaultReplayTimeout,
-		FreshnessTTL:      defaultFreshnessTTL,
-		ReconnectDelay:    defaultReconnectDelay,
+// Validate 检查 KV index 创建所需的事件源；时钟为空时由构造函数补入默认实现。
+func (d Dependencies) Validate() error {
+	if d.EventSource == nil {
+		return fmt.Errorf("kvcache event source must not be nil")
 	}
+	return nil
 }
 
 // Validate 检查所有状态、buffer 和 freshness 边界是否明确且可运行。

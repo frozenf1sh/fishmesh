@@ -75,7 +75,7 @@ spec:
         - name: vllm
           # Offline K3s resolves this preloaded tag. The verified amd64 digest is
           # recorded on the Pod template because NeverPull cannot resolve tag@digest
-          # unless that exact composite reference was imported into containerd.
+          # unless that KV-aware composite reference was imported into containerd.
           image: docker.io/vllm/vllm-openai:v0.23.0
           imagePullPolicy: Never
           args:

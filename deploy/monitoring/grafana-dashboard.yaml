@@ -36,7 +36,7 @@ data:
           "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
           "id": 3,
           "targets": [{"expr": "fishmesh_gateway_kv_cache_instance_valid", "legendFormat": "{{backend_id}}", "refId": "A"}],
-          "title": "KV instances safe for exact routing",
+          "title": "KV instances safe for KV-aware routing",
           "type": "timeseries"
         },
         {
@@ -53,8 +53,8 @@ data:
           "fieldConfig": {"defaults": {}, "overrides": []},
           "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
           "id": 5,
-          "targets": [{"expr": "sum by (status) (rate(fishmesh_gateway_exact_degradations_total[5m]))", "legendFormat": "{{status}}", "refId": "A"}],
-          "title": "Exact degradations by status",
+          "targets": [{"expr": "sum by (status) (rate(fishmesh_gateway_kv_aware_degradations_total[5m]))", "legendFormat": "{{status}}", "refId": "A"}],
+          "title": "KV-aware degradations by status",
           "type": "timeseries"
         },
         {
@@ -81,10 +81,10 @@ data:
           "gridPos": {"h": 8, "w": 12, "x": 12, "y": 24},
           "id": 8,
           "targets": [
-            {"expr": "histogram_quantile(0.50, sum by (le) (rate(fishmesh_gateway_exact_cached_prefix_tokens_bucket[5m])))", "legendFormat": "P50", "refId": "A"},
-            {"expr": "histogram_quantile(0.95, sum by (le) (rate(fishmesh_gateway_exact_cached_prefix_tokens_bucket[5m])))", "legendFormat": "P95", "refId": "B"}
+            {"expr": "histogram_quantile(0.50, sum by (le) (rate(fishmesh_gateway_kv_aware_cached_prefix_tokens_bucket[5m])))", "legendFormat": "P50", "refId": "A"},
+            {"expr": "histogram_quantile(0.95, sum by (le) (rate(fishmesh_gateway_kv_aware_cached_prefix_tokens_bucket[5m])))", "legendFormat": "P95", "refId": "B"}
           ],
-          "title": "Exact cached prefix tokens",
+          "title": "KV-aware cached prefix tokens",
           "type": "timeseries"
         }
       ],

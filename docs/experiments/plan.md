@@ -41,15 +41,15 @@ R6 不为证明产品可行而增加模拟 KVEvents、模拟 tokenizer 或新的
 - eviction、Pod restart、断流和 replay 后索引是否正确。
 
 结果决定是否进入 R6B。任一核心不变量无法满足时，先评估版本 pin/upgrade；不能用 session key
-或累计 hit rate 假装 exact 成功。
+或累计 hit rate 假装 KV-aware 成功。
 
 ### Q2：联合策略是否比单一信号更安全
 
 固定请求和 endpoint 状态，对比：
 
-- load-only；
+- load-balanced；
 - cache-only（风险对照，不作为生产候选）；
-- exact-cache-load；
+- kv-aware；
 - optional session hint 对 tie-break 的影响。
 
 重点验证严重过载时是否拒绝追逐 cache、信号 stale 时是否明确降级、相同输入是否确定性选择。
@@ -62,14 +62,14 @@ R6 不为证明产品可行而增加模拟 KVEvents、模拟 tokenizer 或新的
 - KV index lookup p50/p95/p99；
 - event ingest lag 和 replay recovery；
 - Gateway CPU/RSS 与 index entry 数量；
-- direct Service、load-only、exact 下的 SSE token throughput；
+- direct Service、load-balanced、KV-aware 下的 SSE token throughput；
 - cache-cold TTFT overhead。
 
 结果决定默认 index 容量、Gateway resources、是否需要 renderer Service，以及 Lite 的适用规模。
 
 ### Q4：Lite 与 Standard 的适用边界是什么
 
-只在 Lite MVP 完成后对比 FishMesh exact 和 llm-d precise：
+只在 Lite MVP 完成后对比 FishMesh KV-aware 和 llm-d precise：
 
 - 安装对象、常驻进程、权限和资源；
 - prefix-heavy 与 cache-cold workload；
@@ -109,7 +109,7 @@ time-slicing 不代表独立 GPU，因此本阶段只判断 signal correctness�
 - 产生缓存压力或等待自然 eviction，观察 removed；
 - 删除一个 vLLM Pod，确认旧 UID 索引清理；
 - 新 Pod Ready 后确认不会继承旧 locality；
-- 中断 subscriber，超过 freshness 后确认 exact invalid；
+- 中断 subscriber，超过 freshness 后确认 KV-aware invalid；
 - 恢复连接并使用 replay，确认恢复或明确 full resync 边界。
 
 ### 4.4 通过条件
@@ -118,14 +118,14 @@ time-slicing 不代表独立 GPU，因此本阶段只判断 signal correctness�
 - C 不产生虚假公共 prefix；
 - salt 隔离不发生跨域匹配；
 - removed/restart 后不继续报告旧 block；
-- stale 状态可观测并触发 load-aware degradation；
+- stale 状态可观测并触发 load-balanced degradation；
 - lookup/ingest 状态有明确容量和回收方式；
 - 结果可通过脚本和声明式配置复现。
 
 2026-08-11 门禁已通过：跨会话公共 system prompt 在实际缓存 Pod 命中 8 blocks/128 tokens，
 断流先 invalid 后由 replay 恢复，真实缓存压力产生 3105 个 removed 并清除旧命中，Pod UID 重建
 后旧 locality 归零。cache salt 隔离没有在本轮文本 MVP 中单独施压，保留为 R6B adapter contract
-test；它不影响 ADR-002 的文本 exact 数据源 Go/no-go。完整证据见
+test；它不影响 ADR-002 的文本 KV-aware 数据源 Go/no-go。完整证据见
 [`阶段 18`](../stages/18-R6A真实KV信号闭环.md)。
 
 ## 5. R6D 有限性能矩阵
@@ -133,8 +133,8 @@ test；它不影响 ADR-002 的文本 exact 数据源 Go/no-go。完整证据见
 R6A 不跑大矩阵。R6D 只比较四个 treatment：
 
 - `service`：Kubernetes Service 直连；
-- `fishmesh-load-only`；
-- `fishmesh-exact`；
+- `fishmesh-load-balanced`；
+- `fishmesh-KV-aware`；
 - `llmd-precise`。
 
 只保留三类 workload：
@@ -207,6 +207,6 @@ Git 只保存代码、schema、脚本、声明式配置和评审后的结论。r
 
 ## 9. 历史数据处理
 
-2026-08-08 及此前 keep-alive、prefix-hash、bounded-affinity 数据不删除，但它们只证明当时的
+2026-08-08 及此前 keep-alive、session-key、session-key 数据不删除，但它们只证明当时的
 transport/行为结论。旧 `prefix_group/routing_key` 不是 vLLM token-block locality，不得在新 README、
-简历或面试中重新解释为 exact cache-aware 结果。
+简历或面试中重新解释为 KV-aware cache-aware 结果。

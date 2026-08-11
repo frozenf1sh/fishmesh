@@ -32,7 +32,7 @@ func TestVLLMRendererTokenizesChatRequest(t *testing.T) {
 	}))
 	defer server.Close()
 
-	renderer := newTestRenderer(t, DefaultConfig(server.URL, "qwen"), server.Client())
+	renderer := newTestRenderer(t, testConfig(server.URL, "qwen"), server.Client())
 	result, err := renderer.Tokenize(context.Background(), Input{
 		Route: RouteChatCompletions,
 		Body:  []byte(`{"model":"qwen","cache_salt":"tenant-a","messages":[],"reasoning_effort":"low"}`),
@@ -57,7 +57,7 @@ func TestVLLMRendererSupportsCompletionsBatch(t *testing.T) {
 	}))
 	defer server.Close()
 
-	renderer := newTestRenderer(t, DefaultConfig(server.URL, "qwen"), server.Client())
+	renderer := newTestRenderer(t, testConfig(server.URL, "qwen"), server.Client())
 	result, err := renderer.Tokenize(context.Background(), Input{
 		Route: RouteCompletions,
 		Body:  []byte(`{"model":"qwen","prompt":["a","b"]}`),
@@ -75,7 +75,7 @@ func TestVLLMRendererRejectsModelMismatchBeforeIO(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true }))
 	defer server.Close()
 
-	renderer := newTestRenderer(t, DefaultConfig(server.URL, "qwen"), server.Client())
+	renderer := newTestRenderer(t, testConfig(server.URL, "qwen"), server.Client())
 	_, err := renderer.Tokenize(context.Background(), Input{
 		Route: RouteChatCompletions,
 		Body:  []byte(`{"model":"another-model","messages":[]}`),
@@ -106,7 +106,7 @@ func TestVLLMRendererClassifiesInvalidResponses(t *testing.T) {
 			}))
 			defer server.Close()
 
-			config := DefaultConfig(server.URL, "qwen")
+			config := testConfig(server.URL, "qwen")
 			if test.configure != nil {
 				test.configure(&config)
 			}
@@ -119,7 +119,7 @@ func TestVLLMRendererClassifiesInvalidResponses(t *testing.T) {
 
 func TestVLLMRendererEnforcesHTTPBounds(t *testing.T) {
 	t.Run("request body", func(t *testing.T) {
-		config := DefaultConfig("http://renderer.invalid", "qwen")
+		config := testConfig("http://renderer.invalid", "qwen")
 		config.MaxRequestBytes = 8
 		renderer := newTestRenderer(t, config, http.DefaultClient)
 		_, err := renderer.Tokenize(context.Background(), chatInput())
@@ -131,7 +131,7 @@ func TestVLLMRendererEnforcesHTTPBounds(t *testing.T) {
 			_, _ = writer.Write([]byte(`{"model":"qwen","token_ids":[1]}`))
 		}))
 		defer server.Close()
-		config := DefaultConfig(server.URL, "qwen")
+		config := testConfig(server.URL, "qwen")
 		config.MaxResponseBytes = 8
 		renderer := newTestRenderer(t, config, server.Client())
 		_, err := renderer.Tokenize(context.Background(), chatInput())
@@ -143,7 +143,7 @@ func TestVLLMRendererEnforcesHTTPBounds(t *testing.T) {
 			http.Error(writer, strings.Repeat("x", maxErrorBodyBytes+100), http.StatusServiceUnavailable)
 		}))
 		defer server.Close()
-		renderer := newTestRenderer(t, DefaultConfig(server.URL, "qwen"), server.Client())
+		renderer := newTestRenderer(t, testConfig(server.URL, "qwen"), server.Client())
 		_, err := renderer.Tokenize(context.Background(), chatInput())
 		typed := requireErrorCode(t, err, CodeUpstreamRejected)
 		if typed.UpstreamStatus != http.StatusServiceUnavailable || len(err.Error()) > maxErrorBodyBytes+100 {
@@ -166,7 +166,7 @@ func TestVLLMRendererPropagatesCancellationAndTimeout(t *testing.T) {
 	})
 
 	t.Run("client cancellation", func(t *testing.T) {
-		renderer := newTestRenderer(t, DefaultConfig(server.URL, "qwen"), server.Client())
+		renderer := newTestRenderer(t, testConfig(server.URL, "qwen"), server.Client())
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 		_, err := renderer.Tokenize(ctx, chatInput())
@@ -187,14 +187,14 @@ func TestVLLMRendererPropagatesCancellationAndTimeout(t *testing.T) {
 }
 
 func TestNewVLLMRendererRequiresHTTPClient(t *testing.T) {
-	_, err := NewVLLMRenderer(DefaultConfig("http://renderer.invalid", "qwen"), Dependencies{})
+	_, err := NewVLLMRenderer(testConfig("http://renderer.invalid", "qwen"), Dependencies{})
 	if err == nil {
 		t.Fatal("nil HTTP client accepted")
 	}
 }
 
 func TestVLLMRendererRejectsInvalidCacheSalt(t *testing.T) {
-	renderer := newTestRenderer(t, DefaultConfig("http://renderer.invalid", "qwen"), http.DefaultClient)
+	renderer := newTestRenderer(t, testConfig("http://renderer.invalid", "qwen"), http.DefaultClient)
 	_, err := renderer.Tokenize(context.Background(), Input{
 		Route: RouteChatCompletions,
 		Body:  []byte(`{"model":"qwen","cache_salt":42,"messages":[]}`),

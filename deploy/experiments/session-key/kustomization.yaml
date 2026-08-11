@@ -1,0 +1,41 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: kubellm
+resources:
+  - ../backend-snapshot
+patches:
+  - target:
+      kind: ConfigMap
+      name: fishmesh-gateway-config
+    patch: |-
+      - op: replace
+        path: /data/FISHMESH_ROUTING_MODE
+        value: session-key
+      - op: replace
+        path: /data/FISHMESH_SESSION_KEY_TTL
+        value: 5m
+      - op: replace
+        path: /data/FISHMESH_SESSION_KEY_MAX_ENTRIES
+        value: "10000"
+      - op: replace
+        path: /data/FISHMESH_SESSION_KEY_INFLIGHT_DELTA
+        value: "2"
+      - op: replace
+        path: /data/FISHMESH_SESSION_KEY_QUEUE_DEPTH_DELTA
+        value: "1"
+      - op: replace
+        path: /metadata/annotations/fishmesh.io~1routing-mode
+        value: session-key-v1
+      - op: replace
+        path: /metadata/annotations/fishmesh.io~1config-version
+        value: v5-session-key-reliability
+  - target:
+      kind: Deployment
+      name: fishmesh-gateway
+    patch: |-
+      - op: add
+        path: /metadata/annotations/fishmesh.io~1policy-boundary
+        value: "client session-key stickiness; queue/local-inflight spillover; no GPU score"
+      - op: replace
+        path: /spec/template/metadata/annotations/fishmesh.io~1runtime-config-version
+        value: v5-session-key-reliability

@@ -22,7 +22,7 @@ raw output are authoritative, but the Gateway configuration that was active at
 that historical instant can no longer be reconstructed from the live cluster.
 The first recovery batch called the merged container log `requests.jsonl.gz`;
 because Kubernetes combines stdout and stderr, analysis must use the validated
-`records.jsonl.gz` beside it. New recoveries name the exact stream
+`records.jsonl.gz` beside it. New recoveries name the KV-aware stream
 `container.log.gz` and the validated stream `records.jsonl.gz`.
 
 New loadgen output begins with a `run_metadata` record. A reviewable experiment

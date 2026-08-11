@@ -4,7 +4,7 @@
 
 `fishmesh-epp` 复用 llm-d v0.9.0 的 EPP runner、ext_proc 协议、Endpoint
 发现、in-flight 生命周期和 max-score picker，只注册一个 FishMesh
-`bounded-affinity` Filter/Scorer。llm-d 会根据插件声明的 required data key 自动创建
+`session-key` Filter/Scorer。llm-d 会根据插件声明的 required data key 自动创建
 默认 `inflight-load-producer`，所以配置中不再重复声明该生产者。
 
 当前 profile 只有一个 scorer，FishMesh 返回 `1`（选中）或 `0`（未选中）。这保证
@@ -22,7 +22,7 @@ R6E 将补全并验证以下资源：
 4. llm-d token producer、precise prefix producer 与 FishMesh scorer 配置；
 5. 空候选、坏指标、endpoint churn、retry served endpoint 和 EPP failover 的真实集群 smoke。
 
-当前配置仍然只代表 R5C bounded-affinity 契约，不能描述为 exact KV cache-aware。
+当前配置仍然只代表 R5C session-key 契约；KV-aware 是 standalone Lite 路径，不能把两者混称。
 
 渲染检查：
 

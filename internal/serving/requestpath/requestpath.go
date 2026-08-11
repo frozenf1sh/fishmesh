@@ -3,6 +3,7 @@ package requestpath
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/frozenf1sh/fishmesh/internal/serving/backend"
@@ -32,21 +33,21 @@ type Outcome string
 // Request 是与 HTTP 协议无关的请求路径输入。
 type Request struct {
 	RoutingKey string
-	// Route 和 Body 是 Gateway 读取并有界复制后的原始推理输入。只有 exact 策略把它翻译为
+	// Route 和 Body 是 Gateway 读取并有界复制后的原始推理输入。只有 KV-aware 策略把它翻译为
 	// tokenization.Input；其他策略不解析或保留 body。
 	Route string
 	Body  []byte
 }
 
-// ExactStatus 描述本次选择是否取得可用于 exact routing 的完整信号。
-type ExactStatus string
+// KVStatus 描述本次选择是否取得可用于 KV-aware routing 的完整信号。
+type KVStatus string
 
 const (
-	ExactNotRequested       ExactStatus = "not-requested"
-	ExactAvailable          ExactStatus = "available"
-	ExactTokenizationFailed ExactStatus = "tokenization-failed"
-	ExactLookupFailed       ExactStatus = "lookup-failed"
-	ExactMatchUnavailable   ExactStatus = "match-unavailable"
+	KVNotRequested       KVStatus = "not-requested"
+	KVAvailable          KVStatus = "available"
+	KVTokenizationFailed KVStatus = "tokenization-failed"
+	KVLookupFailed       KVStatus = "lookup-failed"
+	KVMatchUnavailable   KVStatus = "match-unavailable"
 )
 
 // KVCacheState 是 delivery 可以安全观测的逐 backend KV index 快照。
@@ -66,9 +67,9 @@ type State struct {
 	Observations map[backend.ID]observation.Backend
 	CircuitOpen  map[backend.ID]bool
 	Discovery    discovery.ResolverStatus
-	Exact        ExactStatus
+	KV           KVStatus
 	KVCache      map[backend.ID]KVCacheState
-	// CachedPrefixTokens 是本次 exact lookup 对最终 backend 的真实完整 block 前缀；unknown/stale 时为零且 Exact 不为 available。
+	// CachedPrefixTokens 是本次 KV lookup 对最终 backend 的真实完整 block 前缀；unknown/stale 时为零且 KV 不为 available。
 	CachedPrefixTokens int
 	// Prediction 是不参与本次实际选择的本地 TTFT 影子结论。
 	Prediction prediction.Shadow
@@ -109,6 +110,37 @@ type Dependencies struct {
 	OnBackendRemoved func(backend.ID)
 	// Predictor 是可选的纯观测能力；nil 保持预测关闭，不能影响既有选路。
 	Predictor prediction.Tracker
+}
+
+// Validate 检查 requestpath 的启动配置。
+//
+// Service 是无 discovery 可用时的最终 fallback，因此即使某些请求不会立刻触发
+// fallback，也必须在进程启动时确认它是完整 backend。DiscoveryMaxAge 只有在启用
+// freshness gate 时才有意义，避免把“未启用”误判成配置错误。
+func (c Config) Validate() error {
+	if err := c.Service.Validate(); err != nil {
+		return fmt.Errorf("requestpath service fallback: %w", err)
+	}
+	if c.RequireFreshDiscovery && c.DiscoveryMaxAge <= 0 {
+		return fmt.Errorf("requestpath discovery max age must be positive")
+	}
+	return nil
+}
+
+// Validate 检查 requestpath 必须拥有的依赖，并根据已选策略确认 KV-aware 模式的附加能力。
+//
+// 策略是依赖集合的判定条件之一，因此所有相关判断都集中在这里；New 不再散落多段
+// 参数校验，Select 也不需要为启动期依赖做防御性分支。
+func (d Dependencies) Validate() error {
+	if d.Resolver == nil || d.Strategy == nil || d.Circuits == nil {
+		return fmt.Errorf("requestpath resolver, strategy and circuits must not be nil")
+	}
+	if d.Strategy.Name() == routing.ModeKVAware {
+		if d.Tokenizer == nil || d.KVCache == nil || d.KVReconcile == nil {
+			return fmt.Errorf("kv-aware requestpath requires tokenizer, KV cache and KV reconcile")
+		}
+	}
+	return nil
 }
 
 // Path 是 standalone Gateway 的请求选择与结算边界。

@@ -8,7 +8,7 @@ metadata:
 data:
   FISHMESH_LISTEN_ADDRESS: ":8080"
   FISHMESH_UPSTREAM_URL: http://qwen-vllm-baseline.kubellm.svc.cluster.local:8000
-  FISHMESH_ROUTING_MODE: service
+  FISHMESH_ROUTING_MODE: load-balanced
   FISHMESH_UPSTREAM_KEEPALIVE: "true"
   FISHMESH_REQUEST_TIMEOUT: 90s
   FISHMESH_SHUTDOWN_TIMEOUT: 30s

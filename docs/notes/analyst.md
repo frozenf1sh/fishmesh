@@ -40,7 +40,7 @@ curl -s -X POST http://127.0.0.1:8090/v1/analyze \
 
 ```text
 diagnosis.code = prefix_locality_degraded
-recommendation.code = enable_bounded_prefix_affinity
+recommendation.code = enable_session_key
 ```
 
 这个 fixture 明确表达“Prefix Cache 命中下降、网络正常、GPU 未饱和、队列正常”的

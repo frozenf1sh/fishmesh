@@ -4,8 +4,8 @@
 
 - Gateway → vLLM 使用 Kubernetes Service；
 - Gateway → vLLM 默认开启 HTTP keep-alive；
-- 路由模式为 `service`；
-- Gateway、Loadgen、vLLM 仍保持可替换边界，后续策略通过实验 overlay 接入。
+- 路由模式为 `load-balanced`；
+- Gateway、Loadgen、vLLM 仍保持可替换边界，`session-key` 与 `kv-aware` 通过显式实验 overlay 接入。
 
 建议流程：
 

@@ -134,7 +134,7 @@ func (s *eventStream) Closed() bool {
 	return s.closed
 }
 
-// Invalidate 立即撤销 exact 可用性，但不自行选择 fallback。
+// Invalidate 立即撤销 KV-aware 可用性，但不自行选择 fallback。
 func (s *eventStream) Invalidate(reason Reason, detail string) {
 	s.mu.Lock()
 	s.reason = reason

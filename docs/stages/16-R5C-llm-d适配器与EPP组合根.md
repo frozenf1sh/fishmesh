@@ -5,7 +5,7 @@
 R5B 只回答了“应该接入哪一个开源运行时”。R5C 把这个决定变成了可编译、可测试的最小垂直
 切片：
 
-- FishMesh 的 `bounded-affinity-v1` 已能作为 llm-d Router v0.9.0 插件运行；
+- FishMesh 的 `session-key-v1` 已能作为 llm-d Router v0.9.0 插件运行；
 - 新的 `fishmesh-epp` 二进制先注册插件，再启动未经修改的上游 EPP runner；
 - llm-d 的 request、endpoint、queue 和 in-flight 数据被翻译为 FishMesh 的纯 `routing.Snapshot`；
 - 选择结果投影为 llm-d scorer 分值，并在 response hook 中区分“选择的 endpoint”和“retry 后
@@ -31,7 +31,7 @@ translation_impl
   - 缺失/过期 queue -> invalid sample（不是 0）
               |
               v
-routing.BoundedAffinity.Select
+routing.SessionKey.Select
   - routing key -> preferred backend
   - queue/in-flight 超过硬边界 -> least-loaded
               |
@@ -68,7 +68,7 @@ FishMesh 要求 in-flight 是 required data，不允许把缺失值解释成零�
 | endpoint address + port | `backend.Backend` | 使用公共 `backend.NewHTTP`，两种 adapter 得到同一稳定 ID |
 | `InFlightLoad.Requests` | `Snapshot.Inflight` | required、不可为负；缺失 endpoint 被 Filter 排除 |
 | `WaitingQueueSize` | `Observation.QueueLength` | 仅在时间戳有效、未超龄、非负时标记 valid |
-| endpoint membership | affinity registry reconcile | 删除 endpoint 后同步清理对应 preference |
+| endpoint membership | session-key registry reconcile | 删除 endpoint 后同步清理对应 preference |
 | routing decision | scorer map | 选中为 1，其余为 0 |
 | served metadata | response provenance | 与 selected ID 分开记录，避免 retry 后错误归因 |
 
@@ -78,7 +78,7 @@ FishMesh 要求 in-flight 是 required data，不允许把缺失值解释成零�
 
 ## 5. 状态与并发
 
-bounded affinity registry 仍是单进程、有 TTL 和容量上限的内存状态。两个 EPP 副本在候选集
+session-key registry 仍是单进程、有 TTL 和容量上限的内存状态。两个 EPP 副本在候选集
 相同时会因 Rendezvous Hash 得到同一初始 preferred，但扩缩容期间的 TTL stickiness 不跨进程
 同步。
 

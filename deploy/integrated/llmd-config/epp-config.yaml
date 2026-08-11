@@ -1,13 +1,13 @@
 apiVersion: llm-d.ai/v1alpha1
 kind: EndpointPickerConfig
 plugins:
-  - type: fishmesh-bounded-affinity-scorer
-    name: fishmesh-bounded-affinity
+  - type: fishmesh-session-key-scorer
+    name: fishmesh-session-key
     parameters:
-      routingKeyHeader: x-fishmesh-prefix-key
+      sessionKeyHeader: x-fishmesh-session-key
       metricsMaxAge: 45s
-      affinityTTL: 5m
-      maxAffinityEntries: 10000
+      sessionKeyTTL: 5m
+      maxSessionKeyEntries: 10000
       inflightDelta: 2
       queueDepthDelta: 1
   - type: max-score-picker
@@ -15,6 +15,6 @@ plugins:
 schedulingProfiles:
   - name: default
     plugins:
-      - pluginRef: fishmesh-bounded-affinity
+      - pluginRef: fishmesh-session-key
         weight: 1
       - pluginRef: max-score-picker

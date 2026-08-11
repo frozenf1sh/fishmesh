@@ -49,7 +49,7 @@ func TestFilterRejectsIncompleteEndpointState(t *testing.T) {
 	}
 }
 
-func TestScorePreservesBoundedAffinityAndEmitsDecisionHeaders(t *testing.T) {
+func TestScorePreservesSessionKeyAndEmitsDecisionHeaders(t *testing.T) {
 	now := time.Date(2026, time.August, 10, 12, 0, 0, 0, time.UTC)
 	created := newTestScorer(t, func() time.Time { return now })
 	request := testRequest(testRoutingKey)
@@ -72,7 +72,7 @@ func TestScorePreservesBoundedAffinityAndEmitsDecisionHeaders(t *testing.T) {
 	response := &lldmrequestcontrol.Response{Headers: map[string]string{}}
 	// 模拟数据面 retry 到 preferred，确认决策 endpoint 与实际服务 endpoint 不会混写。
 	created.ResponseHeader(context.Background(), request, response, preferred.GetMetadata())
-	if response.Headers[HeaderRouteReason] != string(routing.ReasonAffinitySpillover) {
+	if response.Headers[HeaderRouteReason] != string(routing.ReasonSessionKeySpillover) {
 		t.Fatalf("route reason = %q", response.Headers[HeaderRouteReason])
 	}
 	if response.Headers[HeaderSpilloverReason] != string(routing.ReasonLocalInflight) {
@@ -90,7 +90,7 @@ func TestScorePreservesBoundedAffinityAndEmitsDecisionHeaders(t *testing.T) {
 	}
 }
 
-func TestScoreIgnoresStaleQueueMetricsAndResumesAffinity(t *testing.T) {
+func TestScoreIgnoresStaleQueueMetricsAndResumesSessionKey(t *testing.T) {
 	now := time.Date(2026, time.August, 10, 12, 0, 0, 0, time.UTC)
 	created := newTestScorer(t, func() time.Time { return now })
 	request := testRequest("queue-session")
@@ -109,13 +109,13 @@ func TestScoreIgnoresStaleQueueMetricsAndResumesAffinity(t *testing.T) {
 		t.Fatalf("fresh queue selected = %s, want %s", endpointID(selected), endpointID(other))
 	}
 
-	staleAt := now.Add(-DefaultConfig().MetricsMaxAge - time.Second)
+	staleAt := now.Add(-testConfig().MetricsMaxAge - time.Second)
 	stale := []lldmscheduling.Endpoint{
 		endpointWithLoad(preferred, 0, 10, staleAt),
 		endpointWithLoad(other, 0, 0, staleAt),
 	}
 	if selected := selectedEndpoint(t, created.Score(context.Background(), request, stale)); endpointID(selected) != endpointID(preferred) {
-		t.Fatalf("stale queue selected = %s, want affinity %s", endpointID(selected), endpointID(preferred))
+		t.Fatalf("stale queue selected = %s, want  session-key %s", endpointID(selected), endpointID(preferred))
 	}
 }
 
@@ -133,7 +133,7 @@ func TestScoreWithoutRoutingKeyChoosesLeastLoaded(t *testing.T) {
 		t.Fatalf("selected = %s, want least-loaded %s", endpointID(selected), endpointID(endpoints[1]))
 	}
 	record, ok := lldmscheduling.ReadRequestAttribute[decisionRecord](request, created.attributeKey)
-	if !ok || record.Decision.Reason != routing.ReasonMissingKeyLeastLoaded {
+	if !ok || record.Decision.Reason != routing.ReasonMissingSessionKeyLoadBalanced {
 		t.Fatalf("decision = %+v, want missing-key reason", record.Decision)
 	}
 }
@@ -210,16 +210,16 @@ func TestSchedulerProfileBoundaryRejectsInvalidCandidates(t *testing.T) {
 
 func TestIntegratedSelectionConformsToPureRoutingPolicy(t *testing.T) {
 	now := time.Date(2026, time.August, 10, 12, 0, 0, 0, time.UTC)
-	config := DefaultConfig()
+	config := testConfig()
 	config.Clock = func() time.Time { return now }
 	plugin, err := New("conformance", config)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
 	created := plugin.(*scorer)
-	expectedStrategy, err := routing.NewBoundedAffinity(normalizeConfig(config).BoundedAffinity)
+	expectedStrategy, err := routing.NewSessionKey(normalizeConfig(config).SessionKey)
 	if err != nil {
-		t.Fatalf("routing.NewBoundedAffinity() error = %v", err)
+		t.Fatalf("routing.NewSessionKey() error = %v", err)
 	}
 	expectedReconciler := expectedStrategy.(routing.BackendReconciler)
 	request := testRequest("conformance-session")
@@ -275,9 +275,9 @@ func TestPinnedUpstreamMapsEmptyCandidateContractTo503(t *testing.T) {
 
 func TestConfiguredClockOverridesNestedRoutingClock(t *testing.T) {
 	now := time.Date(2026, time.August, 10, 12, 0, 0, 0, time.UTC)
-	config := DefaultConfig()
+	config := testConfig()
 	config.Clock = func() time.Time { return now }
-	config.BoundedAffinity.Clock = func() time.Time { panic("nested clock must be replaced") }
+	config.SessionKey.Clock = func() time.Time { panic("nested clock must be replaced") }
 	plugin, err := New("clock", config)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -289,7 +289,7 @@ func TestConfiguredClockOverridesNestedRoutingClock(t *testing.T) {
 
 func newTestScorer(t *testing.T, clock Clock) *scorer {
 	t.Helper()
-	config := DefaultConfig()
+	config := testConfig()
 	config.Clock = clock
 	plugin, err := New("test", config)
 	if err != nil {
@@ -299,7 +299,7 @@ func newTestScorer(t *testing.T, clock Clock) *scorer {
 }
 
 func testRequest(key string) *lldmscheduling.InferenceRequest {
-	return &lldmscheduling.InferenceRequest{Headers: map[string]string{defaultRoutingKeyHeader: key}}
+	return &lldmscheduling.InferenceRequest{Headers: map[string]string{testConfig().SessionKeyHeader: key}}
 }
 
 func testEndpoint(name, address string, inflight int64, queue int, observedAt time.Time) lldmscheduling.Endpoint {

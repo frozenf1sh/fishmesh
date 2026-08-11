@@ -16,7 +16,7 @@ func TestSendStreamsTextAndReturnsDecisionHeaders(t *testing.T) {
 			t.Fatalf("authorization header = %q", request.Header.Get("Authorization"))
 		}
 		writer.Header().Set("Content-Type", "text/event-stream")
-		writer.Header().Set(HeaderExactStatus, "available")
+		writer.Header().Set(HeaderKVStatus, "available")
 		writer.Header().Set(HeaderCachedPrefixTokens, "0")
 		_, _ = writer.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n"))
 		_, _ = writer.Write([]byte("data: [DONE]\n\n"))
@@ -35,7 +35,7 @@ func TestSendStreamsTextAndReturnsDecisionHeaders(t *testing.T) {
 	if output.String() != "hello" || result.Text != "hello" || result.TTFT <= 0 {
 		t.Fatalf("stream result = %+v, output=%q", result, output.String())
 	}
-	if result.Headers.ExactStatus != "available" || result.Headers.CachedPrefixTokens != 0 {
+	if result.Headers.KVStatus != "available" || result.Headers.CachedPrefixTokens != 0 {
 		t.Fatalf("decision headers = %+v", result.Headers)
 	}
 }
@@ -43,7 +43,7 @@ func TestSendStreamsTextAndReturnsDecisionHeaders(t *testing.T) {
 func TestSendKeepsUnavailableSeparateFromZeroMiss(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "text/event-stream")
-		writer.Header().Set(HeaderExactStatus, "match-unavailable")
+		writer.Header().Set(HeaderKVStatus, "match-unavailable")
 		writer.Header().Set(HeaderCachedPrefixTokens, "0")
 		_, _ = writer.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"fallback\"}}]}\n\ndata: [DONE]\n\n"))
 	}))
@@ -56,7 +56,7 @@ func TestSendKeepsUnavailableSeparateFromZeroMiss(t *testing.T) {
 	if err != nil {
 		t.Fatalf("send: %v", err)
 	}
-	if result.Headers.ExactStatus != "match-unavailable" || result.HasCachedPrefixSample {
+	if result.Headers.KVStatus != "match-unavailable" || result.HasCachedPrefixSample {
 		t.Fatalf("unavailable was treated as a zero-miss sample: %+v", result)
 	}
 }
@@ -98,9 +98,9 @@ func TestConfigRejectsUnsafeOrInvalidInputs(t *testing.T) {
 }
 
 func TestResultFormatsFixedDecisionHeaders(t *testing.T) {
-	headers := DecisionHeaders{Policy: "exact-cache-load-v1", RouteReason: "exact-cache-load", ExactStatus: "available", CachedPrefixTokens: 32, BackendID: "backend-a"}
+	headers := DecisionHeaders{Policy: "kv-aware-v1", RouteReason: "kv-aware", KVStatus: "available", CachedPrefixTokens: 32, BackendID: "backend-a"}
 	text := headers.String()
-	for _, want := range []string{"policy=exact-cache-load-v1", "cached_prefix_tokens=32", "backend_id=backend-a"} {
+	for _, want := range []string{"policy=kv-aware-v1", "cached_prefix_tokens=32", "backend_id=backend-a"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("headers string %q does not contain %q", text, want)
 		}

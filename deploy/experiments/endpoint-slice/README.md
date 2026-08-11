@@ -1,6 +1,6 @@
 # EndpointSlice 动态发现实验
 
-这个 overlay 将 Gateway 切换到 `prefix-affinity + EndpointSlice`，只读取
+这个 overlay 将 Gateway 切换到 `session-key + EndpointSlice`，只读取
 `kubellm` namespace 中与 `qwen-vllm` Service 对应的 Ready 地址。它是下一阶段的
 隔离实验，不会修改默认 baseline。
 

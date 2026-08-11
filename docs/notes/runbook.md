@@ -19,18 +19,18 @@ kubectl --kubeconfig ~/.kube/fishmesh.yaml -n kubellm get secret fishmesh-grafan
 FishMesh Gateway**。Prometheus 的 `/targets` 应显示 `fishmesh-gateway` 为 `up`；`/alerts` 显示四条
 FishMesh 规则。规则状态与通知投递不同：此 Lite 栈没有 Alertmanager。
 
-R6F 后面板还显示两个严格区分的 histogram：**KV publisher-to-apply lag P95** 与 **Exact cached
+R6F 后面板还显示两个严格区分的 histogram：**KV publisher-to-apply lag P95** 与 **KV-aware cached
 prefix tokens**。前者仅来自成功 apply、带 publisher timestamp 的 batch，并按 `live`/`replay` 分开；
 replay 的大值可能只是历史 event 到当前重放的年龄，不能当作 ZMQ 网络 RTT。后者只统计
-`X-FishMesh-Exact-Status: available` 的选择；零表示真实 miss，`match-unavailable` 不会进入该图。
+`X-FishMesh-KV-Status: available` 的选择；零表示真实 miss，`match-unavailable` 不会进入该图。
 
 ## 先做什么
 
 1. 保存 Gateway `/metrics`、Gateway logs、Pod 描述和响应头；不要记录 prompt、token IDs 或 session key。
 2. 检查 `kubectl -n kubellm get deploy,pod,endpointslice`。只有 Gateway 1/1、vLLM 2/2 Ready 时才将
    流量问题归因给路由。
-3. unknown/stale KV 信号不是零命中。`exact-load-fallback-v1` 是正确的 load-aware 降级，不能通过
-   重试把它伪装成 exact hit。
+3. unknown/stale KV 信号不是零命中。`kv-aware-load-fallback-v1` 是正确的 load-balanced 降级，不能通过
+   重试把它伪装成 KV-aware hit。
 
 ## Gateway unavailable
 
@@ -43,16 +43,16 @@ kubectl -n kubellm logs deployment/fishmesh-gateway --since=30m
 检查 `/readyz`、资源限制、镜像是否已离线导入，以及 EndpointSlice RBAC。若 rollout 失败，使用受审阅的
 上一版 overlay/image revision 回滚；不要在流式响应 header 已发出后代理重试。
 
-## Exact signal unavailable
+## KV-aware signal unavailable
 
-症状：`X-FishMesh-Exact-Status: match-unavailable`、`X-FishMesh-Policy: exact-load-fallback-v1` 或
-`fishmesh_gateway_exact_degradations_total` 增长。
+症状：`X-FishMesh-KV-Status: match-unavailable`、`X-FishMesh-Policy: kv-aware-load-fallback-v1` 或
+`fishmesh_gateway_kv_aware_degradations_total` 增长。
 
 ```bash
 kubectl -n kubellm logs deployment/fishmesh-gateway --since=30m | grep -E 'KV|replay|sequence|subscriber'
 kubectl -n kubellm get endpointslice -l kubernetes.io/service-name=qwen-vllm -o wide
 kubectl -n kubellm port-forward svc/fishmesh-gateway 8080:8080
-curl -sS http://127.0.0.1:8080/metrics | grep -E 'fishmesh_gateway_(kv_cache|exact_)'
+curl -sS http://127.0.0.1:8080/metrics | grep -E 'fishmesh_gateway_(kv_cache|kv_aware_)'
 ```
 
 确认 `instance_valid`、freshness、sequence 与 EndpointSlice 新旧 Pod UID 对齐。若发生 event apply failure、
@@ -62,8 +62,8 @@ sequence gap 或 ZMQ/replay 连接异常，保留上述证据并停止猜测；�
 ## KV replay stale
 
 检查 GPU 节点与 vLLM Pod 的健康、5557/5558 事件端口、EndpointSlice 身份和 Gateway logs。Pod rollout
-期间可暂时降级；等待一个 discovery/replay 周期后再检查。若持续 stale，停止 exact 验收或 benchmark，
-恢复 `deploy/experiments/r6d-bounded-affinity`，再按阶段 26 的证据流程处理。
+期间可暂时降级；等待一个 discovery/replay 周期后再检查。若持续 stale，停止 KV-aware 验收或 benchmark，
+恢复 `deploy/experiments/r6d-session-key`，再按阶段 26 的证据流程处理。
 
 ## GPU 过热或节点不可达
 
@@ -80,10 +80,10 @@ sudo journalctl -u gpu-watchdog --since '30 minutes ago'
 
 ## 结束与恢复
 
-任何 exact 试验后执行：
+任何 KV-aware 试验后执行：
 
 ```bash
-kubectl apply -k deploy/experiments/r6d-bounded-affinity
+kubectl apply -k deploy/experiments/r6d-session-key
 kubectl -n kubellm rollout status deployment/fishmesh-gateway --timeout=5m
 kubectl -n kubellm rollout status deployment/qwen-vllm --timeout=25m
 ```

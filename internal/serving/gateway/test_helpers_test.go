@@ -22,19 +22,19 @@ const (
 )
 
 type testRuntimeConfig struct {
-	UpstreamURL            string
-	RoutingMode            routing.Mode
-	BackendEndpoints       []string
-	KeepAlive              bool
-	RequestTimeout         time.Duration
-	AffinityTTL            time.Duration
-	AffinityMaxEntries     int
-	AffinityInflightDelta  int64
-	CircuitEWMAAlpha       float64
-	CircuitErrorThreshold  float64
-	CircuitMinimumRequests int
-	CircuitOpenDuration    time.Duration
-	MaxInflightRequests    int
+	UpstreamURL             string
+	RoutingMode             routing.Mode
+	BackendEndpoints        []string
+	KeepAlive               bool
+	RequestTimeout          time.Duration
+	SessionKeyTTL           time.Duration
+	SessionKeyMaxEntries    int
+	SessionKeyInflightDelta int64
+	CircuitEWMAAlpha        float64
+	CircuitErrorThreshold   float64
+	CircuitMinimumRequests  int
+	CircuitOpenDuration     time.Duration
+	MaxInflightRequests     int
 }
 
 func testLogger() *slog.Logger {
@@ -64,7 +64,7 @@ func newTestServer(t testing.TB, config testRuntimeConfig) (*Server, error) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pool := transport.New(transport.Config{KeepAlive: config.KeepAlive, RequestTimeout: config.RequestTimeout, MaxConnsPerHost: 32})
+	pool := transport.New(transport.Config{KeepAlive: config.KeepAlive, RequestTimeout: config.RequestTimeout, MaxConnsPerHost: 32, IdleConnTimeout: 90 * time.Second})
 	metrics := NewMetrics()
 	pathService, err := requestpath.New(requestpath.Config{Service: service}, requestpath.Dependencies{
 		Resolver: resolver, Strategy: strategy, Circuits: breaker,
@@ -104,10 +104,10 @@ func testBackends(config testRuntimeConfig) (backend.Backend, []backend.Backend)
 
 func testStrategy(config testRuntimeConfig, service backend.Backend) (routing.Strategy, error) {
 	strategyConfig := routing.Config{Mode: config.RoutingMode, Service: service}
-	if config.RoutingMode == routing.ModeBoundedAffinity {
-		strategyConfig.BoundedAffinity = routing.BoundedAffinityConfig{
-			TTL: config.AffinityTTL, MaxEntries: config.AffinityMaxEntries,
-			InflightDelta: config.AffinityInflightDelta, QueueDepthDelta: 1,
+	if config.RoutingMode == routing.ModeSessionKey {
+		strategyConfig.SessionKey = routing.SessionKeyConfig{
+			TTL: config.SessionKeyTTL, MaxEntries: config.SessionKeyMaxEntries,
+			InflightDelta: config.SessionKeyInflightDelta, QueueDepthDelta: 1,
 		}
 	}
 	return routing.NewConfigured(strategyConfig)
@@ -120,11 +120,11 @@ func testDefaults(config testRuntimeConfig) testRuntimeConfig {
 	if config.MaxInflightRequests == 0 {
 		config.MaxInflightRequests = 128
 	}
-	if config.AffinityTTL == 0 {
-		config.AffinityTTL = time.Minute
+	if config.SessionKeyTTL == 0 {
+		config.SessionKeyTTL = time.Minute
 	}
-	if config.AffinityMaxEntries == 0 {
-		config.AffinityMaxEntries = 100
+	if config.SessionKeyMaxEntries == 0 {
+		config.SessionKeyMaxEntries = 100
 	}
 	if config.CircuitEWMAAlpha == 0 {
 		config.CircuitEWMAAlpha = 0.5

@@ -271,7 +271,7 @@ index，但不能顺便决定 HTTP fallback。
 
 ### 5.2 R6 能力切片的固定开发顺序
 
-tokenization、KVEvents/index、exact routing 等新能力必须按以下顺序开发：
+tokenization、KVEvents/index、KV-aware routing 等新能力必须按以下顺序开发：
 
 1. **写契约和不变量**：先更新 ADR/设计或阶段文档，明确 owner、输入、输出、freshness 和降级；
 2. **写同包名入口文件**：声明稳定值对象、最小接口、typed error 和 Config；
@@ -297,7 +297,7 @@ tokenization、KVEvents/index、exact routing 等新能力必须按以下顺序�
 - freshness、TTL、容量、hash、cache salt、Pod UID 等不直观不变量；
 - goroutine 的 owner、退出条件、channel 容量/背压和关闭方；
 - 第三方协议字段到 FishMesh 值对象的语义转换；
-- exact 信号为什么失效、怎样降级、为什么不能把 unknown 当作零；
+- KV-aware 信号为什么失效、怎样降级、为什么不能把 unknown 当作零；
 - 看似可以简化但会破坏 SSE、取消、replay 或状态回收的代码。
 
 不应该注释：
@@ -317,7 +317,7 @@ if err != nil { ... }
 index.RemovePod(previousUID)
 
 // KV event 已超过允许的新鲜度。此时 unknown 不能当作 cache miss，否则指标会错误声称
-// 本次仍执行 exact 路由；返回 typed degradation 让 requestpath 改用 load-aware。
+// 本次仍执行 KV-aware 路由；返回 typed degradation 让 requestpath 改用 load-balanced。
 return Snapshot{}, ErrStaleEvents
 ```
 
@@ -343,7 +343,7 @@ return Snapshot{}, ErrStaleEvents
 type Reason string
 
 const (
-	ReasonAffinityHit Reason = "affinity-hit"
+	ReasonSessionKeyHit Reason = "session-key-hit"
 	ReasonCircuitOpen Reason = "circuit-open"
 )
 ```
@@ -357,8 +357,9 @@ const (
 - 只出现一次、用于结构化日志检索的完整消息；
 - 测试用例中清晰表达输入的值。
 
-禁止 `const zero = 0`、`const one = 1` 这类只把语法变长的命名。默认值集中在所属 Config
-附近，环境变量名不得散落在解析函数中。
+禁止 `const zero = 0`、`const one = 1` 这类只把语法变长的命名。standalone Serving 的产品
+默认值集中在 `internal/serving/config.DefaultConfig()`，domain 包只保留类型校验和运行时依赖
+兜底；环境变量名不得散落在解析函数中。
 
 ### 6.3 错误
 

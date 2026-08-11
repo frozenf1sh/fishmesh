@@ -1,0 +1,25 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: fishmesh-gateway-kv-aware-reader
+  namespace: kubellm
+  annotations:
+    fishmesh.io/permission-scope: "namespace-scoped read-only EndpointSlice discovery for Pod UID KV lifecycle"
+rules:
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: fishmesh-gateway-kv-aware-reader
+  namespace: kubellm
+subjects:
+  - kind: ServiceAccount
+    name: fishmesh-gateway
+    namespace: kubellm
+roleRef:
+  kind: Role
+  name: fishmesh-gateway-kv-aware-reader
+  apiGroup: rbac.authorization.k8s.io

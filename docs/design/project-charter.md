@@ -52,7 +52,7 @@ Lite mode 以独立 `fishmesh-gateway` Deployment + Service 存在，拥有：
 - vLLM Render API 的真实 Token IDs；
 - vLLM KVEvents 驱动的逐 Pod、有界、近实时 KV block index；
 - cache locality、queue/in-flight、健康和故障联合选择；
-- exact 信号过期时的 load-aware/确定性降级；
+- KV-aware 信号过期时的 load-balanced/确定性降级；
 - admission、connection bounds、circuit、graceful shutdown；
 - metrics、structured logs、request provenance、dashboard 和 runbook；
 - 一条命令可重复部署的声明式 Kubernetes 清单和版本化镜像。
@@ -101,14 +101,14 @@ Standard mode 用来证明策略可以进入主流平台，不要求 FishMesh �
 | 分类 | 内容 | 当前规则 |
 | --- | --- | --- |
 | P0 主线 | Gateway、requestpath、routing、discovery、observation、transport、circuit、admission | 持续产品化 |
-| P0 新能力 | tokenization、KVEvents/index、exact cache/load policy | R6A 通过后实施 |
+| P0 新能力 | tokenization、KVEvents/index、KV-aware cache/load policy | R6A 通过后实施 |
 | P1 标准集成 | llmd adapter、fishmesh-epp、Gateway/InferencePool 部署 | Lite MVP 后闭环 |
 | 开发工具 | simulator、loadgen | 冻结功能，只允许回归修复和有限对照 |
 | 冻结模块 | analyst、Diagnostics Context | 只允许安全/构建修复，从默认镜像和部署移除 |
 | 历史材料 | 旧 experiments、overlay、阶段报告 | 保留，不继续扩张 |
 
 冻结模块不得为了目录整齐而重构，也不得阻塞主线。物理删除必须在默认产品拆分完成后单独
-决策、单独提交，不与 exact KV 行为变更混合。
+决策、单独提交，不与 KV-aware 行为变更混合。
 
 ## 7. 当前 MVP 明确不做
 
@@ -127,7 +127,7 @@ Standard mode 用来证明策略可以进入主流平台，不要求 FishMesh �
 
 ## 8. 路由不变量
 
-后续 exact KV 路径必须始终满足：
+后续 KV-aware 路径必须始终满足：
 
 1. cache locality 来自逐请求、逐 Pod 的 block match，累计 hit rate 不能冒充 locality；
 2. 不同 session 的共同 token prefix 可以复用，不强制客户端提供 FishMesh key；
@@ -184,7 +184,7 @@ Standard mode 用来证明策略可以进入主流平台，不要求 FishMesh �
 - **轻量交付**：独立 gateway 镜像、声明式安装、最小权限、探针、PDB 和资源预算齐备；
 - **可操作性**：request ID 能关联 tokenization、cache match、选择、降级和 upstream outcome，
   并提供 dashboard/alerts/runbook；
-- **真实性能**：完成 Service、load-only、FishMesh exact 和 llm-d precise 的有限同环境对照；
+- **真实性能**：完成 Service、load-balanced、FishMesh KV-aware 和 llm-d precise 的有限同环境对照；
 - **标准兼容**：Standard mode 可部署并消费 llm-d precise prefix match。
 
 ## 12. 当前优先级

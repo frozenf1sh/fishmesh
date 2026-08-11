@@ -18,7 +18,7 @@ const (
 	HeaderPreferredBackendID = "X-FishMesh-Preferred-Backend-ID"
 	HeaderPolicy             = "X-FishMesh-Policy"
 	HeaderSpilloverReason    = "X-FishMesh-Spillover-Reason"
-	HeaderExactStatus        = "X-FishMesh-Exact-Status"
+	HeaderKVStatus           = "X-FishMesh-KV-Status"
 	HeaderCachedPrefixTokens = "X-FishMesh-Cached-Prefix-Tokens"
 	HeaderUpstream           = "X-FishMesh-Upstream"
 
@@ -53,7 +53,7 @@ type Dependencies struct {
 // Request is one external chat-completion request. StreamOutput receives only decoded assistant text.
 type Request struct {
 	Messages     []Message
-	PrefixKey    string
+	SessionKey   string
 	MaxTokens    int
 	StreamOutput io.Writer
 }
@@ -66,7 +66,7 @@ type DecisionHeaders struct {
 	PreferredBackendID string `json:"preferred_backend_id,omitempty"`
 	Policy             string `json:"policy,omitempty"`
 	SpilloverReason    string `json:"spillover_reason,omitempty"`
-	ExactStatus        string `json:"exact_status,omitempty"`
+	KVStatus           string `json:"kv_status,omitempty"`
 	CachedPrefixTokens int    `json:"cached_prefix_tokens"`
 	Upstream           string `json:"upstream,omitempty"`
 }
@@ -120,7 +120,7 @@ func (c *Client) Send(ctx context.Context, request Request) (Result, error) {
 
 	// 2. Send the stream and capture only fixed FishMesh provenance headers.
 	startedAt := time.Now()
-	response, err := c.do(ctx, body, request.PrefixKey)
+	response, err := c.do(ctx, body, request.SessionKey)
 	if err != nil {
 		return Result{Duration: time.Since(startedAt)}, err
 	}
@@ -134,7 +134,7 @@ func (c *Client) Send(ctx context.Context, request Request) (Result, error) {
 	// 3. Drain complete SSE output; a stream missing [DONE] is not a successful sample.
 	text, ttft, err := consumeStream(response.Body, startedAt, request.StreamOutput)
 	result.Text, result.TTFT, result.Duration = text, ttft, time.Since(startedAt)
-	result.HasCachedPrefixSample = result.Headers.ExactStatus == exactStatusAvailable
+	result.HasCachedPrefixSample = result.Headers.KVStatus == kvStatusAvailable
 	if err != nil {
 		return result, err
 	}

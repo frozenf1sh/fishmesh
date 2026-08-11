@@ -17,7 +17,7 @@ func TestServiceReplacesRemovedBackendState(t *testing.T) {
 	collector := collectorFunc(func(_ context.Context, candidate backend.Backend) Backend {
 		return Backend{Status: StatusOK, ObservedAt: time.Now(), Source: candidate.URL}
 	})
-	service, err := New(Config{Interval: time.Hour}, Dependencies{Resolver: resolver, Collector: collector})
+	service, err := New(Config{Interval: time.Hour, MaxAge: time.Minute, RequestTimeout: time.Second}, Dependencies{Resolver: resolver, Collector: collector})
 	if err != nil {
 		t.Fatal(err)
 	}

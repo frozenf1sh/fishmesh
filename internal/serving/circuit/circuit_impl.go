@@ -1,7 +1,6 @@
 package circuit
 
 import (
-	"fmt"
 	"sync"
 	"time"
 
@@ -25,14 +24,8 @@ type breaker struct {
 
 // New validates config and creates an empty circuit breaker.
 func New(config Config) (Breaker, error) {
-	if config.EWMAAlpha <= 0 || config.EWMAAlpha > 1 {
-		return nil, fmt.Errorf("circuit EWMA alpha must be in (0, 1]")
-	}
-	if config.ErrorThreshold <= 0 || config.ErrorThreshold > 1 {
-		return nil, fmt.Errorf("circuit error threshold must be in (0, 1]")
-	}
-	if config.MinimumRequests <= 0 || config.OpenDuration <= 0 {
-		return nil, fmt.Errorf("circuit minimum requests and open duration must be positive")
+	if err := config.Validate(); err != nil {
+		return nil, err
 	}
 	if config.Clock == nil {
 		config.Clock = time.Now

@@ -54,8 +54,8 @@ func (s *service) reconcileBackends(ctx context.Context, backends []backend.Back
 		s.predictor.Reconcile(backendIDs(backends))
 	}
 
-	// 2. exact subscriber 也必须随 EndpointSlice 主动换代。失败保持 KV unknown，后续请求会
-	// 显式降级到 load-aware；不能因为后台 replay 尚未可用而撤销 discovery membership。
+	// 2. KV-aware subscriber 也必须随 EndpointSlice 主动换代。失败保持 KV unknown，后续请求会
+	// 显式降级到 load-balanced；不能因为后台 replay 尚未可用而撤销 discovery membership。
 	if s.kvReconcile != nil {
 		_ = s.kvReconcile(ctx, backends)
 	}

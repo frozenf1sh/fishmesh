@@ -75,13 +75,13 @@ kubectl --kubeconfig ~/.kube/fishmesh.yaml -n kubellm get configmap fishmesh-gat
 
 1. 按目标节点架构导入目标 Gateway 镜像，并记录 digest；当前 GPU 节点只能使用已验证的 amd64
    离线导入路径。
-2. 在一个受评审的 release 变更中，同时更新 `deploy/lite-exact/kustomization.yaml` 的 Gateway
+2. 在一个受评审的 release 变更中，同时更新 `deploy/lite-kv-aware/kustomization.yaml` 的 Gateway
    image、`fishmesh.io/gateway-image-revision` 和 release record；不可只改 tag 而漏掉 revision。
-3. 先运行 `make ci` 与 `git diff --check`，再 `kubectl apply -k deploy/lite-exact`。
+3. 先运行 `make ci` 与 `git diff --check`，再 `kubectl apply -k deploy/lite-kv-aware`。
 4. 等待 `fishmesh-gateway` rollout；它的 PDB 为 `minAvailable: 1`，并使用
    `maxSurge: 1` / `maxUnavailable: 0`。不要并行重启两个 time-sliced vLLM 副本。
 5. 检查 `/readyz`、一条 SSE 请求、`X-FishMesh-*` 决策头及 KV freshness。unknown/stale 必须保留
-   load-aware 降级，不能通过关闭 exact 或把 unavailable 改写为零命中来“恢复”。
+   load-balanced 降级，不能通过关闭 KV-aware 或把 unavailable 改写为零命中来“恢复”。
 6. 观察 GPU 温度；持续超过 80°C 或 `gpu-watchdog` WARN/CRITICAL 时，停止升级/负载并等待低于 70°C。
 
 Flannel 环境不得把 NetworkPolicy 当作本升级过程已生效的隔离控制；若改用可执行 NetworkPolicy 的
@@ -98,8 +98,8 @@ kubectl --kubeconfig ~/.kube/fishmesh.yaml -n kubellm rollout status deployment/
 kubectl --kubeconfig ~/.kube/fishmesh.yaml -n kubellm get pod -l app.kubernetes.io/name=fishmesh-gateway
 ```
 
-若问题来自 exact/KVEvents 链路而非镜像本身，恢复受控基线，而不是试图把无效 cache index 继续用于
-exact 路由：
+若问题来自 KV-aware/KVEvents 链路而非镜像本身，恢复受控基线，而不是试图把无效 cache index 继续用于
+KV-aware 路由：
 
 ```bash
 kubectl --kubeconfig ~/.kube/fishmesh.yaml apply -k deploy/baseline/base
@@ -107,6 +107,6 @@ kubectl --kubeconfig ~/.kube/fishmesh.yaml -n kubellm rollout status deployment/
 ```
 
 `rollout undo` 回退 Deployment revision；配置、镜像预加载状态和 vLLM cache 不会自动倒回。完成后重新
-检查 ConfigMap、实际 image digest、`bounded-affinity` 路由模式和 `/readyz`。需要回退 vLLM 时，遵守其
+检查 ConfigMap、实际 image digest、`session-key` 路由模式和 `/readyz`。需要回退 vLLM 时，遵守其
 `maxSurge: 0` / `maxUnavailable: 1` 约束，并将其视为 cache-cold：在 replay/valid 重新成立前，只允许
-load-aware 降级。
+load-balanced 降级。

@@ -47,7 +47,7 @@ type requestComponents struct {
 }
 
 // kvEventMetricsObserver 是组合根的协议翻译点：kvcache 只发布稳定值对象，Gateway metrics 只接收
-// 已成功 apply 的低基数值。它不进入 requestpath/routing，因此观测不能影响选路或降级。
+// 已成功 apply 的低基数值。它不进入 requestpath/routing，因此指标观测不能反向影响选路或降级。
 type kvEventMetricsObserver struct {
 	metrics *gateway.Metrics
 }
@@ -56,13 +56,22 @@ func (o kvEventMetricsObserver) ObserveKVEvent(observation kvcache.EventObservat
 	o.metrics.ObserveKVEvent(string(observation.Backend), observation.Replayed, observation.PublishToApply)
 }
 
-// buildRuntime 是唯一实现装配点。domain 构造函数不读取环境变量，Gateway 也不创建具体实现。
+// buildRuntime 是 Gateway 的唯一实现装配点。
+//
+// 它按依赖方向从叶子能力开始创建：先 discovery/observation，再 strategy/circuit/
+// transport/admission，再按 KV-aware 模式决定是否创建 Render 与 KV index，最后创建
+// requestpath 和 HTTP delivery。每一个中途失败分支都调用 assembled.Close，确保已经
+// 创建的 watcher、subscriber、连接池和其他有状态资源不会留在半初始化进程中。
+//
+// domain 构造函数不读取环境变量，Gateway 也不创建具体实现；组合根是 Kubernetes
+// EndpointSlice、Pod UID、ZMQ endpoint 和稳定 kvcache.Instance 唯一交汇的位置。
 func buildRuntime(config servingconfig.Config, logger *slog.Logger) (*runtime, error) {
 	if err := config.Validate(); err != nil {
 		return nil, fmt.Errorf("validate serving config: %w", err)
 	}
 
 	// 1. 创建 discovery，以及 EndpointSlice/identity 共用的 Kubernetes HTTP client。
+	//    共用 client 只发生在组合根，具体 domain 仍只看到自己的 Config 和能力接口。
 	discoveryConfig, identityConfig, err := kubernetesConfigs(config)
 	if err != nil {
 		return nil, err
@@ -74,6 +83,8 @@ func buildRuntime(config servingconfig.Config, logger *slog.Logger) (*runtime, e
 	assembled := &runtime{resolver: resolver}
 
 	// 2. 按配置创建可选的慢速 backend observation。
+	//    observation 是请求路径的输入快照，不在这里预先计算路由结果；禁用观测时
+	//    返回 nil，requestpath 会按其明确的 unknown/load fallback 语义继续工作。
 	observations, err := buildObservations(config, identityConfig, resolver)
 	if err != nil {
 		assembled.Close()
@@ -82,6 +93,8 @@ func buildRuntime(config servingconfig.Config, logger *slog.Logger) (*runtime, e
 	assembled.observations = observations
 
 	// 3. 创建 RequestPath 和 delivery 需要的进程内组件。
+	//    strategy、breaker、admission、transport 和 metrics 都由同一个 runtime 持有，
+	//    这样 backend membership 变化时可以在一个回调里同步清理 transport 与指标。
 	components, err := buildRequestComponents(config)
 	if err != nil {
 		assembled.Close()
@@ -89,28 +102,32 @@ func buildRuntime(config servingconfig.Config, logger *slog.Logger) (*runtime, e
 	}
 	assembled.transport = components.pool
 
-	// 4. exact 模式由组合根显式创建 Render adapter、ZMQ source 与有界 KV index。
+	// 4. KV-aware 模式由组合根显式创建 Render adapter、ZMQ source 与有界 KV index。
+	//    非 KV-aware 模式不启动 KV subscriber，也不为每个请求额外调用 Render；这是产品
+	//    模式边界，而不是 requestpath 在运行时偷偷猜测依赖是否存在。
 	var tokenizer tokenization.Tokenizer
 	var index kvcache.Index
 	var reconcile func(context.Context, []backend.Backend) error
-	if config.Routing.Mode == routing.ModeExactCacheLoad {
+	if config.Routing.Mode == routing.ModeKVAware {
 		tokenizer, err = tokenization.NewVLLMRenderer(config.Tokenization, tokenization.Dependencies{HTTPClient: http.DefaultClient})
 		if err != nil {
 			assembled.Close()
-			return nil, fmt.Errorf("create exact tokenizer: %w", err)
+			return nil, fmt.Errorf("create KV-aware tokenizer: %w", err)
 		}
 		index, err = kvcache.NewVLLM(context.Background(), config.KVCache, kvcache.Dependencies{
 			EventSource: kvcache.NewZMQSource(), EventObserver: kvEventMetricsObserver{metrics: components.metrics},
 		})
 		if err != nil {
 			assembled.Close()
-			return nil, fmt.Errorf("create exact KV cache: %w", err)
+			return nil, fmt.Errorf("create KV cache: %w", err)
 		}
 		assembled.kvCache = index
-		reconcile = exactKVReconcile(index, config.Tokenization.Model)
+		reconcile = kvAwareReconcile(index, config.Tokenization.Model)
 	}
 
 	// 5. prediction 只以 shadow 模式记录实际 TTFT；routing 不依赖该实现。
+	//    预测器只接受请求完成后回写的首事件观测，不参与本次选择，避免影子实验改变
+	//    kv-aware 的行为或把未经验证的预测引入生产路由。
 	predictor, err := prediction.New(config.Prediction)
 	if err != nil {
 		assembled.Close()
@@ -118,6 +135,8 @@ func buildRuntime(config servingconfig.Config, logger *slog.Logger) (*runtime, e
 	}
 
 	// 6. 组合 RequestPath；backend 移除后在锁外统一清理 transport、metrics 和 KV instance。
+	//    回调只执行不依赖 requestpath 内部锁的清理动作；具体 membership 对齐和 lease
+	//    等待仍由 requestpath owner 管理，避免跨 domain 形成锁顺序依赖。
 	pathService, err := requestpath.New(config.RequestPath, requestpath.Dependencies{
 		Resolver: resolver, Observations: observations, Strategy: components.strategy, Circuits: components.breaker,
 		Tokenizer: tokenizer, KVCache: index, KVReconcile: reconcile,
@@ -133,7 +152,9 @@ func buildRuntime(config servingconfig.Config, logger *slog.Logger) (*runtime, e
 	}
 	assembled.requestPath = pathService
 
-	// 6. 最后创建只依赖接口的 HTTP/SSE delivery。
+	// 7. 最后创建只依赖接口的 HTTP/SSE delivery。
+	//    直到 requestpath 和 transport 都构造成功，Gateway 才会暴露 handler，确保
+	//    health/readiness 不会把一个尚未完成装配的 runtime 对外宣布为可用。
 	server, err := gateway.New(config.Gateway, gateway.Dependencies{
 		RequestPath: pathService, Admission: components.admission, Transport: components.pool,
 		Metrics: components.metrics, Logger: logger,
@@ -165,7 +186,12 @@ func buildRequestComponents(config servingconfig.Config) (requestComponents, err
 	}, nil
 }
 
-// Close 按依赖反序关闭 owner，保证 reconcile 回调不会访问已关闭的 transport。
+// Close 按依赖反序关闭所有有状态 owner，并且保证重复调用安全。
+//
+// 先关闭 requestpath，阻止新的选择和 membership 回调；再关闭 KV subscriber、
+// observation watcher、discovery watcher，最后关闭 transport 连接池。这个顺序保证
+// 任何仍在运行的 reconcile 都不会访问已经销毁的下游资源。sync.Once 使启动失败清理、
+// defer 清理和测试显式清理可以安全地走同一条路径。
 func (r *runtime) Close() {
 	r.close.Do(func() {
 		if r.requestPath != nil {
@@ -186,9 +212,14 @@ func (r *runtime) Close() {
 	})
 }
 
-// exactKVReconcile 将 EndpointSlice 发布的 Pod UID/IP 翻译为 kvcache.Instance。
-// 这里是 Kubernetes discovery 与 ZMQ endpoint 的唯一交汇处；routing/requestpath 不了解两种协议。
-func exactKVReconcile(index kvcache.Index, model string) func(context.Context, []backend.Backend) error {
+// kvAwareReconcile 将 EndpointSlice 发布的 Pod UID/IP 翻译为 kvcache.Instance。
+//
+// EndpointSlice 提供的是 Kubernetes backend URL、Pod UID 和 membership；kvcache 需要
+// 的是模型、Pod 标识以及 live/replay ZMQ 地址。翻译集中在这里，保证 routing 和
+// requestpath 只处理稳定值对象，不认识 Kubernetes wire type、端口约定或 ZMQ topic。
+// 每次 reconcile 都按当前完整 membership 构造 desired instances，由 kvcache owner
+// 负责比较、启动、停止和清理 subscriber。
+func kvAwareReconcile(index kvcache.Index, model string) func(context.Context, []backend.Backend) error {
 	return func(ctx context.Context, backends []backend.Backend) error {
 		instances := make([]kvcache.Instance, 0, len(backends))
 		for _, candidate := range backends {
@@ -202,14 +233,19 @@ func exactKVReconcile(index kvcache.Index, model string) func(context.Context, [
 	}
 }
 
+// kvInstance 将一个 backend 的 HTTP 地址和 Pod UID转换为 KV subscriber 所需的实例配置。
+//
+// KV event 端口是 vLLM 实例协议的一部分：5557 用于 live events，5558 用于 replay。
+// 地址必须来自已选 discovery snapshot，Pod UID 不能缺失，因为 IP 可能在 Pod 重建后
+// 被复用；没有 UID 时宁可让 reconcile 失败，也不能把新 Pod 的事件接到旧缓存状态。
 func kvInstance(candidate backend.Backend, model string) (kvcache.Instance, error) {
 	parsed, err := url.Parse(candidate.URL)
 	if err != nil || parsed.Hostname() == "" {
-		return kvcache.Instance{}, fmt.Errorf("exact KV backend URL %q: %w", candidate.URL, err)
+		return kvcache.Instance{}, fmt.Errorf("KV event backend URL %q: %w", candidate.URL, err)
 	}
 	uid := candidate.Metadata[backend.MetadataPodUID]
 	if uid == "" {
-		return kvcache.Instance{}, fmt.Errorf("exact KV backend %q has no Pod UID", candidate.ID)
+		return kvcache.Instance{}, fmt.Errorf("KV event backend %q has no Pod UID", candidate.ID)
 	}
 	host := parsed.Hostname()
 	podIdentifier := net.JoinHostPort(host, strconv.Itoa(8000))
@@ -219,6 +255,11 @@ func kvInstance(candidate backend.Backend, model string) (kvcache.Instance, erro
 	}, nil
 }
 
+// kubernetesConfigs 为 discovery 和 identity 准备共享的 Kubernetes HTTP client。
+//
+// 只有 EndpointSlice discovery 需要 CA 配置和 Kubernetes API client；static discovery
+// 保持调用方提供的配置不变。HTTP client 的创建在组合根完成，domain 构造函数因此不
+// 读取文件、不管理隐藏 client，也不会在多个 owner 中重复加载 CA。
 func kubernetesConfigs(config servingconfig.Config) (discovery.Config, identity.Config, error) {
 	discoveryConfig := config.Discovery
 	identityConfig := config.Identity
@@ -241,6 +282,11 @@ func kubernetesConfigs(config servingconfig.Config) (discovery.Config, identity.
 	return discoveryConfig, identityConfig, nil
 }
 
+// buildObservations 按 observation mode 创建可选的 backend 观测 reader。
+//
+// Prometheus 模式下，EndpointSlice discovery 才需要额外的 Kubernetes identity enricher；
+// static 模式不访问 Pod/Node API。禁用模式返回 nil，保留 requestpath 对缺失观测的
+// 显式降级语义，而不是创建一个看似可用但永远没有数据的 reader。
 func buildObservations(config servingconfig.Config, identityConfig identity.Config, resolver discovery.Resolver) (observation.Reader, error) {
 	if config.ObservationMode != observation.ModePrometheus {
 		return nil, nil

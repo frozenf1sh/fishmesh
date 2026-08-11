@@ -42,7 +42,7 @@ const (
 // Pod IP 和 backend ID 都可能复用，只有 UID 变化能确定这是一个新缓存实例。
 type WorkloadUID string
 
-// Reason 说明某个 backend 的 exact KV 信号为什么不可用。
+// Reason 说明某个 backend 的 KV 信号为什么不可用。
 type Reason string
 
 // ErrorCode 是整个查询或生命周期操作失败时可稳定判断的错误类别。
@@ -161,7 +161,7 @@ func (q Query) Validate() error {
 }
 
 // Match 描述一个 backend 的最长完整 block 前缀。
-// Valid=false 表示 exact 信号未知；只有 Valid=true 且 MatchedTokens=0 才是真实 cache miss。
+// Valid=false 表示 KV-aware 信号未知；只有 Valid=true 且 MatchedTokens=0 才是真实 cache miss。
 type Match struct {
 	Backend       backend.ID
 	Valid         bool
@@ -192,7 +192,7 @@ func (s Snapshot) TotalTokens() int {
 	return s.totalTokens
 }
 
-// TotalBlocks 返回所有 prompt 可用于 exact lookup 的完整 block 数。
+// TotalBlocks 返回所有 prompt 可用于 KV-aware lookup 的完整 block 数。
 func (s Snapshot) TotalBlocks() int {
 	return s.totalBlocks
 }
@@ -241,7 +241,7 @@ func (s StateSnapshot) Instances() map[backend.ID]InstanceState {
 	return maps.Clone(s.instances)
 }
 
-// Index 提供 exact lookup、Pod 生命周期对齐和资源关闭能力。
+// Index 提供 KV-aware lookup、Pod 生命周期对齐和资源关闭能力。
 type Index interface {
 	Lookup(context.Context, Query) (Snapshot, error)
 	Reconcile(context.Context, []Instance) error

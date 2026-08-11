@@ -1,0 +1,97 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: kubellm
+resources:
+  - ../baseline/base
+  - ../inference
+  - rbac.yaml
+  - gateway-pdb.yaml
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: fishmesh
+      app.kubernetes.io/component: lite-kv-aware
+    includeSelectors: false
+patches:
+  - target:
+      kind: ConfigMap
+      name: fishmesh-gateway-config
+    patch: |-
+      - op: replace
+        path: /data/FISHMESH_ROUTING_MODE
+        value: kv-aware
+      - op: replace
+        path: /data/FISHMESH_ENDPOINT_DISCOVERY
+        value: endpointslice
+      - op: replace
+        path: /data/FISHMESH_ENDPOINT_REFRESH_INTERVAL
+        value: 10s
+      - op: replace
+        path: /data/FISHMESH_ENDPOINT_MAX_AGE
+        value: 30s
+      - op: add
+        path: /data/FISHMESH_KV_AWARE_MODEL
+        value: qwen2.5-0.5b-instruct
+      - op: add
+        path: /data/FISHMESH_KV_AWARE_RENDER_URL
+        value: http://qwen-vllm-baseline.kubellm.svc.cluster.local:8000
+      - op: add
+        path: /data/FISHMESH_MAX_REQUEST_BODY_BYTES
+        value: "2097152"
+      - op: add
+        path: /metadata/annotations/fishmesh.io~1routing-mode
+        value: kv-aware-v1
+      - op: add
+        path: /metadata/annotations/fishmesh.io~1config-version
+        value: r6c-lite
+  - target:
+      kind: ServiceAccount
+      name: fishmesh-gateway
+    patch: |-
+      - op: replace
+        path: /automountServiceAccountToken
+        value: true
+      - op: add
+        path: /metadata/annotations/fishmesh.io~1permission-scope
+        value: namespace-scoped-read-only-endpointslices
+  - target:
+      kind: Deployment
+      name: fishmesh-gateway
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/image
+        value: fishmesh-gateway:r6f-r2
+      - op: replace
+        path: /spec/template/spec/automountServiceAccountToken
+        value: true
+      - op: add
+        path: /spec/template/metadata/annotations/fishmesh.io~1gateway-image-revision
+        value: r6f-r2
+      - op: add
+        path: /spec/template/metadata/annotations/fishmesh.io~1runtime-profile
+        value: lite-kv-aware
+  - target:
+      kind: Deployment
+      name: qwen-vllm
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/args/-
+        value: '--kv-events-config={"enable_kv_cache_events":true,"publisher":"zmq","endpoint":"tcp://*:5557","replay_endpoint":"tcp://*:5558","buffer_steps":4096,"hwm":10000,"max_queue_size":10000,"topic":"kv@$(POD_IP):8000@qwen2.5-0.5b-instruct"}'
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+      - op: add
+        path: /spec/template/spec/containers/0/ports/-
+        value:
+          name: kv-events
+          containerPort: 5557
+          protocol: TCP
+      - op: add
+        path: /spec/template/spec/containers/0/ports/-
+        value:
+          name: kv-replay
+          containerPort: 5558
+          protocol: TCP

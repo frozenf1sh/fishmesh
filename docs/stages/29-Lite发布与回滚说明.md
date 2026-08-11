@@ -10,14 +10,14 @@
 2. 当前仅 Linux amd64 离线导入路径在 GPU 节点实证。arm64 仅为 Dockerfile 的交叉构建 target；没有
    未经验证就宣称多架构镜像、SBOM attestation 或 registry release 已完成。
 3. Gateway 升级遵守 PDB 和 rolling update；vLLM 不得并行重启两个 time-sliced 副本。
-4. exact 信号 unavailable/stale 的恢复仍是 load-aware；回滚不能将它误写为零命中或带着无效 index
-   继续 exact。
+4. KV-aware 信号 unavailable/stale 的恢复仍是 load-balanced；回滚不能将它误写为零命中或带着无效 index
+   继续 KV-aware。
 5. Flannel 不保证 NetworkPolicy 执行，升级流程不依赖此声明。
 
 ## 交付
 
 `docs/notes/release-notes.md` 给出已验证离线路径、发布前 multi-arch/SBOM 命令、版本矩阵和 digest
-记录要求；同时给出 Gateway `rollout undo` 与 exact 链路异常时恢复 `deploy/baseline/base` 的最小步骤。
+记录要求；同时给出 Gateway `rollout undo` 与 KV-aware 链路异常时恢复 `deploy/baseline/base` 的最小步骤。
 `syft`、可写 registry 和远程 attestation 是外部发布条件，缺少任一项时必须标记为未完整发布。
 
 ## 验证

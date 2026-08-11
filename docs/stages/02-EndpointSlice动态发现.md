@@ -19,7 +19,7 @@
 
 真实 K3s 中发现两个 vLLM Ready 地址，`/v1/models` 返回：
 
-- `X-FishMesh-Routing-Mode: prefix-affinity`；
+- `X-FishMesh-Routing-Mode: session-key`；
 - `X-FishMesh-Backend-ID: endpoint-*`；
 - `X-FishMesh-Upstream` 指向某个实际 Pod 地址。
 

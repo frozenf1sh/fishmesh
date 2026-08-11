@@ -149,10 +149,11 @@ tokenization -> standard library（vLLM HTTP 只在 adapter）
 kvcache      -> backend（llm-d-kv-cache/vLLM 只在 adapter）
 routing      -> backend + observation + kvcache values
 transport    -> backend
-requestpath  -> backend + discovery + observation + tokenization + kvcache + routing + circuit
+prediction   -> backend
+requestpath  -> backend + discovery + observation + prediction + tokenization + kvcache + routing + circuit
 gateway      -> admission + requestpath + transport
 llmd         -> backend + observation + kvcache values + routing
-config       -> 各 domain Config
+config       -> 各 domain Config（含 prediction.Config）
 cmd          -> config + delivery + all concrete implementations
 entity/*     -> standard library only（仅在出现真实跨 domain 稳定模型时建立）
 ```
@@ -164,6 +165,7 @@ entity/*     -> standard library only（仅在出现真实跨 domain 稳定模�
 - `tokenization` 选择 endpoint 或静默 fallback；
 - `gateway` 解析 KVEvents、维护 block map 或实现调度公式；
 - `llmd` 启动 Lite discovery/index/requestpath；
+- `prediction` 只能提供影子 TTFT 观测，不能反向参与 routing 决策；
 - 原子 domain import `gateway/requestpath/cmd`；
 - 新建 `shared/common/utils/helpers/manager` 隐藏所有权。
 - 把所有 Config/DTO 无差别搬入根 `entity` 包；实体必须按概念分包，并具有真实跨 domain 语义。

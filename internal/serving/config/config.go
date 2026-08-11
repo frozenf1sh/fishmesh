@@ -50,11 +50,23 @@ func (c Config) Validate() error {
 	if c.Process.ListenAddress == "" || c.Process.ReadHeaderTimeout <= 0 || c.Process.ShutdownTimeout <= 0 {
 		return fmt.Errorf("process listen address and timeouts must be configured")
 	}
-	if err := c.RequestPath.Service.Validate(); err != nil {
-		return fmt.Errorf("service backend: %w", err)
+	if err := c.Gateway.Validate(); err != nil {
+		return fmt.Errorf("gateway: %w", err)
 	}
-	if c.Gateway.MaxRequestBodyBytes <= 0 || c.Admission.MaxInflight <= 0 || c.Transport.MaxConnsPerHost <= 0 || c.Transport.RequestTimeout <= 0 {
-		return fmt.Errorf("gateway body, admission and transport limits must be positive")
+	if err := c.RequestPath.Validate(); err != nil {
+		return fmt.Errorf("requestpath: %w", err)
+	}
+	if err := c.Routing.Validate(); err != nil {
+		return fmt.Errorf("routing: %w", err)
+	}
+	if err := c.Circuit.Validate(); err != nil {
+		return fmt.Errorf("circuit: %w", err)
+	}
+	if err := c.Admission.Validate(); err != nil {
+		return fmt.Errorf("admission: %w", err)
+	}
+	if err := c.Transport.Validate(); err != nil {
+		return fmt.Errorf("transport: %w", err)
 	}
 	if c.Discovery.Mode == discovery.ModeEndpointSlice {
 		endpointSlice := c.Discovery.EndpointSlice
@@ -62,59 +74,36 @@ func (c Config) Validate() error {
 			return fmt.Errorf("EndpointSlice discovery requires namespace, service and positive freshness bounds")
 		}
 	}
-	if c.Discovery.Mode != discovery.ModeStatic && c.Discovery.Mode != discovery.ModeEndpointSlice {
-		return fmt.Errorf("unsupported discovery mode %q", c.Discovery.Mode)
+	if err := c.Discovery.Mode.Validate(); err != nil {
+		return err
 	}
-	if c.ObservationMode != observation.ModeNone && c.ObservationMode != observation.ModePrometheus {
-		return fmt.Errorf("unsupported observation mode %q", c.ObservationMode)
+	if err := c.ObservationMode.Validate(); err != nil {
+		return err
 	}
 	if c.ObservationMode == observation.ModePrometheus && (c.Observation.Interval <= 0 || c.Observation.MaxAge <= 0) {
 		return fmt.Errorf("Prometheus observation interval and max age must be positive")
 	}
-	if !supportedRoutingMode(c.Routing.Mode) {
-		return fmt.Errorf("unsupported routing mode %q", c.Routing.Mode)
+	if c.ObservationMode == observation.ModePrometheus {
+		if err := c.Prometheus.Validate(); err != nil {
+			return fmt.Errorf("Prometheus: %w", err)
+		}
 	}
-	if c.Routing.Mode == routing.ModeExactCacheLoad {
+	if c.Routing.Mode == routing.ModeKVAware {
 		if c.Discovery.Mode != discovery.ModeEndpointSlice {
-			return fmt.Errorf("exact-cache-load requires EndpointSlice discovery")
+			return fmt.Errorf("kv-aware requires EndpointSlice discovery")
 		}
 		if err := c.Tokenization.Validate(); err != nil {
-			return fmt.Errorf("exact tokenization: %w", err)
+			return fmt.Errorf("kv-aware tokenization: %w", err)
 		}
 		if err := c.KVCache.Validate(); err != nil {
-			return fmt.Errorf("exact KV cache: %w", err)
-		}
-		if err := c.Routing.ExactCacheLoad.Validate(); err != nil {
-			return fmt.Errorf("exact routing cost: %w", err)
+			return fmt.Errorf("kv-aware KV cache: %w", err)
 		}
 	}
 	if err := c.Prediction.Validate(); err != nil {
 		return fmt.Errorf("prediction: %w", err)
 	}
-	if c.Routing.Mode == routing.ModeBoundedAffinity {
-		bounded := c.Routing.BoundedAffinity
-		if bounded.TTL <= 0 || bounded.MaxEntries <= 0 || bounded.InflightDelta < 0 || bounded.QueueDepthDelta < 0 {
-			return fmt.Errorf("bounded affinity limits must be positive")
-		}
-	}
-	if c.Circuit.EWMAAlpha <= 0 || c.Circuit.EWMAAlpha > 1 || c.Circuit.ErrorThreshold <= 0 || c.Circuit.ErrorThreshold > 1 || c.Circuit.MinimumRequests <= 0 || c.Circuit.OpenDuration <= 0 {
-		return fmt.Errorf("circuit limits must be positive and bounded")
-	}
-	if c.Discovery.Mode == discovery.ModeStatic && directRoutingMode(c.Routing.Mode) && len(c.Discovery.Static) == 0 {
+	if c.Discovery.Mode == discovery.ModeStatic && len(c.Discovery.Static) == 0 {
 		return fmt.Errorf("%s routing requires at least one backend endpoint", c.Routing.Mode)
 	}
 	return nil
-}
-
-func supportedRoutingMode(mode routing.Mode) bool {
-	switch mode {
-	case routing.ModeService, routing.ModePrefixHash, routing.ModePrefixAffinity, routing.ModeLoadAware, routing.ModeBoundedAffinity, routing.ModeExactCacheLoad:
-		return true
-	default:
-		return false
-	}
-}
-
-func directRoutingMode(mode routing.Mode) bool {
-	return mode != routing.ModeService
 }

@@ -9,7 +9,7 @@ import (
 )
 
 func TestPoolBoundsConnectionsAndRemovesEndpoint(t *testing.T) {
-	pool := New(Config{KeepAlive: true, RequestTimeout: time.Second, MaxConnsPerHost: 7})
+	pool := New(Config{KeepAlive: true, RequestTimeout: time.Second, MaxConnsPerHost: 7, IdleConnTimeout: time.Second})
 	client := pool.ClientFor(backend.Backend{ID: "a"})
 	transport, ok := client.Transport.(*http.Transport)
 	if !ok {

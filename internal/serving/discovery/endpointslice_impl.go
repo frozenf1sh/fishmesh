@@ -14,11 +14,10 @@ import (
 )
 
 const (
-	defaultEndpointRefreshInterval = 30 * time.Second
-	minimumEndpointWatchTimeout    = 10 * time.Second
-	endpointSnapshotStaleError     = "EndpointSlice snapshot is stale"
-	endpointWatchClosedError       = "EndpointSlice watch stream closed"
-	secureURLScheme                = "https"
+	minimumEndpointWatchTimeout = 10 * time.Second
+	endpointSnapshotStaleError  = "EndpointSlice snapshot is stale"
+	endpointWatchClosedError    = "EndpointSlice watch stream closed"
+	secureURLScheme             = "https"
 )
 
 var _ Resolver = (*endpointSliceResolver)(nil)
@@ -59,7 +58,7 @@ func NewEndpointSlice(config EndpointSliceConfig) (Resolver, error) {
 		return nil, fmt.Errorf("EndpointSlice API URL must be an absolute HTTPS URL: %q", baseURL)
 	}
 	if config.RefreshInterval <= 0 {
-		config.RefreshInterval = defaultEndpointRefreshInterval
+		return nil, fmt.Errorf("EndpointSlice refresh interval must be positive")
 	}
 	client := config.HTTPClient
 	if client == nil {

@@ -3,12 +3,9 @@ package transport
 import (
 	"net/http"
 	"sync"
-	"time"
 
 	"github.com/frozenf1sh/fishmesh/internal/serving/backend"
 )
-
-const defaultIdleConnectionTimeout = 90 * time.Second
 
 var _ Pool = (*pool)(nil)
 
@@ -36,7 +33,7 @@ func (p *pool) ClientFor(candidate backend.Backend) *http.Client {
 		MaxIdleConns:          p.config.MaxConnsPerHost,
 		MaxIdleConnsPerHost:   p.config.MaxConnsPerHost,
 		MaxConnsPerHost:       p.config.MaxConnsPerHost,
-		IdleConnTimeout:       defaultIdleConnectionTimeout,
+		IdleConnTimeout:       p.config.IdleConnTimeout,
 		ResponseHeaderTimeout: p.config.RequestTimeout,
 	}, Timeout: p.config.RequestTimeout}
 	p.clients[candidate.ID] = client

@@ -11,7 +11,7 @@ import (
 )
 
 func TestVLLMStoreMatchesCacheSaltAndConsumesRemoval(t *testing.T) {
-	store, err := newVLLMStore(DefaultConfig())
+	store, err := newVLLMStore(testConfig())
 	if err != nil {
 		t.Fatalf("create store: %v", err)
 	}
@@ -71,7 +71,7 @@ func TestVLLMStoreMatchesCacheSaltAndConsumesRemoval(t *testing.T) {
 }
 
 func TestVLLMStoreRejectsUnsupportedEngineSemantics(t *testing.T) {
-	store, err := newVLLMStore(DefaultConfig())
+	store, err := newVLLMStore(testConfig())
 	if err != nil {
 		t.Fatalf("create store: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestVLLMStoreRejectsUnsupportedEngineSemantics(t *testing.T) {
 }
 
 func TestVLLMStoreAcceptsSingleFullAttentionGroup(t *testing.T) {
-	store, err := newVLLMStore(DefaultConfig())
+	store, err := newVLLMStore(testConfig())
 	if err != nil {
 		t.Fatalf("create store: %v", err)
 	}
@@ -113,7 +113,7 @@ func TestVLLMStoreAcceptsSingleFullAttentionGroup(t *testing.T) {
 }
 
 func TestVLLMStoreRejectsNonCanonicalGroupSemantics(t *testing.T) {
-	store, err := newVLLMStore(DefaultConfig())
+	store, err := newVLLMStore(testConfig())
 	if err != nil {
 		t.Fatalf("create store: %v", err)
 	}

@@ -34,7 +34,7 @@ type decisionRecord struct {
 
 type scorer struct {
 	typedName        lldmplugin.TypedName
-	routingKeyHeader string
+	sessionKeyHeader string
 	metricsMaxAge    time.Duration
 	clock            Clock
 	strategy         routing.Strategy
@@ -46,7 +46,7 @@ type scorer struct {
 func newScorer(name string, config Config, strategy routing.Strategy) *scorer {
 	result := &scorer{
 		typedName:        lldmplugin.TypedName{Type: PluginType, Name: name},
-		routingKeyHeader: config.RoutingKeyHeader,
+		sessionKeyHeader: config.SessionKeyHeader,
 		metricsMaxAge:    config.MetricsMaxAge,
 		clock:            config.Clock,
 		strategy:         strategy,
@@ -94,7 +94,7 @@ func (s *scorer) Score(_ context.Context, request *lldmscheduling.InferenceReque
 	if s.reconciler != nil {
 		s.reconciler.ReconcileBackends(snapshot.Backends)
 	}
-	decision, err := s.strategy.Select(s.routingKey(request), snapshot)
+	decision, err := s.strategy.Select(s.sessionKey(request), snapshot)
 	if err != nil {
 		return scores
 	}
@@ -124,11 +124,11 @@ func (s *scorer) ResponseHeader(_ context.Context, request *lldmscheduling.Infer
 	}
 }
 
-func (s *scorer) routingKey(request *lldmscheduling.InferenceRequest) string {
+func (s *scorer) sessionKey(request *lldmscheduling.InferenceRequest) string {
 	if request == nil {
 		return ""
 	}
-	return request.Headers[s.routingKeyHeader]
+	return request.Headers[s.sessionKeyHeader]
 }
 
 func (s *scorer) maxAge() time.Duration {
@@ -136,7 +136,7 @@ func (s *scorer) maxAge() time.Duration {
 }
 
 func writeDecisionHeaders(headers map[string]string, decision routing.Decision) {
-	headers[HeaderRoutingMode] = string(routing.ModeBoundedAffinity)
+	headers[HeaderRoutingMode] = string(routing.ModeSessionKey)
 	headers[HeaderRouteReason] = string(decision.Reason)
 	headers[HeaderSelectedBackendID] = string(decision.Backend.ID)
 	headers[HeaderPreferredBackendID] = string(decision.PreferredBackendID)

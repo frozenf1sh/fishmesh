@@ -33,7 +33,7 @@ func (s *replaySource) Replay(_ context.Context, _ Instance, _ uint64, handler f
 }
 
 func TestEventStreamDoesNotCommitFailedApply(t *testing.T) {
-	config := DefaultConfig()
+	config := testConfig()
 	instance := testInstance("backend-a", "uid-a", "pod-a")
 	store := &fakeStore{applyErr: errors.New("index write failed")}
 	stream := newEventStream(context.Background(), config, instance, &replaySource{}, store, time.Now)
@@ -59,7 +59,7 @@ func TestEventStreamObservesOnlyTimestampedSuccessfulApply(t *testing.T) {
 	})
 
 	store := &fakeStore{applyResult: applyResult{publishedAt: now.Add(-3 * time.Millisecond)}}
-	stream := newEventStream(context.Background(), DefaultConfig(), instance, &replaySource{}, store, func() time.Time { return now }, observer)
+	stream := newEventStream(context.Background(), testConfig(), instance, &replaySource{}, store, func() time.Time { return now }, observer)
 	if err := stream.accept(context.Background(), testEvent(instance, 0), false); err != nil {
 		t.Fatalf("accept timestamped event: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestEventStreamDoesNotObserveFuturePublisherTimestampAsZeroLag(t *testing.T
 	instance := testInstance("backend-a", "uid-a", "pod-a")
 	observations := make([]EventObservation, 0, 1)
 	store := &fakeStore{applyResult: applyResult{publishedAt: now.Add(time.Millisecond)}}
-	stream := newEventStream(context.Background(), DefaultConfig(), instance, &replaySource{}, store, func() time.Time { return now }, eventObserverFunc(func(observation EventObservation) {
+	stream := newEventStream(context.Background(), testConfig(), instance, &replaySource{}, store, func() time.Time { return now }, eventObserverFunc(func(observation EventObservation) {
 		observations = append(observations, observation)
 	}))
 
@@ -113,7 +113,7 @@ func (s *replaySource) setEvents(events ...Event) {
 func TestEventStreamRecoversLiveGapThroughReplay(t *testing.T) {
 	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
 	clock := func() time.Time { return now }
-	config := DefaultConfig()
+	config := testConfig()
 	instance := testInstance("backend-a", "uid-a", "10.0.0.1:8000")
 	source := &replaySource{}
 	store := &fakeStore{}
@@ -143,7 +143,7 @@ func TestEventStreamRecoversLiveGapThroughReplay(t *testing.T) {
 }
 
 func TestEventStreamRejectsUnrecoverableReplayGap(t *testing.T) {
-	config := DefaultConfig()
+	config := testConfig()
 	instance := testInstance("backend-a", "uid-a", "10.0.0.1:8000")
 	source := &replaySource{}
 	source.setEvents(testEvent(instance, 3))
@@ -162,7 +162,7 @@ func TestEventStreamRejectsUnrecoverableReplayGap(t *testing.T) {
 
 func TestEventStreamFreshnessUsesReplayHeartbeat(t *testing.T) {
 	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
-	config := DefaultConfig()
+	config := testConfig()
 	stream := newEventStream(context.Background(), config, testInstance("backend-a", "uid-a", "pod-a"), &replaySource{}, &fakeStore{}, func() time.Time { return now })
 	stream.reason = ReasonNone
 	stream.lastReplayAt = now
@@ -177,7 +177,7 @@ func TestEventStreamFreshnessUsesReplayHeartbeat(t *testing.T) {
 }
 
 func TestReconcileReplacesPodUIDAfterStoppingAndClearingOldInstance(t *testing.T) {
-	config := DefaultConfig()
+	config := testConfig()
 	config.ReplayPeriod = time.Hour
 	source := blockingSource{}
 	store := &fakeStore{}
@@ -226,7 +226,7 @@ func waitForState(t *testing.T, service *service, backendID string, accepted fun
 }
 
 func TestReplayCapacityInvalidatesAndClears(t *testing.T) {
-	config := DefaultConfig()
+	config := testConfig()
 	config.MaxReplayEvents = 1
 	instance := testInstance("backend-a", "uid-a", "pod-a")
 	source := &replaySource{}

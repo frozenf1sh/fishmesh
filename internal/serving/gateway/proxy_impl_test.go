@@ -114,8 +114,8 @@ func TestClientCancellationDoesNotOpenBackendCircuit(t *testing.T) {
 	}))
 	defer upstream.Close()
 	server, err := newTestServer(t, testRuntimeConfig{
-		UpstreamURL: upstream.URL, RoutingMode: routing.ModeBoundedAffinity,
-		BackendEndpoints: []string{upstream.URL}, AffinityTTL: time.Minute, AffinityMaxEntries: 10,
+		UpstreamURL: upstream.URL, RoutingMode: routing.ModeSessionKey,
+		BackendEndpoints: []string{upstream.URL}, SessionKeyTTL: time.Minute, SessionKeyMaxEntries: 10,
 		RequestTimeout: time.Second,
 	})
 	if err != nil {
@@ -145,7 +145,7 @@ func TestClientCancellationDoesNotOpenBackendCircuit(t *testing.T) {
 	}
 }
 
-func TestTransportCircuitSpillsWithoutChangingAffinity(t *testing.T) {
+func TestTransportCircuitSpillsWithoutChangingSessionKey(t *testing.T) {
 	var fail [2]atomic.Bool
 	var hits [2]atomic.Int64
 	upstreams := make([]*httptest.Server, 2)
@@ -167,9 +167,9 @@ func TestTransportCircuitSpillsWithoutChangingAffinity(t *testing.T) {
 		defer upstreams[index].Close()
 	}
 	server, err := newTestServer(t, testRuntimeConfig{
-		UpstreamURL: upstreams[0].URL, RoutingMode: routing.ModeBoundedAffinity,
+		UpstreamURL: upstreams[0].URL, RoutingMode: routing.ModeSessionKey,
 		BackendEndpoints: []string{upstreams[0].URL, upstreams[1].URL},
-		AffinityTTL:      time.Minute, AffinityMaxEntries: 10, RequestTimeout: time.Second,
+		SessionKeyTTL:    time.Minute, SessionKeyMaxEntries: 10, RequestTimeout: time.Second,
 		CircuitEWMAAlpha: 0.5, CircuitErrorThreshold: 0.6, CircuitMinimumRequests: 3, CircuitOpenDuration: time.Minute,
 	})
 	if err != nil {
@@ -188,7 +188,7 @@ func TestTransportCircuitSpillsWithoutChangingAffinity(t *testing.T) {
 	fail[preferredIndex].Store(true)
 	for requestNumber := 0; requestNumber < 3; requestNumber++ {
 		request := httptest.NewRequest(http.MethodPost, "http://gateway/v1/chat/completions", bytes.NewReader([]byte(`{}`)))
-		request.Header.Set("X-FishMesh-Prefix-Key", "failing-session")
+		request.Header.Set("X-FishMesh-Session-Key", "failing-session")
 		response := httptest.NewRecorder()
 		server.Handler().ServeHTTP(response, request)
 		if response.Code != http.StatusBadGateway {
@@ -196,7 +196,7 @@ func TestTransportCircuitSpillsWithoutChangingAffinity(t *testing.T) {
 		}
 	}
 	request := httptest.NewRequest(http.MethodPost, "http://gateway/v1/chat/completions", bytes.NewReader([]byte(`{}`)))
-	request.Header.Set("X-FishMesh-Prefix-Key", "failing-session")
+	request.Header.Set("X-FishMesh-Session-Key", "failing-session")
 	response := httptest.NewRecorder()
 	server.Handler().ServeHTTP(response, request)
 	if response.Code != http.StatusOK || response.Header().Get("X-FishMesh-Spillover-Reason") != string(routing.ReasonCircuitOpen) {
@@ -221,8 +221,8 @@ func TestStreamingFailureIsNotRetriedAfterHeaders(t *testing.T) {
 	}))
 	defer upstream.Close()
 	server, err := newTestServer(t, testRuntimeConfig{
-		UpstreamURL: upstream.URL, RoutingMode: routing.ModeBoundedAffinity,
-		BackendEndpoints: []string{upstream.URL}, AffinityTTL: time.Minute, AffinityMaxEntries: 10,
+		UpstreamURL: upstream.URL, RoutingMode: routing.ModeSessionKey,
+		BackendEndpoints: []string{upstream.URL}, SessionKeyTTL: time.Minute, SessionKeyMaxEntries: 10,
 		RequestTimeout: time.Second,
 	})
 	if err != nil {
@@ -255,7 +255,7 @@ func TestPrefixHashRoutingKeepsPrefixOnOneEndpoint(t *testing.T) {
 
 	server, err := newTestServer(t, testRuntimeConfig{
 		UpstreamURL: upstreams[0].URL,
-		RoutingMode: routing.ModePrefixAffinity, BackendEndpoints: []string{upstreams[0].URL, upstreams[1].URL},
+		RoutingMode: routing.ModeSessionKey, BackendEndpoints: []string{upstreams[0].URL, upstreams[1].URL},
 		KeepAlive: true, RequestTimeout: defaultRequestTimeout,
 	})
 	if err != nil {
@@ -263,10 +263,10 @@ func TestPrefixHashRoutingKeepsPrefixOnOneEndpoint(t *testing.T) {
 	}
 	for i := 0; i < 3; i++ {
 		request := httptest.NewRequest(http.MethodPost, "http://gateway/v1/chat/completions", bytes.NewReader([]byte(`{}`)))
-		request.Header.Set("X-FishMesh-Prefix-Key", "same-prefix")
+		request.Header.Set("X-FishMesh-Session-Key", "same-prefix")
 		response := httptest.NewRecorder()
 		server.Handler().ServeHTTP(response, request)
-		if response.Code != http.StatusOK || response.Header().Get("X-FishMesh-Routing-Mode") != string(routing.ModePrefixAffinity) {
+		if response.Code != http.StatusOK || response.Header().Get("X-FishMesh-Routing-Mode") != string(routing.ModeSessionKey) {
 			t.Fatalf("unexpected response: status=%d headers=%v", response.Code, response.Header())
 		}
 	}
@@ -293,14 +293,14 @@ func TestLoadAwareRoutingPrefersIdleEndpoint(t *testing.T) {
 
 	server, err := newTestServer(t, testRuntimeConfig{
 		UpstreamURL: upstreams[0].URL,
-		RoutingMode: routing.ModeLoadAware, BackendEndpoints: []string{upstreams[0].URL, upstreams[1].URL},
+		RoutingMode: routing.ModeLoadBalanced, BackendEndpoints: []string{upstreams[0].URL, upstreams[1].URL},
 		KeepAlive: true, RequestTimeout: defaultRequestTimeout,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	request := httptest.NewRequest(http.MethodPost, "http://gateway/v1/chat/completions", bytes.NewReader([]byte(`{}`)))
-	request.Header.Set("X-FishMesh-Prefix-Key", "same-prefix")
+	request.Header.Set("X-FishMesh-Session-Key", "same-prefix")
 	response := httptest.NewRecorder()
 	server.Handler().ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
@@ -311,7 +311,7 @@ func TestLoadAwareRoutingPrefersIdleEndpoint(t *testing.T) {
 	}
 }
 
-func TestBoundedAffinitySpilloverIsExplainable(t *testing.T) {
+func TestSessionKeySpilloverIsExplainable(t *testing.T) {
 	upstreams := make([]*httptest.Server, 2)
 	for index := range upstreams {
 		upstreams[index] = httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
@@ -323,8 +323,8 @@ func TestBoundedAffinitySpilloverIsExplainable(t *testing.T) {
 
 	server, err := newTestServer(t, testRuntimeConfig{
 		UpstreamURL: upstreams[0].URL,
-		RoutingMode: routing.ModeBoundedAffinity, BackendEndpoints: []string{upstreams[0].URL, upstreams[1].URL},
-		AffinityTTL: time.Minute, AffinityMaxEntries: 100, AffinityInflightDelta: 1,
+		RoutingMode: routing.ModeSessionKey, BackendEndpoints: []string{upstreams[0].URL, upstreams[1].URL},
+		SessionKeyTTL: time.Minute, SessionKeyMaxEntries: 100, SessionKeyInflightDelta: 1,
 		KeepAlive: true, RequestTimeout: defaultRequestTimeout,
 	})
 	if err != nil {
@@ -344,25 +344,25 @@ func TestBoundedAffinitySpilloverIsExplainable(t *testing.T) {
 	defer second.Complete(requestpath.OutcomeClientCanceled)
 
 	request := httptest.NewRequest(http.MethodPost, "http://gateway/v1/chat/completions", bytes.NewReader([]byte(`{}`)))
-	request.Header.Set("X-FishMesh-Prefix-Key", "hot-session")
+	request.Header.Set("X-FishMesh-Session-Key", "hot-session")
 	response := httptest.NewRecorder()
 	server.Handler().ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d", response.Code)
 	}
-	if response.Header().Get("X-FishMesh-Route-Reason") != string(routing.ReasonAffinitySpillover) || response.Header().Get("X-FishMesh-Spillover-Reason") != string(routing.ReasonLocalInflight) {
+	if response.Header().Get("X-FishMesh-Route-Reason") != string(routing.ReasonSessionKeySpillover) || response.Header().Get("X-FishMesh-Spillover-Reason") != string(routing.ReasonLocalInflight) {
 		t.Fatalf("missing spillover provenance: %v", response.Header())
 	}
 	if response.Header().Get("X-FishMesh-Preferred-Backend-ID") != string(preferredID) || response.Header().Get("X-FishMesh-Backend-ID") == string(preferredID) {
 		t.Fatalf("preferred/selected identities are wrong: %v", response.Header())
 	}
-	if response.Header().Get("X-FishMesh-Policy") != string(routing.PolicyBoundedAffinityV1) {
+	if response.Header().Get("X-FishMesh-Policy") != string(routing.PolicySessionKeyV1) {
 		t.Fatalf("policy = %q", response.Header().Get("X-FishMesh-Policy"))
 	}
 
 	metricsResponse := httptest.NewRecorder()
 	server.Handler().ServeHTTP(metricsResponse, httptest.NewRequest(http.MethodGet, "http://gateway/metrics", nil))
-	if !strings.Contains(metricsResponse.Body.String(), `fishmesh_gateway_affinity_spillovers_total{reason="local-inflight"} 1`) {
+	if !strings.Contains(metricsResponse.Body.String(), `fishmesh_gateway_session_key_spillovers_total{reason="local-inflight"} 1`) {
 		t.Fatalf("spillover metric missing:\n%s", metricsResponse.Body.String())
 	}
 }

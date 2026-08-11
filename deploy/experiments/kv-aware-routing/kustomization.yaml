@@ -1,0 +1,84 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../baseline/base
+  - ../../inference
+  - rbac.yaml
+patches:
+  - target:
+      kind: ConfigMap
+      name: fishmesh-gateway-config
+    patch: |-
+      - op: replace
+        path: /data/FISHMESH_ROUTING_MODE
+        value: kv-aware
+      - op: replace
+        path: /data/FISHMESH_ENDPOINT_DISCOVERY
+        value: endpointslice
+      - op: replace
+        path: /data/FISHMESH_ENDPOINT_REFRESH_INTERVAL
+        value: 10s
+      - op: replace
+        path: /data/FISHMESH_ENDPOINT_MAX_AGE
+        value: 30s
+      - op: add
+        path: /data/FISHMESH_KV_AWARE_MODEL
+        value: qwen2.5-0.5b-instruct
+      - op: add
+        path: /data/FISHMESH_KV_AWARE_RENDER_URL
+        value: http://qwen-vllm-baseline.kubellm.svc.cluster.local:8000
+      - op: add
+        path: /data/FISHMESH_MAX_REQUEST_BODY_BYTES
+        value: "2097152"
+      - op: add
+        path: /metadata/annotations/fishmesh.io~1routing-mode
+        value: kv-aware-v1
+      - op: add
+        path: /metadata/annotations/fishmesh.io~1config-version
+        value: r6b6-kv-aware-routing
+  - target:
+      kind: ServiceAccount
+      name: fishmesh-gateway
+    patch: |-
+      - op: replace
+        path: /automountServiceAccountToken
+        value: true
+  - target:
+      kind: Deployment
+      name: fishmesh-gateway
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/image
+        value: fishmesh:r6b6-kv-aware
+      - op: add
+        path: /spec/template/metadata/annotations/fishmesh.io~1kv-aware-image-revision
+        value: r6b6-kv-aware-v1
+      - op: replace
+        path: /spec/template/spec/automountServiceAccountToken
+        value: true
+  - target:
+      kind: Deployment
+      name: qwen-vllm
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/args/-
+        value: '--kv-events-config={"enable_kv_cache_events":true,"publisher":"zmq","endpoint":"tcp://*:5557","replay_endpoint":"tcp://*:5558","buffer_steps":4096,"hwm":10000,"max_queue_size":10000,"topic":"kv@$(POD_IP):8000@qwen2.5-0.5b-instruct"}'
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+      - op: add
+        path: /spec/template/spec/containers/0/ports/-
+        value:
+          name: kv-events
+          containerPort: 5557
+          protocol: TCP
+      - op: add
+        path: /spec/template/spec/containers/0/ports/-
+        value:
+          name: kv-replay
+          containerPort: 5558
+          protocol: TCP

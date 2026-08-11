@@ -57,8 +57,8 @@ func NewVLLMRenderer(config Config, dependencies Dependencies) (Tokenizer, error
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
-	if dependencies.HTTPClient == nil {
-		return nil, fmt.Errorf("tokenization HTTP client must not be nil")
+	if err := dependencies.Validate(); err != nil {
+		return nil, err
 	}
 	config.BaseURL = strings.TrimRight(strings.TrimSpace(config.BaseURL), "/")
 	config.Model = strings.TrimSpace(config.Model)

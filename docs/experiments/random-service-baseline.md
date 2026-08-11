@@ -72,7 +72,7 @@ Gateway 对应记录了 200 个 first-SSE-event 样本。完整 JSONL 证据在 
 ## Baseline 验收前暂不实现
 
 - Prefix registry/controller 和 cache-hit feedback；
-- 根据 `X-FishMesh-Prefix-Key` 进行 Gateway endpoint selection；
+- 根据 `X-FishMesh-Session-Key` 进行 Gateway endpoint selection；
 - eBPF socket marking 与 connect-hook rewrite；该方向现已移出 MVP，除非跨节点实验先证明
   网络是主要瓶颈；
 - policy-capable CNI。当前 Flannel 不能执行 NetworkPolicy，因此清单只是声明式准备，

@@ -13,18 +13,18 @@ import (
 	"github.com/frozenf1sh/fishmesh/internal/serving/routing"
 )
 
-func TestMetricsProjectExactKVStateWithoutSensitiveLabels(t *testing.T) {
+func TestMetricsProjectKVAwareKVStateWithoutSensitiveLabels(t *testing.T) {
 	metrics := NewMetrics()
 	backendID := backend.ID("backend-a")
-	state := requestpath.State{Exact: requestpath.ExactMatchUnavailable, KVCache: map[backend.ID]requestpath.KVCacheState{
+	state := requestpath.State{KV: requestpath.KVMatchUnavailable, KVCache: map[backend.ID]requestpath.KVCacheState{
 		backendID: {
 			Valid: true, Reason: kvcache.ReasonNone, Freshness: 2 * time.Second,
 			LastSequence: 7, AppliedBatches: 8, ReplayBatches: 3,
 		},
 	}}
 	metrics.updateRequestPath(state)
-	metrics.observeSelection(routing.ModeExactCacheLoad, requestpath.Lease{
-		Decision: routing.Decision{Backend: backend.Backend{ID: backendID}, Reason: routing.ReasonExactSignalUnavailable},
+	metrics.observeSelection(routing.ModeKVAware, requestpath.Lease{
+		Decision: routing.Decision{Backend: backend.Backend{ID: backendID}, Reason: routing.ReasonKVAwareSignalUnavailable},
 		State:    state,
 	})
 
@@ -37,8 +37,8 @@ func TestMetricsProjectExactKVStateWithoutSensitiveLabels(t *testing.T) {
 		`fishmesh_gateway_kv_cache_last_sequence{backend_id="backend-a"} 7`,
 		`fishmesh_gateway_kv_cache_applied_batches{backend_id="backend-a"} 8`,
 		`fishmesh_gateway_kv_cache_replay_batches{backend_id="backend-a"} 3`,
-		`fishmesh_gateway_exact_requests_total{status="match-unavailable"} 1`,
-		`fishmesh_gateway_exact_degradations_total{status="match-unavailable"} 1`,
+		`fishmesh_gateway_kv_aware_requests_total{status="match-unavailable"} 1`,
+		`fishmesh_gateway_kv_aware_degradations_total{status="match-unavailable"} 1`,
 		`process_resident_memory_bytes`,
 	} {
 		if !strings.Contains(output, want) {
@@ -46,7 +46,7 @@ func TestMetricsProjectExactKVStateWithoutSensitiveLabels(t *testing.T) {
 		}
 	}
 	if strings.Contains(output, "token_ids") || strings.Contains(output, "pod_uid") || strings.Contains(output, "routing_key") {
-		t.Fatalf("metrics exposed sensitive exact input: %s", output)
+		t.Fatalf("metrics exposed sensitive KV-aware input: %s", output)
 	}
 }
 
@@ -54,13 +54,13 @@ func TestMetricsObserveKVEventAndAvailableCachedPrefixWithoutUnknownZero(t *test
 	metrics := NewMetrics()
 	metrics.observeKVEvent("backend-a", false, 3*time.Millisecond)
 	metrics.observeKVEvent("backend-a", true, 5*time.Millisecond)
-	metrics.observeSelection(routing.ModeExactCacheLoad, requestpath.Lease{
+	metrics.observeSelection(routing.ModeKVAware, requestpath.Lease{
 		Decision: routing.Decision{Backend: backend.Backend{ID: "backend-a"}},
-		State:    requestpath.State{Exact: requestpath.ExactAvailable, CachedPrefixTokens: 0},
+		State:    requestpath.State{KV: requestpath.KVAvailable, CachedPrefixTokens: 0},
 	})
-	metrics.observeSelection(routing.ModeExactCacheLoad, requestpath.Lease{
+	metrics.observeSelection(routing.ModeKVAware, requestpath.Lease{
 		Decision: routing.Decision{Backend: backend.Backend{ID: "backend-a"}},
-		State:    requestpath.State{Exact: requestpath.ExactMatchUnavailable, CachedPrefixTokens: 99},
+		State:    requestpath.State{KV: requestpath.KVMatchUnavailable, CachedPrefixTokens: 99},
 	})
 
 	response := httptest.NewRecorder()
@@ -69,8 +69,8 @@ func TestMetricsObserveKVEventAndAvailableCachedPrefixWithoutUnknownZero(t *test
 	for _, want := range []string{
 		`fishmesh_gateway_kv_event_publish_to_apply_seconds_count{backend_id="backend-a",source="live"} 1`,
 		`fishmesh_gateway_kv_event_publish_to_apply_seconds_count{backend_id="backend-a",source="replay"} 1`,
-		`fishmesh_gateway_exact_cached_prefix_tokens_count 1`,
-		`fishmesh_gateway_exact_cached_prefix_tokens_sum 0`,
+		`fishmesh_gateway_kv_aware_cached_prefix_tokens_count 1`,
+		`fishmesh_gateway_kv_aware_cached_prefix_tokens_sum 0`,
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("metric %q missing:\n%s", want, output)
@@ -89,7 +89,7 @@ func TestMetricsProjectPredictionShadowWithoutRequestLabels(t *testing.T) {
 		Decision: routing.Decision{Backend: backend.Backend{ID: "backend-a"}},
 		State:    requestpath.State{Prediction: prediction.Shadow{Status: prediction.StatusAvailable, WouldSelect: "backend-b"}},
 	}
-	metrics.observeSelection(routing.ModeExactCacheLoad, lease)
+	metrics.observeSelection(routing.ModeKVAware, lease)
 	metrics.observePrediction(lease, requestpath.FirstTokenObservation{Valid: true, Error: -3 * time.Millisecond})
 
 	response := httptest.NewRecorder()
@@ -114,7 +114,7 @@ func TestMetricsProjectPredictionShadowWithoutRequestLabels(t *testing.T) {
 func TestMetricsDeleteBackendRemovesKVEventHistogramLabels(t *testing.T) {
 	metrics := NewMetrics()
 	metrics.observeKVEvent("backend-a", false, time.Millisecond)
-	metrics.DeleteBackend("backend-a", string(routing.ModeExactCacheLoad))
+	metrics.DeleteBackend("backend-a", string(routing.ModeKVAware))
 
 	response := httptest.NewRecorder()
 	metrics.handler().ServeHTTP(response, httptest.NewRequest("GET", "/metrics", nil))

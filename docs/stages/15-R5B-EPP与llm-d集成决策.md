@@ -106,7 +106,7 @@ FishMesh 仍有一个明确而较小的差异：
 ```text
 fishmesh-epp binary
 ├── llm-d Router v0.9.0：EPP/runtime/framework
-└── FishMesh adapter：配置翻译 + bounded-affinity scorer
+└── FishMesh adapter：配置翻译 + session-key scorer
 ```
 
 启动入口先调用 llm-d 的插件注册函数，再启动公开 Runner。它不是动态插件市场，也不是 fork；
@@ -164,7 +164,7 @@ compile tests。
 
 ## 多副本限制
 
-bounded-affinity-v1 的 registry 在进程内。多个 EPP 副本在稳定候选集上仍会因为 Rendezvous
+session-key-v1 的 registry 在进程内。多个 EPP 副本在稳定候选集上仍会因为 Rendezvous
 Hash 得到相同 preferred；但 endpoint 扩容后的 TTL stickiness 不是全局一致的。
 
 本项目不会为了这个尚未复现的问题立即引入 Redis。R5C 先验证稳定集合的一致性、endpoint

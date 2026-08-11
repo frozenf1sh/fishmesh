@@ -37,7 +37,7 @@ func TestCircuitOpensExpiresAndRecovers(t *testing.T) {
 }
 
 func TestCircuitReconcileBoundsEndpointState(t *testing.T) {
-	breaker, err := New(DefaultConfig())
+	breaker, err := New(testConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,11 +50,21 @@ func TestCircuitReconcileBoundsEndpointState(t *testing.T) {
 }
 
 func TestCircuitIgnoresUnknownOutcome(t *testing.T) {
-	breaker, err := New(DefaultConfig())
+	breaker, err := New(testConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if breaker.Record("a", "") || breaker.Len() != 0 {
 		t.Fatalf("unknown outcome changed circuit state: states=%d", breaker.Len())
+	}
+}
+
+func testConfig() Config {
+	return Config{
+		EWMAAlpha:       0.5,
+		ErrorThreshold:  0.6,
+		MinimumRequests: 3,
+		OpenDuration:    10 * time.Second,
+		Clock:           time.Now,
 	}
 }

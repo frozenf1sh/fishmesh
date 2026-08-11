@@ -1,14 +1,14 @@
 # ADR-001｜以 llm-d Router 编译期插件接入标准 EPP
 
 - 状态：Standard mode 决策继续有效；产品主次与精确 KV 范围已由
-  [`ADR-002`](002-lite-exact-kv-routing.md) 修订
+  [`ADR-002`](002-lite-kv-aware-routing.md) 修订
 - 决策日期：2026-08-10
 - 上游快照：Gateway API Inference Extension v1.5.0、Endpoint Picker Protocol v1.0.0、
   llm-d Router v0.9.0
 
 > 2026-08-11 修订说明：本 ADR 关于“不自研 ext_proc、固定 llm-d release、复用 InferencePool
 > 和 response lifecycle”的决定继续有效。文中“standalone 只用于开发/演示”以及“精确 KV
-> block cache 不进入项目”的范围已被 ADR-002 替代；R5D 标准部署顺序调整到 Lite exact KV
+> block cache 不进入项目”的范围已被 ADR-002 替代；R5D 标准部署顺序调整到 Lite KV-aware
 > MVP 之后。以下正文保留当时的决策背景，避免改写历史。
 
 ## 1. 要决定什么
@@ -88,7 +88,7 @@ llm-d 仓库。
 FishMesh 选择：
 
 > 基于固定版本的 llm-d Router 构建自定义 EPP 二进制；FishMesh 只提供一个编译期注册的
-> bounded-affinity scorer/adapter，不实现 `ext_proc`、discovery、proxy 或 flow control。
+> session-key scorer/adapter，不实现 `ext_proc`、discovery、proxy 或 flow control。
 
 目标请求路径为：
 
@@ -98,7 +98,7 @@ client
   -> llm-d Router ext_proc runtime
        -> InferencePool candidates / subset
        -> llm-d data producers and metrics
-       -> FishMesh bounded-affinity scorer
+       -> FishMesh session-key scorer
        -> llm-d picker and request lifecycle
   -> vLLM endpoint
 ```
@@ -155,7 +155,7 @@ Prometheus reader、local circuit、Service fallback 和 lease；llm-d 已有对
 
 ## 7. 多副本与 affinity 状态
 
-当前 bounded-affinity-v1 的 registry 是进程内状态。Rendezvous Hash 本身在候选集一致时能让
+当前 session-key-v1 的 registry 是进程内状态。Rendezvous Hash 本身在候选集一致时能让
 多个 EPP 副本得到相同 preferred endpoint，但 registry 在 endpoint 扩容后的 TTL stickiness
 不能跨副本一致。
 

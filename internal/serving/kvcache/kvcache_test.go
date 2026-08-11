@@ -60,7 +60,7 @@ func (blockingSource) Replay(context.Context, Instance, uint64, func(Event) erro
 }
 
 func TestConfigAndInstanceValidation(t *testing.T) {
-	config := DefaultConfig()
+	config := testConfig()
 	if err := config.Validate(); err != nil {
 		t.Fatalf("default config rejected: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestConfigAndInstanceValidation(t *testing.T) {
 
 func TestLookupDistinguishesUnknownFromRealMiss(t *testing.T) {
 	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
-	config := DefaultConfig()
+	config := testConfig()
 	store := &fakeStore{matched: map[backend.ID]int{"backend-a": 0}, totalBlocks: 2}
 	service := newService(context.Background(), config, blockingSource{}, func() time.Time { return now }, store)
 	stream := newEventStream(service.ctx, config, testInstance("backend-a", "uid-a", "10.0.0.1:8000"), blockingSource{}, store, service.clock)
@@ -111,8 +111,25 @@ func TestLookupDistinguishesUnknownFromRealMiss(t *testing.T) {
 	}
 }
 
+func testConfig() Config {
+	return Config{
+		BlockSizeTokens:   16,
+		MaxIndexKeys:      100_000,
+		MaxInstances:      8,
+		MaxBackendsPerKey: 8,
+		MaxEventBytes:     4 << 20,
+		MaxReplayEvents:   4096,
+		MaxQueryTokens:    131072,
+		MaxCacheSaltBytes: 1024,
+		ReplayPeriod:      2 * time.Second,
+		ReplayTimeout:     3 * time.Second,
+		FreshnessTTL:      5 * time.Second,
+		ReconnectDelay:    time.Second,
+	}
+}
+
 func TestLookupProtectsQueryLimitsAndClosedState(t *testing.T) {
-	config := DefaultConfig()
+	config := testConfig()
 	config.MaxQueryTokens = 1
 	service := newService(context.Background(), config, blockingSource{}, time.Now, &fakeStore{})
 	_, err := service.Lookup(context.Background(), Query{
@@ -137,7 +154,7 @@ func TestLookupProtectsQueryLimitsAndClosedState(t *testing.T) {
 }
 
 func TestLookupAndPodReconcileAreConcurrentSafe(t *testing.T) {
-	config := DefaultConfig()
+	config := testConfig()
 	config.ReplayPeriod = time.Hour
 	store := &fakeStore{totalBlocks: 1}
 	service := newService(context.Background(), config, blockingSource{}, time.Now, store)

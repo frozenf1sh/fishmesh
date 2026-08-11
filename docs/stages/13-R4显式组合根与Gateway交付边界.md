@@ -65,16 +65,16 @@ downstream write failure仍会被分类为不同 outcome。
 - FishMesh response header、route reason 和 fallback 语义；
 - Prometheus metric/label 名称；
 - SSE 逐块转发，以及 response headers 后不重试；
-- bounded-affinity、circuit 和 membership 行为。
+- session-key、circuit 和 membership 行为。
 
 R4 是职责搬迁，不借机修改调度算法或制造性能数字。
 
 ## 验证
 
 - admission 覆盖容量耗尽和幂等释放；
-- config 覆盖 EndpointSlice、非法值、bounded-affinity 映射和必需 Service；
+- config 覆盖 EndpointSlice、非法值、session-key 映射和必需 Service；
 - composition test 从静态配置创建完整 runtime，并代理真实 `httptest` upstream；
-- Gateway 原有 HTTP/SSE、取消、circuit spillover 和 bounded-affinity 测试继续通过；
+- Gateway 原有 HTTP/SSE、取消、circuit spillover 和 session-key 测试继续通过；
 - import architecture test 阻止 Gateway 重新依赖 Kubernetes DTO 或 Prometheus parser；
 - `make ci` 完整通过。
 
