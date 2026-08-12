@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="760" viewBox="0 0 1600 760" role="img" aria-labelledby="title desc">
+<title id="title">Long-context true-mixed reliability and resource envelope</title>
+<desc id="desc">Formal request outcome, GPU envelope and Gateway evidence for 1568 requests.</desc>
+<rect x="0.0" y="0.0" width="1600.0" height="760.0" fill="#fff" stroke="none" stroke-width="1" rx="0"/>
+<text x="72.0" y="58.0" font-family="Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="27" font-weight="700" fill="#172033" text-anchor="start">Long-context true-mixed A/B · Reliability &amp; resource envelope</text>
+<text x="72.0" y="91.0" font-family="Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="15" font-weight="400" fill="#64748B" text-anchor="start">Formal evidence from 1,568 requests · same RTX 4060 / two vLLM replicas</text>
+<text x="72.0" y="156.0" font-family="Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="19" font-weight="700" fill="#172033" text-anchor="start">Request outcome</text>
+<rect x="72.0" y="177.0" width="430.0" height="440.0" fill="none" stroke="#D6DEEA" stroke-width="1" rx="0"/>
+<rect x="142.0" y="290.0" width="96.0" height="245.0" fill="#16A6A0" stroke="#16A6A0" stroke-width="0" rx="3"/>
+<text x="190.0" y="574.0" font-family="Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="13" font-weight="600" fill="#172033" text-anchor="middle">Success</text>
+<text x="190.0" y="272.0" font-family="Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="19" font-weight="700" fill="#16A6A0" text-anchor="middle">1,568</text>
+<rect x="332.0" y="535.0" width="96.0" height="2.0" fill="#EFF3F8" stroke="#EFF3F8" stroke-width="0" rx="3"/>
+<text x="380.0" y="574.0" font-family="Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="13" font-weight="600" fill="#172033" text-anchor="middle">Failed</text>
+<text x="380.0" y="517.0" font-family="Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="19" font-weight="700" fill="#64748B" text-anchor="middle">0</text>
+<line x1="125.0" y1="535.0" x2="452.0" y2="535.0" stroke="#D6DEEA" stroke-width="1"/>
+<text x="287.0" y="575.0" font-family="Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="12" font-weight="400" fill="#64748B" text-anchor="middle">requests</text>
+<text x="555.0" y="156.0" font-family="Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="19" font-weight="700" fill="#172033" text-anchor="start">GPU envelope</text>
+<rect x="555.0" y="177.0" width="500.0" height="440.0" fill="none" stroke="#D6DEEA" stroke-width="1" rx="0"/>
+<text x="725.0" y="285.0" font-family="Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="13" font-weight="600" fill="#172033" text-anchor="end">SM peak</text>
+<rect x="750.0" y="266.0" width="240.0" height="28.0" fill="#EFF3F8" stroke="#EFF3F8" stroke-width="0" rx="4"/>
+<rect x="750.0" y="266.0" width="214.3" height="28.0" fill="#16A6A0" stroke="#16A6A0" stroke-width="0" rx="4"/>
+<text x="976.3" y="285.0" font-family="Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="12" font-weight="700" fill="#172033" text-anchor="start">100.0%</text>
+<text x="725.0" y="377.0" font-family="Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="13" font-weight="600" fill="#172033" text-anchor="end">Memory controller</text>
+<rect x="750.0" y="358.0" width="240.0" height="28.0" fill="#EFF3F8" stroke="#EFF3F8" stroke-width="0" rx="4"/>
+<rect x="750.0" y="358.0" width="214.3" height="28.0" fill="#16A6A0" stroke="#16A6A0" stroke-width="0" rx="4"/>
+<text x="976.3" y="377.0" font-family="Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="12" font-weight="700" fill="#172033" text-anchor="start">100.0%</text>
+<text x="725.0" y="469.0" font-family="Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="13" font-weight="600" fill="#172033" text-anchor="end">VRAM used</text>
+<rect x="750.0" y="450.0" width="240.0" height="28.0" fill="#EFF3F8" stroke="#EFF3F8" stroke-width="0" rx="4"/>
+<rect x="750.0" y="450.0" width="190.1" height="28.0" fill="#5B7CFA" stroke="#5B7CFA" stroke-width="0" rx="4"/>
+<text x="952.1" y="469.0" font-family="Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="12" font-weight="700" fill="#172033" text-anchor="start">88.7%</text>
+<text x="750.0" y="560.0" font-family="Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="12" font-weight="400" fill="#64748B" text-anchor="start">percent</text>
+<text x="750.0" y="592.0" font-family="Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="12" font-weight="400" fill="#64748B" text-anchor="start">VRAM: 7,262 / 8,188 MiB</text>
+<text x="1108.0" y="156.0" font-family="Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="19" font-weight="700" fill="#172033" text-anchor="start">Gateway evidence</text>
+<rect x="1108.0" y="177.0" width="420.0" height="440.0" fill="none" stroke="#D6DEEA" stroke-width="1" rx="0"/>
+<text x="1290.0" y="285.0" font-family="Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="13" font-weight="600" fill="#172033" text-anchor="end">KV available</text>
+<rect x="1315.0" y="266.0" width="173.0" height="28.0" fill="#EFF3F8" stroke="#EFF3F8" stroke-width="0" rx="4"/>
+<rect x="1315.0" y="266.0" width="154.5" height="28.0" fill="#16A6A0" stroke="#16A6A0" stroke-width="0" rx="4"/>
+<text x="1479.5" y="285.0" font-family="Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="12" font-weight="700" fill="#16A6A0" text-anchor="start">100%</text>
+<text x="1290.0" y="377.0" font-family="Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="13" font-weight="600" fill="#172033" text-anchor="end">Admission reject</text>
+<rect x="1315.0" y="358.0" width="173.0" height="28.0" fill="#EFF3F8" stroke="#EFF3F8" stroke-width="0" rx="4"/>
+<rect x="1315.0" y="358.0" width="0.0" height="28.0" fill="#EFF3F8" stroke="#EFF3F8" stroke-width="0" rx="4"/>
+<text x="1325.0" y="377.0" font-family="Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="12" font-weight="700" fill="#64748B" text-anchor="start">0</text>
+<text x="1290.0" y="469.0" font-family="Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="13" font-weight="600" fill="#172033" text-anchor="end">Upstream error</text>
+<rect x="1315.0" y="450.0" width="173.0" height="28.0" fill="#EFF3F8" stroke="#EFF3F8" stroke-width="0" rx="4"/>
+<rect x="1315.0" y="450.0" width="0.0" height="28.0" fill="#EFF3F8" stroke="#EFF3F8" stroke-width="0" rx="4"/>
+<text x="1325.0" y="469.0" font-family="Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="12" font-weight="700" fill="#64748B" text-anchor="start">0</text>
+<text x="72.0" y="700.0" font-family="Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="12" font-weight="400" fill="#64748B" text-anchor="start">Peak GPU temperature: 65°C · Gateway admission/upstream errors: 0 · Gateway and vLLM formal-run restarts: 0</text>
+</svg>

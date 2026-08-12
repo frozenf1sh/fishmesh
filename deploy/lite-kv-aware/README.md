@@ -23,7 +23,8 @@ kubectl --kubeconfig ~/.kube/fishmesh.yaml -n kubellm rollout status deployment/
 kubectl --kubeconfig ~/.kube/fishmesh.yaml -n kubellm rollout status deployment/fishmesh-gateway --timeout=5m
 ```
 
-确认运行面没有冻结模块，且权限没有扩大到 Pods、Secrets 或集群范围：
+确认运行面没有冻结模块，且权限只扩大到 namespace 内 EndpointSlice 与 Pod 只读；Pod list
+用于把 vLLM queue/running observation 关联到已发现的 backend，不允许读 Secrets 或集群范围资源：
 
 ```bash
 kubectl --kubeconfig ~/.kube/fishmesh.yaml -n kubellm get deployment,pdb
@@ -33,7 +34,7 @@ kubectl --kubeconfig ~/.kube/fishmesh.yaml -n kubellm auth can-i list pods \
   --as=system:serviceaccount:kubellm:fishmesh-gateway
 ```
 
-预期第一个回答为 `yes`，第二个为 `no`。Gateway 的 PDB `minAvailable: 1` 与
+两个回答都应为 `yes`；`get secrets` 和集群范围读取仍应为 `no`。Gateway 的 PDB `minAvailable: 1` 与
 `maxSurge: 1/maxUnavailable: 0` 配合，允许滚动升级同时保护唯一的 Gateway 副本。
 
 ## 命中与降级对照
@@ -85,7 +86,9 @@ X-FishMesh-Cached-Prefix-Tokens: 0
 
 ## 指标与故障恢复演练
 
-Gateway `/metrics` 不带 prompt、routing key、token IDs、Pod UID 或 endpoint 标签。它暴露稳定
+Gateway 以 `500ms` 周期、`2s` freshness 和 `400ms` 单次超时直接读取两个 vLLM 的
+queue/running；queue 达到 16 或本 Gateway 对单 backend 的 local in-flight 达到 32 时，KV-aware
+会先应用 HardOverload 门。Gateway `/metrics` 不带 prompt、routing key、token IDs、Pod UID 或 endpoint 标签。它暴露稳定
 backend ID 下的 `fishmesh_gateway_kv_cache_instance_valid`、freshness、已提交 sequence、applied/
 replay batches，以及 `fishmesh_gateway_kv_aware_{requests,degradations}_total`。查看方式：
 

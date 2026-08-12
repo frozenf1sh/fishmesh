@@ -1,10 +1,7 @@
 package routing
 
 import (
-	"crypto/sha256"
-	"encoding/binary"
 	"fmt"
-	"sort"
 
 	"github.com/frozenf1sh/fishmesh/internal/serving/backend"
 )
@@ -40,7 +37,7 @@ func (kvAwareStrategy) Name() Mode {
 	return ModeKVAware
 }
 
-func (s kvAwareStrategy) Select(routingKey string, snapshot Snapshot) (Decision, error) {
+func (s kvAwareStrategy) Select(_ string, snapshot Snapshot) (Decision, error) {
 	eligible := EligibleBackends(snapshot)
 	if len(eligible) == 0 {
 		return Decision{}, fmt.Errorf("kv-aware routing requires at least one backend")
@@ -64,17 +61,14 @@ func (s kvAwareStrategy) Select(routingKey string, snapshot Snapshot) (Decision,
 		}, nil
 	}
 
-	// 线性扫描取成本最小者。cost 为负数不可能出现（饱和运算保证），
-	// 因此普通 < 比较即等价于"严格更优"。
+	// 线性扫描取成本最小者；词典序比较（成本 → ID）保证平局确定性，
+	// 不依赖 discovery 返回顺序。cost 为负数不可能出现（饱和运算保证）。
 	selected := candidates[0]
 	for _, candidate := range candidates[1:] {
-		if kvAwareCostLess(candidate, selected, snapshot, s.config) {
+		if kvAwareLess(candidate, selected, snapshot, s.config) {
 			selected = candidate
 		}
 	}
-	// 平局消解放在比较之外：只有成本完全相同的后端才用 session hint，
-	// 保证 session-key 永远不会覆盖真实的 cache/load 差异。
-	selected = kvAwareTieBreak(routingKey, selected, candidates, snapshot, s.config)
 	return Decision{
 		Backend: selected, PreferredBackendID: selected.ID,
 		Reason: ReasonKVAware, Policy: PolicyKVAwareV1,
@@ -93,31 +87,16 @@ func withoutHardOverload(backends []backend.Backend, loads map[backend.ID]Load) 
 	return result
 }
 
-// kvAwareCostLess 比较等价未缓存 token 成本。unknown external load 只是不贡献 queue/running 项，
-// 不是零负载声明；KV unknown 已在策略入口前由 KVAwareInput.UsableFor 拒绝。
-func kvAwareCostLess(candidate, current backend.Backend, snapshot Snapshot, config KVAwareConfig) bool {
-	return kvAwareCost(candidate, snapshot, config) < kvAwareCost(current, snapshot, config)
-}
-
-// kvAwareTieBreak 只在 cache 和全部 load 维度相同的 backend 间使用 session hint，避免 session-key
-// 覆盖真实 cache/load。排序消除 discovery 返回顺序对确定性的影响。
-func kvAwareTieBreak(routingKey string, selected backend.Backend, candidates []backend.Backend, snapshot Snapshot, config KVAwareConfig) backend.Backend {
-	// 收集与 selected 成本完全相同的所有候选。
-	tied := []backend.Backend{selected}
-	for _, candidate := range candidates {
-		if candidate.ID != selected.ID && kvAwareCost(candidate, snapshot, config) == kvAwareCost(selected, snapshot, config) {
-			tied = append(tied, candidate)
-		}
+// kvAwareLess 按词典序比较两个候选：先比等价未缓存 token 成本，成本相同再比 ID。
+// ID 作为确定性平局消解，不依赖 discovery 返回顺序。unknown external load 只是不贡献
+// queue/running 项，不是零负载声明；KV unknown 已在策略入口前由 KVAwareInput.UsableFor 拒绝。
+func kvAwareLess(candidate, current backend.Backend, snapshot Snapshot, config KVAwareConfig) bool {
+	candidateCost := kvAwareCost(candidate, snapshot, config)
+	currentCost := kvAwareCost(current, snapshot, config)
+	if candidateCost != currentCost {
+		return candidateCost < currentCost
 	}
-	// 没有平局就原样返回，避免无谓的哈希与排序。
-	if len(tied) == 1 {
-		return selected
-	}
-	// 先按 ID 排序，再用 routingKey 哈希取下标：
-	// 无论 discovery 返回什么顺序，同一 key + 同一成本集都得到同一结果。
-	sort.Slice(tied, func(i, j int) bool { return tied[i].ID < tied[j].ID })
-	hash := sha256.Sum256([]byte(routingKey))
-	return tied[int(binary.BigEndian.Uint32(hash[:4])%uint32(len(tied)))]
+	return candidate.ID < current.ID
 }
 
 // kvAwareCost 计算单个后端的等价 token 成本：
@@ -125,9 +104,10 @@ func kvAwareTieBreak(routingKey string, selected backend.Backend, candidates []b
 //	未缓存 token 数
 //	+ 排队请求数 × QueueTokenPenalty   （尚未开始 prefill，最难受）
 //	+ 运行中请求数 × RunningTokenPenalty
-//	+ 本地在途请求数 × InflightTokenPenalty
+//	+ 本地在途请求数 × InflightTokenPenalty（仅在外部负载未知时）
 //
-// 外部负载项只在 Load.Valid 时贡献，未知不是零；本地 in-flight 恒可信。
+// queue/running 新鲜且完整时，它们已经包含 vLLM 接收的工作，不再叠加完整
+// local in-flight；外部负载未知时才用 local in-flight 作为单 Gateway fallback。
 func kvAwareCost(candidate backend.Backend, snapshot Snapshot, config KVAwareConfig) int64 {
 	match := snapshot.KVAware.Matches[candidate.ID]
 	cost := int64(snapshot.KVAware.PromptTokens - match.MatchedTokens)
@@ -135,6 +115,7 @@ func kvAwareCost(candidate backend.Backend, snapshot Snapshot, config KVAwareCon
 	if load.Valid {
 		cost = saturatingAdd(cost, saturatingMultiply(load.QueueDepth, config.QueueTokenPenalty))
 		cost = saturatingAdd(cost, saturatingMultiply(load.Running, config.RunningTokenPenalty))
+		return cost
 	}
 	return saturatingAdd(cost, saturatingMultiply(snapshot.Inflight[candidate.ID], config.InflightTokenPenalty))
 }

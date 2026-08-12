@@ -45,5 +45,8 @@
 | 36 | Routing 三策略收敛与命名迁移 | 保留 `load-balanced`、`session-key`、`kv-aware`；移除纯 prefix hash/独立 Service 选路，统一协议、配置与部署命名 |
 | 37 | Serving 默认配置收口 | standalone 产品默认值集中到 `config.DefaultConfig()`；domain 构造函数不再偷偷补业务默认值 |
 | 38 | 最终压测矩阵与仓库收缩 | `fishmesh-client bench` 覆盖长度/数量/批次/前缀模式并自动报告；移除历史测试入口，llm-d 暂挂 |
+| 39 | R6H Render 降级与长上下文压测准备 | 修复冷 Render DNS/连接导致的选路前 503；完成真实 mixed 的 1568 请求反向顺序 A/B，TTFT P95 降低 76.7%、总耗时 P95 降低 55.0% |
+| 40 | R6I-0 可校准 TTFT 路由设计 | 固化 calibrated-static → learned-shadow → active gate 路线；先修 load/HardOverload，再做 token 阶梯与缓存隔离实验 |
+| 41 | R6I-1 负载观测与 HardOverload | Lite 启用有界 queue/running 抓取，requestpath 发布真实硬门，并消除 external load 与 local in-flight 重复成本 |
 
 每个阶段完成后都会补充独立中文说明，并在文末明确下一阶段边界。

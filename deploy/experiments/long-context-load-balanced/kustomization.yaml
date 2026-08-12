@@ -1,0 +1,45 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: kubellm
+resources:
+  - ../../lite-kv-aware
+patches:
+  - target:
+      kind: ConfigMap
+      name: fishmesh-gateway-config
+    patch: |-
+      - op: replace
+        path: /data/FISHMESH_ROUTING_MODE
+        value: load-balanced
+      - op: replace
+        path: /data/FISHMESH_ENDPOINT_DISCOVERY
+        value: endpointslice
+      - op: replace
+        path: /data/FISHMESH_MAX_INFLIGHT_REQUESTS
+        value: "64"
+      - op: replace
+        path: /data/FISHMESH_MAX_CONNS_PER_HOST
+        value: "16"
+      - op: replace
+        path: /data/FISHMESH_UPSTREAM_KEEPALIVE
+        value: "true"
+      - op: replace
+        path: /metadata/annotations/fishmesh.io~1routing-mode
+        value: load-balanced-v1
+      - op: replace
+        path: /metadata/annotations/fishmesh.io~1config-version
+        value: r6h-long-context-lb
+  - target:
+      kind: Deployment
+      name: fishmesh-gateway
+    patch: |-
+      - op: replace
+        path: /spec/template/metadata/annotations/fishmesh.io~1runtime-profile
+        value: long-context-load-balanced-r2
+  - target:
+      kind: Deployment
+      name: qwen-vllm
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/args/5
+        value: --gpu-memory-utilization=0.40

@@ -26,7 +26,7 @@ func TestKVAwareInputDistinguishesUnknownFromZeroMatch(t *testing.T) {
 
 // TestKVAwarePrefersFewestUncachedThenLoad 验证成本式比较的基本行为：
 // a 未缓存 4 token、无队列压力，b 未缓存 8 token 且队列堆积，
-// 成本最小者 a 胜出，且策略版本标记为 V2。
+// 成本最小者 a 胜出，且策略版本保持可回滚的 V1 contract。
 func TestKVAwarePrefersFewestUncachedThenLoad(t *testing.T) {
 	strategy, err := NewConfiguredKVAware(testKVAwareConfig())
 	if err != nil {
@@ -95,6 +95,46 @@ func TestKVAwareDoesNotInventUnknownLoadAsZero(t *testing.T) {
 	}
 }
 
+func TestKVAwareDoesNotDoubleCountLocalInflightWhenExternalLoadIsValid(t *testing.T) {
+	strategy, err := NewConfiguredKVAware(KVAwareConfig{InflightTokenPenalty: 64})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision, err := strategy.Select("session", Snapshot{
+		Backends: testBackends(), Inflight: map[backend.ID]int64{"a": 100},
+		Loads: map[backend.ID]Load{"a": {Valid: true}, "b": {Valid: true}},
+		KVAware: KVAwareInput{PromptTokens: 16, Matches: map[backend.ID]KVMatch{
+			"a": {Valid: true, MatchedTokens: 8}, "b": {Valid: true, MatchedTokens: 8},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Backend.ID != "a" {
+		t.Fatalf("decision = %+v, valid external load must suppress duplicate local cost", decision)
+	}
+}
+
+func TestKVAwareUsesLocalInflightWhenExternalLoadIsUnknown(t *testing.T) {
+	strategy, err := NewConfiguredKVAware(KVAwareConfig{InflightTokenPenalty: 64})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision, err := strategy.Select("session", Snapshot{
+		Backends: testBackends(), Inflight: map[backend.ID]int64{"a": 2},
+		Loads: map[backend.ID]Load{"a": {Valid: false}, "b": {Valid: false}},
+		KVAware: KVAwareInput{PromptTokens: 16, Matches: map[backend.ID]KVMatch{
+			"a": {Valid: true, MatchedTokens: 8}, "b": {Valid: true, MatchedTokens: 8},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Backend.ID != "b" {
+		t.Fatalf("decision = %+v, unknown external load must retain local fallback", decision)
+	}
+}
+
 // TestKVAwareConfigRejectsNegativePenalty 验证负 penalty 在构造时被拒绝——
 // 负数会把压力变成负成本，毁掉最小成本的语义。
 func TestKVAwareConfigRejectsNegativePenalty(t *testing.T) {
@@ -125,6 +165,32 @@ func TestKVAwareUsesLoadAndSessionOnlyForKVAwareTies(t *testing.T) {
 	}
 }
 
+// TestKVAwareBreaksTiesDeterministicallyByID 验证成本完全相同时的平局消解：
+// a/b 的 cache 与全部 load 维度一致，无论 discovery 顺序如何都选出 ID 更小的 a，
+// 且不依赖客户端 routingKey。
+func TestKVAwareBreaksTiesDeterministicallyByID(t *testing.T) {
+	strategy, err := NewConfiguredKVAware(testKVAwareConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := Snapshot{
+		Backends: testBackends(), Inflight: map[backend.ID]int64{"a": 1, "b": 1},
+		Loads: map[backend.ID]Load{"a": {Valid: true}, "b": {Valid: true}},
+		KVAware: KVAwareInput{PromptTokens: 16, Matches: map[backend.ID]KVMatch{
+			"a": {Valid: true, MatchedTokens: 8}, "b": {Valid: true, MatchedTokens: 8},
+		}},
+	}
+	for _, key := range []string{"", "session", "other-session"} {
+		decision, err := strategy.Select(key, snapshot)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if decision.Backend.ID != "a" {
+			t.Fatalf("key %q: decision = %+v, want deterministic tie-break to smallest ID a", key, decision)
+		}
+	}
+}
+
 // TestKVAwareExcludesHardOverloadBeforeCacheLocality 验证硬过载优先级
 // 高于缓存局部性：a 虽然 KV 全命中，但 HardOverload=true，必须出局。
 func TestKVAwareExcludesHardOverloadBeforeCacheLocality(t *testing.T) {
@@ -142,5 +208,28 @@ func TestKVAwareExcludesHardOverloadBeforeCacheLocality(t *testing.T) {
 	}
 	if decision.Backend.ID != "b" {
 		t.Fatalf("decision = %+v, want non-overloaded backend b", decision)
+	}
+}
+
+func TestKVAwareFallsBackWhenAllCandidatesAreHardOverloaded(t *testing.T) {
+	strategy, err := NewConfiguredKVAware(testKVAwareConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision, err := strategy.Select("session", Snapshot{
+		Backends: testBackends(), Inflight: map[backend.ID]int64{"a": 1},
+		Loads: map[backend.ID]Load{
+			"a": {Valid: true, QueueDepth: 4, HardOverload: true},
+			"b": {Valid: true, QueueDepth: 1, HardOverload: true},
+		},
+		KVAware: KVAwareInput{PromptTokens: 16, Matches: map[backend.ID]KVMatch{
+			"a": {Valid: true, MatchedTokens: 16}, "b": {Valid: true, MatchedTokens: 0},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Backend.ID != "b" || decision.Reason != ReasonKVAwareHardOverloadFallback {
+		t.Fatalf("decision = %+v, want typed least-loaded hard-overload fallback", decision)
 	}
 }

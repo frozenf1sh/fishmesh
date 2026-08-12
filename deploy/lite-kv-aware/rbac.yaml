@@ -3,11 +3,14 @@ kind: Role
 metadata:
   name: fishmesh-gateway-lite-kv-aware-reader
   annotations:
-    fishmesh.io/permission-scope: namespace-scoped-read-only-endpointslice-discovery
+    fishmesh.io/permission-scope: namespace-scoped-read-only-endpointslice-and-pod-observation
 rules:
   - apiGroups: ["discovery.k8s.io"]
     resources: ["endpointslices"]
     verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

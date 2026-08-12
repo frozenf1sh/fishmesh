@@ -45,11 +45,12 @@ func TestLoadEnvironmentRejectsMalformedValues(t *testing.T) {
 		key   string
 		value string
 	}{
-		"duration":   {"FISHMESH_REQUEST_TIMEOUT", "ninety-seconds"},
-		"boolean":    {"FISHMESH_UPSTREAM_KEEPALIVE", "sometimes"},
-		"float":      {"FISHMESH_SESSION_KEY_QUEUE_DEPTH_DELTA", "low"},
-		"positive":   {"FISHMESH_MAX_INFLIGHT_REQUESTS", "0"},
-		"body limit": {"FISHMESH_MAX_REQUEST_BODY_BYTES", "0"},
+		"duration":            {"FISHMESH_REQUEST_TIMEOUT", "ninety-seconds"},
+		"boolean":             {"FISHMESH_UPSTREAM_KEEPALIVE", "sometimes"},
+		"float":               {"FISHMESH_SESSION_KEY_QUEUE_DEPTH_DELTA", "low"},
+		"positive":            {"FISHMESH_MAX_INFLIGHT_REQUESTS", "0"},
+		"body limit":          {"FISHMESH_MAX_REQUEST_BODY_BYTES", "0"},
+		"observation timeout": {envObservationRequestTimeout, "0s"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Setenv(test.key, test.value)
@@ -94,6 +95,10 @@ func TestLoadEnvironmentMapsKVAwareCostDomains(t *testing.T) {
 	t.Setenv("FISHMESH_KV_AWARE_QUEUE_TOKEN_PENALTY", "320")
 	t.Setenv("FISHMESH_KV_AWARE_RUNNING_TOKEN_PENALTY", "80")
 	t.Setenv("FISHMESH_KV_AWARE_INFLIGHT_TOKEN_PENALTY", "40")
+	t.Setenv(envObservationMode, "prometheus")
+	t.Setenv(envObservationRequestTimeout, "350ms")
+	t.Setenv(envKVAwareHardQueueDepth, "12")
+	t.Setenv(envKVAwareHardLocalInflight, "24")
 	config, err := LoadEnvironment()
 	if err != nil {
 		t.Fatal(err)
@@ -102,12 +107,22 @@ func TestLoadEnvironmentMapsKVAwareCostDomains(t *testing.T) {
 	if kvAware.QueueTokenPenalty != 320 || kvAware.RunningTokenPenalty != 80 || kvAware.InflightTokenPenalty != 40 {
 		t.Fatalf("unexpected KV-aware cost config: %+v", kvAware)
 	}
+	if config.Observation.RequestTimeout != 350*time.Millisecond || config.RequestPath.HardQueueDepth != 12 || config.RequestPath.HardLocalInflight != 24 {
+		t.Fatalf("unexpected observation/hard-overload config: %+v / %+v", config.Observation, config.RequestPath)
+	}
 }
 
 func TestLoadEnvironmentRejectsNegativeKVAwareCostPenalty(t *testing.T) {
 	t.Setenv("FISHMESH_KV_AWARE_QUEUE_TOKEN_PENALTY", "-1")
 	if _, err := LoadEnvironment(); err == nil || !strings.Contains(err.Error(), envKVAwareQueueTokenPenalty) {
 		t.Fatalf("negative KV-aware cost penalty was accepted: %v", err)
+	}
+}
+
+func TestLoadEnvironmentRejectsNegativeHardOverloadThreshold(t *testing.T) {
+	t.Setenv(envKVAwareHardQueueDepth, "-1")
+	if _, err := LoadEnvironment(); err == nil || !strings.Contains(err.Error(), envKVAwareHardQueueDepth) {
+		t.Fatalf("negative hard-overload threshold was accepted: %v", err)
 	}
 }
 

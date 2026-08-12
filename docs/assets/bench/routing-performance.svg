@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="740" viewBox="0 0 1200 740" role="img" aria-labelledby="title desc">
+  <title id="title">KV-aware routing performance</title>
+  <desc id="desc">Two-run mean comparison of KV-aware and load-balanced routing across TTFT and total duration percentiles.</desc>
+  <rect width="1200" height="740" fill="#ffffff"/>
+  <g font-family="Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" fill="#172033">
+    <text x="64" y="46" font-size="26" font-weight="700">KV-aware routing performance</text>
+    <text x="64" y="72" font-size="14" fill="#64748b">Mean of two counter-ordered 192-request runs · lower is better · milliseconds</text>
+    <rect x="900" y="54" width="12" height="12" fill="#16a6a0"/><text x="920" y="65" font-size="13">KV-aware</text>
+    <rect x="1000" y="54" width="12" height="12" fill="#5b7cfa"/><text x="1020" y="65" font-size="13">Load-balanced</text>
+    <g transform="translate(64,110)">
+      <text x="0" y="0" font-size="16" font-weight="700">TTFT P50</text>
+      <rect x="0" y="16" width="520" height="250" fill="none" stroke="#d6deea"/>
+      <g stroke="#e9eef5"><line x1="70" y1="216" x2="500" y2="216"/><line x1="70" y1="149" x2="500" y2="149"/><line x1="70" y1="83" x2="500" y2="83"/><line x1="70" y1="16" x2="500" y2="16"/></g>
+      <g font-size="11" fill="#64748b"><text x="60" y="220" text-anchor="end">0</text><text x="60" y="153" text-anchor="end">500</text><text x="60" y="87" text-anchor="end">1000</text><text x="60" y="20" text-anchor="end">1500</text></g>
+      <rect x="165" y="78" width="70" height="138" fill="#16a6a0"/><rect x="325" y="56" width="70" height="160" fill="#5b7cfa"/>
+      <g font-size="13" text-anchor="middle"><text x="200" y="68">1037</text><text x="360" y="46">1200</text><text x="200" y="244" fill="#64748b">KV-aware</text><text x="360" y="244" fill="#64748b">Load-balanced</text></g>
+      <text x="285" y="262" text-anchor="middle" font-size="11" fill="#64748b">latency (ms)</text>
+    </g>
+    <g transform="translate(616,110)">
+      <text x="0" y="0" font-size="16" font-weight="700">TTFT P95</text>
+      <rect x="0" y="16" width="520" height="250" fill="none" stroke="#d6deea"/>
+      <g stroke="#e9eef5"><line x1="70" y1="216" x2="500" y2="216"/><line x1="70" y1="149" x2="500" y2="149"/><line x1="70" y1="83" x2="500" y2="83"/><line x1="70" y1="16" x2="500" y2="16"/></g>
+      <g font-size="11" fill="#64748b"><text x="60" y="220" text-anchor="end">0</text><text x="60" y="153" text-anchor="end">1500</text><text x="60" y="87" text-anchor="end">3000</text><text x="60" y="20" text-anchor="end">4500</text></g>
+      <rect x="165" y="56" width="70" height="160" fill="#16a6a0"/><rect x="325" y="49" width="70" height="167" fill="#5b7cfa"/>
+      <g font-size="13" text-anchor="middle"><text x="200" y="46">3590</text><text x="360" y="39">3724</text><text x="200" y="244" fill="#64748b">KV-aware</text><text x="360" y="244" fill="#64748b">Load-balanced</text></g>
+      <text x="285" y="262" text-anchor="middle" font-size="11" fill="#64748b">latency (ms)</text>
+    </g>
+    <g transform="translate(64,410)">
+      <text x="0" y="0" font-size="16" font-weight="700">Total duration P50</text>
+      <rect x="0" y="16" width="520" height="250" fill="none" stroke="#d6deea"/>
+      <g stroke="#e9eef5"><line x1="70" y1="216" x2="500" y2="216"/><line x1="70" y1="149" x2="500" y2="149"/><line x1="70" y1="83" x2="500" y2="83"/><line x1="70" y1="16" x2="500" y2="16"/></g>
+      <g font-size="11" fill="#64748b"><text x="60" y="220" text-anchor="end">0</text><text x="60" y="153" text-anchor="end">500</text><text x="60" y="87" text-anchor="end">1000</text><text x="60" y="20" text-anchor="end">1500</text></g>
+      <rect x="165" y="54" width="70" height="162" fill="#16a6a0"/><rect x="325" y="27" width="70" height="189" fill="#5b7cfa"/>
+      <g font-size="13" text-anchor="middle"><text x="200" y="44">1220</text><text x="360" y="17">1420</text><text x="200" y="244" fill="#64748b">KV-aware</text><text x="360" y="244" fill="#64748b">Load-balanced</text></g>
+      <text x="285" y="262" text-anchor="middle" font-size="11" fill="#64748b">latency (ms)</text>
+    </g>
+    <g transform="translate(616,410)">
+      <text x="0" y="0" font-size="16" font-weight="700">Total duration P95</text>
+      <rect x="0" y="16" width="520" height="250" fill="none" stroke="#d6deea"/>
+      <g stroke="#e9eef5"><line x1="70" y1="216" x2="500" y2="216"/><line x1="70" y1="149" x2="500" y2="149"/><line x1="70" y1="83" x2="500" y2="83"/><line x1="70" y1="16" x2="500" y2="16"/></g>
+      <g font-size="11" fill="#64748b"><text x="60" y="220" text-anchor="end">0</text><text x="60" y="153" text-anchor="end">1500</text><text x="60" y="87" text-anchor="end">3000</text><text x="60" y="20" text-anchor="end">4500</text></g>
+      <rect x="165" y="43" width="70" height="173" fill="#16a6a0"/><rect x="325" y="19" width="70" height="197" fill="#5b7cfa"/>
+      <g font-size="13" text-anchor="middle"><text x="200" y="33">3851</text><text x="360" y="9">4107</text><text x="200" y="244" fill="#64748b">KV-aware</text><text x="360" y="244" fill="#64748b">Load-balanced</text></g>
+      <text x="285" y="262" text-anchor="middle" font-size="11" fill="#64748b">latency (ms)</text>
+    </g>
+  </g>
+</svg>

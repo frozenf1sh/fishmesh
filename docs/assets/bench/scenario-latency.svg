@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="820" viewBox="0 0 1400 820" role="img" aria-labelledby="title desc">
+  <title id="title">Scenario-level TTFT</title>
+  <desc id="desc">Two-run mean TTFT P50 and P95 by same, different and mixed prefix scenarios.</desc>
+  <rect width="1400" height="820" fill="#ffffff"/>
+  <g font-family="Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" fill="#172033">
+    <text x="64" y="46" font-size="26" font-weight="700">Scenario-level TTFT</text>
+    <text x="64" y="72" font-size="14" fill="#64748b">Two-run mean by prompt shape · connectors join load-balanced and KV-aware</text>
+    <rect x="1050" y="54" width="12" height="12" fill="#16a6a0"/><text x="1070" y="65" font-size="13">KV-aware</text>
+    <rect x="1150" y="54" width="12" height="12" fill="#5b7cfa"/><text x="1170" y="65" font-size="13">Load-balanced</text>
+    <g transform="translate(64,110)">
+      <text x="0" y="0" font-size="16" font-weight="700">TTFT P50 · ms</text>
+      <rect x="0" y="16" width="600" height="650" fill="none" stroke="#d6deea"/>
+      <g stroke="#e9eef5"><line x1="180" y1="16" x2="180" y2="666"/><line x1="280" y1="16" x2="280" y2="666"/><line x1="380" y1="16" x2="380" y2="666"/><line x1="480" y1="16" x2="480" y2="666"/><line x1="580" y1="16" x2="580" y2="666"/></g>
+      <g font-size="11" fill="#64748b"><text x="180" y="688" text-anchor="middle">0</text><text x="280" y="688" text-anchor="middle">500</text><text x="380" y="688" text-anchor="middle">1000</text><text x="480" y="688" text-anchor="middle">1500</text><text x="580" y="688" text-anchor="middle">2000</text></g>
+      <g font-size="12"><text x="168" y="60" text-anchor="end">same-short</text><text x="168" y="132" text-anchor="end">same-medium</text><text x="168" y="204" text-anchor="end">same-long</text><text x="168" y="276" text-anchor="end">different-short</text><text x="168" y="348" text-anchor="end">different-medium</text><text x="168" y="420" text-anchor="end">different-long</text><text x="168" y="492" text-anchor="end">mixed-short</text><text x="168" y="564" text-anchor="end">mixed-medium</text><text x="168" y="636" text-anchor="end">mixed-long</text></g>
+      <g stroke="#d6deea" stroke-width="5"><line x1="273" y1="56" x2="300" y2="56"/><line x1="366" y1="128" x2="386" y2="128"/><line x1="340" y1="200" x2="373" y2="200"/><line x1="274" y1="272" x2="309" y2="272"/><line x1="304" y1="344" x2="308" y2="344"/><line x1="274" y1="416" x2="324" y2="416"/><line x1="345" y1="488" x2="355" y2="488"/><line x1="384" y1="560" x2="384" y2="560"/><line x1="430" y1="632" x2="435" y2="632"/></g>
+      <g fill="#16a6a0"><circle cx="300" cy="56" r="7"/><circle cx="366" cy="128" r="7"/><circle cx="340" cy="200" r="7"/><circle cx="309" cy="272" r="7"/><circle cx="308" cy="344" r="7"/><circle cx="324" cy="416" r="7"/><circle cx="345" cy="488" r="7"/><circle cx="384" cy="560" r="7"/><circle cx="435" cy="632" r="7"/></g>
+      <g fill="#5b7cfa"><circle cx="273" cy="56" r="7"/><circle cx="386" cy="128" r="7"/><circle cx="373" cy="200" r="7"/><circle cx="274" cy="272" r="7"/><circle cx="304" cy="344" r="7"/><circle cx="274" cy="416" r="7"/><circle cx="355" cy="488" r="7"/><circle cx="384" cy="560" r="7"/><circle cx="430" cy="632" r="7"/></g>
+      <g font-size="11" fill="#64748b"><text x="310" y="45">600</text><text x="396" y="117">730</text><text x="383" y="189">1444</text><text x="319" y="261">643</text><text x="318" y="333">642</text><text x="334" y="405">1405</text><text x="355" y="477">865</text><text x="394" y="549">1019</text><text x="445" y="621">2400</text></g>
+      <text x="380" y="713" text-anchor="middle" font-size="11" fill="#64748b">milliseconds</text>
+    </g>
+    <g transform="translate(736,110)">
+      <text x="0" y="0" font-size="16" font-weight="700">TTFT P95 · ms</text>
+      <rect x="0" y="16" width="600" height="650" fill="none" stroke="#d6deea"/>
+      <g stroke="#e9eef5"><line x1="180" y1="16" x2="180" y2="666"/><line x1="280" y1="16" x2="280" y2="666"/><line x1="380" y1="16" x2="380" y2="666"/><line x1="480" y1="16" x2="480" y2="666"/><line x1="580" y1="16" x2="580" y2="666"/></g>
+      <g font-size="11" fill="#64748b"><text x="180" y="688" text-anchor="middle">0</text><text x="280" y="688" text-anchor="middle">1500</text><text x="380" y="688" text-anchor="middle">3000</text><text x="480" y="688" text-anchor="middle">4500</text><text x="580" y="688" text-anchor="middle">6000</text></g>
+      <g font-size="12"><text x="168" y="60" text-anchor="end">same-short</text><text x="168" y="132" text-anchor="end">same-medium</text><text x="168" y="204" text-anchor="end">same-long</text><text x="168" y="276" text-anchor="end">different-short</text><text x="168" y="348" text-anchor="end">different-medium</text><text x="168" y="420" text-anchor="end">different-long</text><text x="168" y="492" text-anchor="end">mixed-short</text><text x="168" y="564" text-anchor="end">mixed-medium</text><text x="168" y="636" text-anchor="end">mixed-long</text></g>
+      <g stroke="#d6deea" stroke-width="5"><line x1="312" y1="56" x2="313" y2="56"/><line x1="297" y1="128" x2="301" y2="128"/><line x1="366" y1="200" x2="386" y2="200"/><line x1="307" y1="272" x2="308" y2="272"/><line x1="258" y1="344" x2="298" y2="344"/><line x1="333" y1="416" x2="381" y2="416"/><line x1="343" y1="488" x2="343" y2="488"/><line x1="339" y1="560" x2="352" y2="560"/><line x1="521" y1="632" x2="586" y2="632"/></g>
+      <g fill="#16a6a0"><circle cx="313" cy="56" r="7"/><circle cx="297" cy="128" r="7"/><circle cx="366" cy="200" r="7"/><circle cx="307" cy="272" r="7"/><circle cx="258" cy="344" r="7"/><circle cx="333" cy="416" r="7"/><circle cx="343" cy="488" r="7"/><circle cx="339" cy="560" r="7"/><circle cx="521" cy="632" r="7"/></g>
+      <g fill="#5b7cfa"><circle cx="312" cy="56" r="7"/><circle cx="301" cy="128" r="7"/><circle cx="386" cy="200" r="7"/><circle cx="308" cy="272" r="7"/><circle cx="298" cy="344" r="7"/><circle cx="381" cy="416" r="7"/><circle cx="343" cy="488" r="7"/><circle cx="352" cy="560" r="7"/><circle cx="586" cy="632" r="7"/></g>
+      <g font-size="11" fill="#64748b"><text x="323" y="45">4040</text><text x="307" y="117">1758</text><text x="376" y="189">2792</text><text x="317" y="261">1917</text><text x="268" y="333">1166</text><text x="343" y="405">2296</text><text x="353" y="477">2493</text><text x="349" y="549">2579</text><text x="531" y="621">5117</text></g>
+      <text x="380" y="713" text-anchor="middle" font-size="11" fill="#64748b">milliseconds</text>
+    </g>
+  </g>
+</svg>

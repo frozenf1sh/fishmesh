@@ -111,10 +111,11 @@ kubectl --kubeconfig ~/.kube/fishmesh.yaml get nodes
 kubectl --kubeconfig ~/.kube/fishmesh.yaml -n kubellm get deployment
 ```
 
-安装 KV-aware overlay 并等待真实 KV 信号链路就绪。已提交 overlay 使用 `r6d2-r1`：
+安装 KV-aware overlay 并等待真实 KV 信号链路就绪。当前基础 overlay 使用 `r6h-degrade-r1`；下面的长上下文
+实验 overlay 还会增加有界连接 profile：
 
 ```bash
-make image VERSION=r6d2-r1
+make image VERSION=r6h-degrade-r1
 kubectl --kubeconfig ~/.kube/fishmesh.yaml apply -k deploy/lite-kv-aware
 kubectl --kubeconfig ~/.kube/fishmesh.yaml -n kubellm rollout status deploy/qwen-vllm --timeout=10m
 kubectl --kubeconfig ~/.kube/fishmesh.yaml -n kubellm rollout status deploy/fishmesh-gateway --timeout=5m
@@ -195,6 +196,64 @@ go run ./cmd/fishmesh-client bench \
 SSE payload 或任意 upstream header 写入压测产物；也不会切路由模式、清 cache、滚动 Pod 或自行启动并行
 GPU workload。`chat` 与 `request` 在终端默认以颜色突出关键诊断值；脚本可用 `--color never` 保持纯文本，
 明确需要 ANSI 管道输出时可用 `--color always`。
+
+### 长上下文、低连接数压测档位
+
+下一轮更贴近真实业务的压测建议减少连接数、增加 prompt 长度。仓库中的 profile 使用 4 KiB 和 12 KiB
+前缀，覆盖多批次、同前缀、不同前缀和混合前缀；Gateway 保持 64 个 in-flight 请求和 16 个 upstream
+数据连接。vLLM 的 `max-model-len=4096` 暂不修改；这里的 12 KiB 是 prompt 字节数，不是 12K token。
+mixed 比例现在按每个场景的完整请求总数计算，不会因为场景请求数较少而静默退化成只有热前缀。
+
+KV-aware 档位已经准备好：
+
+```bash
+kubectl apply -k deploy/experiments/long-context-kv-aware
+kubectl -n kubellm rollout status deploy/fishmesh-gateway --timeout=5m
+GATEWAY_IP="$(kubectl -n kubellm get svc fishmesh-gateway -o jsonpath='{.spec.clusterIP}')"
+go run ./cmd/fishmesh-client bench \
+  --endpoint "http://${GATEWAY_IP}:8080" \
+  --plan configs/long-context-balanced.json \
+  --run-id long-context-balanced-r6h \
+  --output-dir artifacts/bench/long-context-balanced-r6h
+```
+
+并发压测时建议把客户端放在集群内或 GPU 节点上；Mac port-forward 适合 smoke，不适合作为高并发链路。
+对照实验使用 `deploy/experiments/long-context-load-balanced`，计划文件和其他参数保持完全一致。每轮比较
+成功率、503 原因、TTFT P50/P95/P99、GPU 利用率、vLLM queue/running、KV available/degradation 和 Gateway
+RSS，再决定是否提高并发。
+
+## 实测性能与运行证据
+
+下面的图表来自参考集群上的两轮反向顺序 A/B 测试。两种路由模式使用完全相同的 192 请求矩阵，覆盖
+256/2048/8192 字节前缀、同前缀/不同前缀/混合前缀、多批次和受限并发。滚动更新期间的热身流量不计入正式
+压测总数。
+
+两轮平均结果显示，KV-aware 的 **TTFT P50 为 1036.98 ms，对比 load-balanced 的 1200.28 ms，下降 13.6%**；
+总耗时 P50 为 **1219.55 ms，对比 1420.00 ms，下降 14.1%**。在 8 KiB 前缀的同前缀和不同前缀场景中，
+TTFT P50 下降 9.9%–13.4%；短前缀场景的尾延迟仍有波动。四轮正式测试共 **768/768 请求成功**，384 个
+正式 KV-aware 请求全部获得有效 KV 状态，没有观察到 KV degradation。KV 事件 publish-to-apply P95 约为
+0.95 ms，压测期间 Gateway 内存约为 13–21 MiB。
+
+最新的真实 mixed 长上下文 A/B 使用两轮反向顺序、共 **1568 个正式请求**，保持 64 个 in-flight 和 16 个
+连接不变。两个 mixed 场景都已从原始 JSONL 核对为 60% 热共享前缀、20% 独立前缀、20% 其他共享前缀。
+相对 load-balanced，KV-aware 的平均 TTFT P95 从 **431.42 ms 降到 100.32 ms（下降 76.7%）**，总耗时 P95
+从 **967.00 ms 降到 435.53 ms（下降 55.0%）**。TTFT P50 小幅上升 4.6%，因此本轮实测收益主要体现在
+尾延迟稳定性，而不是每个请求的首 token 都更快。详见[真实 mixed 完整对比报告](artifacts/bench/long-context-mixed-comparison-r6h-r2/comparison-report.md)。
+
+![长上下文整体延迟对比](docs/assets/bench/long-context-ab-overview.png)
+
+![长上下文场景级 TTFT](docs/assets/bench/long-context-scenario-ttft.png)
+
+![长上下文可靠性与资源边界](docs/assets/bench/long-context-runtime-envelope.png)
+
+![KV-aware 路由性能](docs/assets/bench/routing-performance.png)
+
+![场景级 TTFT 对比](docs/assets/bench/scenario-latency.png)
+
+![可靠性与可观测性证据](docs/assets/bench/operational-evidence.png)
+
+机器可读的源报告仍保存在 [`artifacts/bench/`](artifacts/bench/)；图片对应的 SVG 源文件与 PNG 一起保存在
+[`docs/assets/bench/`](docs/assets/bench/)。
 
 ## 交付优先级
 

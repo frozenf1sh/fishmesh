@@ -107,7 +107,9 @@ func (s *service) refresh(ctx context.Context) {
 	identities := map[backend.ID]identity.Identity{}
 	identityErr := ""
 	if s.identity != nil {
-		identities, err = s.identity.Enrich(ctx, backends)
+		identityContext, cancel := context.WithTimeout(ctx, s.requestTimeout)
+		identities, err = s.identity.Enrich(identityContext, backends)
+		cancel()
 		if err != nil {
 			identityErr = err.Error()
 		}

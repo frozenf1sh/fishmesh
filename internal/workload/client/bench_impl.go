@@ -76,7 +76,7 @@ func (c *Client) runBenchmarkBatch(ctx context.Context, plan BenchmarkPlan, scen
 		go func() {
 			defer wait.Done()
 			for job := range jobs {
-				messages, group := benchmarkMessages(scenario, job.Request)
+				messages, group := benchmarkMessagesForScenario(scenario, job.Request, scenario.Batches*scenario.BatchSize)
 				result, err := c.Send(ctx, Request{Messages: messages, MaxTokens: plan.MaxTokens})
 				record := BenchmarkAttempt{
 					RecordType: "request", RunID: plan.RunID, Scenario: scenario.Name, Pattern: scenario.Pattern,
@@ -110,7 +110,11 @@ func (c *Client) runBenchmarkBatch(ctx context.Context, plan BenchmarkPlan, scen
 }
 
 func benchmarkMessages(scenario BenchmarkScenario, request int) ([]Message, string) {
-	group, unique := benchmarkPrefixGroup(scenario, request)
+	return benchmarkMessagesForScenario(scenario, request, 100)
+}
+
+func benchmarkMessagesForScenario(scenario BenchmarkScenario, request, totalRequests int) ([]Message, string) {
+	group, unique := benchmarkPrefixGroupForScenario(scenario, request, totalRequests)
 	prefix := generatedPrefix(scenario, group)
 	suffix := fmt.Sprintf("request=%d; give a concise answer and preserve the streaming response.", request)
 	if unique {
@@ -121,6 +125,10 @@ func benchmarkMessages(scenario BenchmarkScenario, request int) ([]Message, stri
 }
 
 func benchmarkPrefixGroup(scenario BenchmarkScenario, request int) (string, bool) {
+	return benchmarkPrefixGroupForScenario(scenario, request, 100)
+}
+
+func benchmarkPrefixGroupForScenario(scenario BenchmarkScenario, request, totalRequests int) (string, bool) {
 	switch scenario.Pattern {
 	case PrefixDifferent:
 		return fmt.Sprintf("unique-%d", request), true
@@ -131,11 +139,14 @@ func benchmarkPrefixGroup(scenario BenchmarkScenario, request int) (string, bool
 		if hotRatio == 0 && uniqueRatio == 0 {
 			hotRatio, uniqueRatio = 60, 20
 		}
-		roll := request % 100
-		if roll < hotRatio {
+		if totalRequests <= 0 {
+			totalRequests = 100
+		}
+		position := request % totalRequests
+		if position*100 < hotRatio*totalRequests {
 			return "shared-0", false
 		}
-		if roll < hotRatio+uniqueRatio {
+		if position*100 < (hotRatio+uniqueRatio)*totalRequests {
 			return fmt.Sprintf("unique-%d", request), true
 		}
 		groups := scenario.PrefixGroups - 1

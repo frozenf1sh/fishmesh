@@ -1,6 +1,6 @@
 # FishMesh 项目当前状态
 
-最后项目状态更新时间：2026-08-15；集群最后真实验收时间：2026-08-13。仓库为
+最后项目状态更新时间：2026-08-16；集群最后真实验收时间：2026-08-15。仓库为
 `frozenf1sh/fishmesh`（private），当前 `main` 分支
 包含可信 serving baseline、三种 routing mode（`load-balanced`、`session-key`、`kv-aware`，
 对应策略标识为 `load-balanced-v1`、`session-key-v1`、`kv-aware-v1`）、request-path reliability
@@ -29,8 +29,8 @@ routing overhead，故没有声称 prefix breakpoint。R5D 标准 Gateway/EPP �
 方向基准见 `docs/design/project-charter.md`，新决策见 `docs/design/decisions/002-lite-kv-aware-routing.md`。
 
 仓库基础配置默认为 `load-balanced`；`X-FishMesh-Session-Key` 只在显式 `session-key` 模式下作为
-客户端提示。历史参考集群在 R6D2 收尾后恢复过 `deploy/experiments/r6d-session-key`；本次本地命名迁移
-不代表已对集群执行部署。KV-aware 模式通过
+客户端提示。历史参考集群在 R6D2 收尾后曾恢复 `deploy/experiments/r6d-session-key`，本次已为 R6H-3
+临时切换到 `deploy/experiments/long-context-kv-aware`；压测结束后按证据恢复基线。KV-aware 模式通过
 EndpointSlice/Pod UID 建立实例、订阅 KVEvents/replay；unknown/stale 永不伪装成零命中。
 
 Lite 监控已在参考集群完成部署和接入：`deploy/monitoring` 创建 namespace-scoped Prometheus、Grafana、
@@ -59,15 +59,13 @@ headers。最终测试只使用该客户端，不再扩展旧 loadgen。
 `deploy/integrated/llmd-config` 保留但从默认 `make manifest` 中挂起，待 Standard mode 单独恢复。
 
 R6G 的面向人诊断已补充终端色彩：默认 `auto` 只在 TTY 突出 TTFT、policy、reason、KV-aware status 和 backend，
-重定向输出及 JSONL 仍为纯文本，可由 `--color always|never` 显式覆盖。当前集群保持
-`session-key`；无 session key 的请求会以 `missing-session-key-load-balanced` 在同等负载下稳定选择一个后端，故改动
-system prompt/history 不应被解释为应切换 upstream 的信号。
+重定向输出及 JSONL 仍为纯文本，可由 `--color always|never` 显式覆盖。当前长上下文 profile 不发送
+session key；无 session key 的请求会由当前 routing mode 决定，故改动 system prompt/history 不应被解释为应切换
+upstream 的信号。
 
-R6H 已在本地开始成本式 KV-aware 路由改造，GPU 节点关闭期间不访问集群：`kv-aware-v1` 将未缓存
-token、有效 vLLM queue/running 和 Gateway local in-flight 显式折算为等价未缓存 token，仍先排除 hard
-overload，仍将 KV unknown/stale 降级而不当作零命中。当前生产 ConfigMap 的 observation mode 是 `none`，
-所以此前 KV-aware 实际只能依赖 cache 与 local in-flight，不能声称已按真实 vLLM load 平衡。R6H 本地实现
-完成后，等待 GPU 恢复再启用新镜像/观测配置，按受控 profile 校准 penalty 并保留失败/温度证据。
+R6H 已完成成本式 KV-aware 路由改造：`kv-aware-v1` 将未缓存 token、有效 vLLM queue/running 和 Gateway
+local in-flight 显式折算为等价未缓存 token，仍先排除 hard overload，仍将 KV unknown/stale 降级而不当作
+零命中。GPU 节点恢复后已部署 `r6h-degrade-r1`，并按受控 profile 保留成功率、失败分类、显存和温度证据。
 
 R6H-2 已完成本地预测 TTFT 的影子观测契约：新的独立 `prediction` domain 对每个 backend 保留有界、
 15 分钟内的数值首 SSE TTFT 样本，以非负 ridge 最小二乘拟合未缓存 token、queue、running 和 Gateway
@@ -75,7 +73,25 @@ local in-flight；至少 16 个样本且所有候选 load 已知才返回 `would
 Token IDs、routing key 和 SSE 内容，不进入 `routing`，不改变 `kv-aware-v1` 的实际选择、
 hard-overload 或 unknown/stale 的 load-balanced 降级。默认 `FISHMESH_PREDICTION_MODE=off`；`shadow` 只增加
 低基数状态/误差指标，仍不产生 HTTP 决策变化。GPU 恢复后先用影子数据验证误差和安全边界，再决定是否新开
-实际预测选路切片；当前集群仍保持 session-key。
+实际预测选路切片；当前预测模式仍为 off，不改变实际选路。
+
+R6H-3 修复了 KV-aware 选路前 Render 的冷 DNS/连接突发问题：临时 Render failure/timeout 现在显式降级为
+load-balanced，请求形状错误和调用方取消仍硬失败；专用 Render client 使用 16 个有界连接、30 秒 DNS
+缓存、并发解析 singleflight 和绝对 FQDN 查询。参考集群当前运行 `long-context-kv-aware` profile：64 个
+in-flight、16 个数据面连接、keepalive=true。使用 4 KiB/12 KiB prompt、6 个场景、2 个批次共 288 请求时
+288/288 成功，TTFT P50/P95 为 85.17/479.83 ms，总耗时 P50/P95 为 234.25/843.63 ms；288 个请求均为
+KV available，未观察 Gateway 503、admission rejection 或 upstream error。12 KiB 仍指 prompt 字节数，vLLM
+`max-model-len=4096` 未改变，不能把这轮结果解释为 12K token 能力证明。
+
+R6I-0 已固定下一阶段不直接把未验证的动态权重放入请求路径：先建立快速 load observation 和
+HardOverload，再交付以毫秒为单位的 calibrated-static TTFT estimator，现有 learned model 继续 shadow，
+只有误差门禁通过后才讨论 active。R6I-1 已实现并完成最小真实 smoke：Lite 使用
+`500ms/2s/400ms` 的 queue/running observation，queue 16 或单 backend local in-flight 32 触发硬门；
+外部 load 完整有效时不再重复叠加完整 local in-flight，未知时仍保留 local fallback。基础默认门槛为零，
+因此 load-balanced profile 保持兼容。新镜像 `r6i1-load-gates-r1` 的 manifest digest 为
+`sha256:d8db3eac20b9cedadbec853793f16fb56a73bcd209986d9e79946d3fb4854a35`；rollout 后 GPU Node 保持 Ready、
+vLLM 2/2、Gateway 1/1，两 backend observation 均为 `ok`。8 个受控流式请求把一个 backend 的 running
+sample 从 0 提高到 8，结束后恢复 0；queue 未堆积，因此没有声称真实 HardOverload 已触发或 TTFT 已改善。
 
 README 与 README_CN 现以五分钟 Lite demo 为入口：确认 `load-balanced` 默认基线后临时安装
 `lite-kv-aware`，用不带 session key 的同一长 system prompt、不同 user message 请求读取 KV-aware 决策头，
@@ -108,9 +124,12 @@ OrbStack 内置的 Kubernetes 集群不是这个多节点 control plane。官方
   `qwen-vllm` 仍然是 headless Service，EndpointSlice 实验直接读取它的 Ready 地址；
 - `fishmesh-gateway` 是一个 Go streaming proxy，运行在 GPU 节点。它不申请 GPU，
   但因为第一个镜像是 amd64 而 control plane 是 ARM64，所以被放在该节点；
-- Gateway 当前运行只含 Gateway 二进制的 `fishmesh-gateway:r6d2-r1`；Lite KV-aware overlay 启用
-  EndpointSlice + KVEvents/replay KV-aware routing。它使用专用 SA，只有 EndpointSlice
-  `get/list/watch`，无 Pods/Secrets 权限；unknown/stale 仍回退 load-balanced；
+- Gateway 当前运行只含 Gateway 二进制的 `fishmesh-gateway:r6i1-load-gates-r1`；参考集群当前应用
+  `deploy/experiments/long-context-kv-aware`，使用 64 个 in-flight 上限、16 个数据面连接、upstream
+  keepalive，并启用 EndpointSlice + KVEvents/replay KV-aware routing；长上下文实验的 vLLM 使用
+  `gpu-memory-utilization=0.40` 以覆盖 CUDA-graph 启动开销。它使用专用 SA，只有 namespace 内
+  EndpointSlice `get/list/watch` 和 Pods `get/list`，无 Secrets/写操作/cluster-scope 权限；
+  Prometheus observation 已启用，unknown/stale 仍回退 load-balanced；
 - analyst、simulator 和 loadgen 已冻结且不在当前产品部署或 Gateway 镜像中；遗留 analyst
   Deployment/RBAC 与 loadgen SA 已从集群清理；
 - 模型持久化于 GPU 笔记本的 `/var/lib/fishmesh/models`，通过 retained local PV/PVC
@@ -311,13 +330,24 @@ VM 的影响更大：Kubernetes API 和 reconciliation 也会停止，应按完�
   prewarm 验证 c=1，完成 512/2048 的 Service/KV-aware 各 200 requests：KV-aware P50/P95 分别为
   24.429/24.936、25.279/26.680 ms，Service 为 31.274/35.442、31.859/37.059 ms。收益低于约 10 ms
   routing overhead，未声称拐点；GPU dmon 峰值 68°C，无 watchdog 告警，最终恢复 session-key。
+- R6H-3 长上下文验证：mixed 生成器已改为按整个场景的请求总数计算比例；`long-context-balanced` 计划的两个
+  mixed 场景各自使用 100 请求，实际分布为 60 个 `shared-0`、20 个 `unique-*`、20 个其他共享前缀
+  （`shared-1/2/3` 为 7/6/7）。两轮反向顺序 A/B 的四个正式 run 共 1568/1568 成功；load-balanced/KV-aware 的 TTFT
+  P50/P95 分别为 48.40/431.42 ms 与 50.65/100.32 ms，KV-aware 的 TTFT P95 下降 76.7%，总耗时 P95
+  下降 55.0%，而 TTFT P50 上升 4.6%，收益主要集中在尾延迟。真实 mixed-4k/mixed-12k 的 TTFT P95 分别
+  下降 62.3%/84.3%。四次正式 run 无 Gateway admission/upstream error，KV-aware 784/784 `available`，
+  GPU SM/memory-controller 峰值 100%，显存 7262/8188 MiB，温度峰值 65°C。报告位于
+  `artifacts/bench/long-context-mixed-comparison-r6h-r2/`；下一步按并发 1/4/8/16 做阶梯测试。
 
 ## 下一步待办
 
-1. 之后按 llmd 的顺序逐域接入，每个切片单独更新阶段文档、
-   提交和推送；
-2. 完成 R6E/原 R5D Standard mode，并执行 Gateway/EPP/llm-d precise 生产兼容性闭环；
-3. 使用 R6F 的 per-event latency、逐请求 cached-prefix 可观测契约及 R6G JSONL，再执行有限同环境复测；
-4. GPU 节点恢复后执行 R6H 成本式 KV-aware 的 KV replay、负载压力、降级和 session-key 恢复验收；
-5. 在声称 NetworkPolicy 已生效前迁移到支持 policy enforcement 的 CNI；当前 Flannel 不能执行
+1. 按 [`ADR-003`](../design/decisions/003-calibrated-ttft-routing.md) 和
+   [`R6I 多阶段计划`](../design/ttft-routing-development-plan.md) 先完成 load observation、HardOverload 与
+   calibrated-static TTFT 交付，不把未验证的 learned model 直接接入路由；
+2. 为正式实验加入实际 prompt token、cache salt/run nonce、cache generation、完整 provenance 和多轮统计，
+   先在当前 4096 上下文内完成 512/1024/2048/3072 token 阶梯；
+3. GPU 容量允许后再评估 4096/8192/12288 token，禁止把 12 KiB 字节报告改称 12K token；
+4. learned-shadow 只有在 MAE/P95 error/agreement 门禁通过后才另立 active 决策；
+5. Standard mode/llm-d 完整闭环继续后置，避免与 Lite TTFT 主线同时扩大；
+6. 在声称 NetworkPolicy 已生效前迁移到支持 policy enforcement 的 CNI；当前 Flannel 不能执行
    声明式 NetworkPolicy。

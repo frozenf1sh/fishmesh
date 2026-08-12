@@ -86,3 +86,23 @@ func TestBenchmarkPrefixShapes(t *testing.T) {
 		t.Fatalf("mixed prefix groups are incorrect: %q/%t %q/%t %q/%t", group0, false, group70, unique70, group90, unique90)
 	}
 }
+
+func TestBenchmarkMixedDistributionUsesScenarioSize(t *testing.T) {
+	scenario := BenchmarkScenario{
+		Name: "mixed", Pattern: PrefixMixed, PrefixBytes: 128, PrefixGroups: 4,
+		Batches: 2, BatchSize: 24, MixedHotRatio: 60, MixedUniqueRatio: 20,
+	}
+	counts := map[string]int{}
+	unique := 0
+	for request := 0; request < scenario.Batches*scenario.BatchSize; request++ {
+		group, isUnique := benchmarkPrefixGroupForScenario(scenario, request, scenario.Batches*scenario.BatchSize)
+		counts[group]++
+		if isUnique {
+			unique++
+		}
+	}
+
+	if counts["shared-0"] != 29 || unique != 10 || counts["shared-1"]+counts["shared-2"]+counts["shared-3"] != 9 {
+		t.Fatalf("mixed distribution for 48 requests = counts=%v unique=%d", counts, unique)
+	}
+}

@@ -115,10 +115,11 @@ kubectl --kubeconfig ~/.kube/fishmesh.yaml get nodes
 kubectl --kubeconfig ~/.kube/fishmesh.yaml -n kubellm get deployment
 ```
 
-Install the KV-aware overlay and wait for its real KV signal path. The checked-in overlay uses `r6d2-r1`.
+Install the KV-aware overlay and wait for its real KV signal path. The checked-in baseline overlay uses the current
+`r6h-degrade-r1` image; the long-context experiment below adds the bounded-connection profile.
 
 ```bash
-make image VERSION=r6d2-r1
+make image VERSION=r6h-degrade-r1
 kubectl --kubeconfig ~/.kube/fishmesh.yaml apply -k deploy/lite-kv-aware
 kubectl --kubeconfig ~/.kube/fishmesh.yaml -n kubellm rollout status deploy/qwen-vllm --timeout=10m
 kubectl --kubeconfig ~/.kube/fishmesh.yaml -n kubellm rollout status deploy/fishmesh-gateway --timeout=5m
@@ -206,6 +207,67 @@ prompts, raw SSE payloads or arbitrary upstream headers into history or benchmar
 modes, clear cache, roll Pods or start parallel GPU workloads. `chat` and `request` color the important diagnostic
 values on a terminal by default; use `--color never` for plain output or `--color always` when intentionally piping
 ANSI output. Benchmark JSONL is always plain.
+
+### Long-context, bounded-connection profile
+
+For the next realistic pressure round, use fewer connections and longer prompts. The checked-in profile uses 4 KiB
+and 12 KiB prompt prefixes, multiple batches, and same/different/mixed-prefix scenarios. It keeps Gateway admission at
+64 in-flight requests and upstream data connections at 16. The vLLM model remains at `max-model-len=4096`; the 12 KiB
+values are prompt bytes, not 12K tokens. Mixed ratios are applied over the full request count of each scenario, so the
+client does not silently turn a small mixed scenario into hot-prefix-only traffic.
+
+The KV-aware profile is already prepared as:
+
+```bash
+kubectl apply -k deploy/experiments/long-context-kv-aware
+kubectl -n kubellm rollout status deploy/fishmesh-gateway --timeout=5m
+GATEWAY_IP="$(kubectl -n kubellm get svc fishmesh-gateway -o jsonpath='{.spec.clusterIP}')"
+go run ./cmd/fishmesh-client bench \
+  --endpoint "http://${GATEWAY_IP}:8080" \
+  --plan configs/long-context-balanced.json \
+  --run-id long-context-balanced-r6h \
+  --output-dir artifacts/bench/long-context-balanced-r6h
+```
+
+Run the client inside the cluster or on the GPU node for concurrency tests; a Mac port-forward is useful for smoke
+tests but can become the bottleneck. For the A/B baseline, apply `deploy/experiments/long-context-load-balanced` and
+reuse the exact same plan and output procedure. Compare success rate, 503 reason, TTFT P50/P95/P99, GPU utilization,
+vLLM queue/running, KV availability/degradation, and Gateway RSS before increasing concurrency.
+
+## Measured performance and operational evidence
+
+These figures come from two counter-ordered A/B rounds on the reference cluster. Each routing mode ran the same
+deterministic 192-request matrix, covering 256/2048/8192-byte prefixes, same/different/mixed prefix patterns,
+multiple batches and bounded concurrency. Rollout warmup traffic is excluded from the formal benchmark totals.
+
+Across the two rounds, KV-aware routing averaged **1036.98 ms vs 1200.28 ms TTFT P50 (-13.6%)** and
+**1219.55 ms vs 1420.00 ms total-duration P50 (-14.1%)** against load-balanced routing. For 8 KiB prefixes,
+TTFT P50 improved by 9.9%–13.4% in same-prefix and different-prefix scenarios; short-prefix tails remained noisy.
+The four formal runs completed **768/768 requests successfully**. All 384 formal KV-aware requests reported an
+available KV signal, with no observed KV degradation. KV event publish-to-apply P95 was 0.95 ms, and Gateway memory
+during pressure was 13–21 MiB.
+
+The latest true-mixed long-context A/B used two counter-ordered rounds and **1,568 formal requests** with the same
+64 in-flight / 16-connection profile. Each mixed scenario was verified from raw JSONL as 60% hot shared prefix, 20%
+unique prefixes, and 20% other shared prefixes. KV-aware reduced average TTFT P95 from **431.42 ms to 100.32 ms
+(-76.7%)** and duration P95 from **967.00 ms to 435.53 ms (-55.0%)** versus load-balanced. TTFT P50 increased
+slightly by 4.6%, so the measured benefit is primarily tail-latency stability rather than every request receiving a
+faster first token. See the [full true-mixed comparison report](artifacts/bench/long-context-mixed-comparison-r6h-r2/comparison-report.md).
+
+![Long-context overall latency comparison](docs/assets/bench/long-context-ab-overview.png)
+
+![Long-context scenario-level TTFT](docs/assets/bench/long-context-scenario-ttft.png)
+
+![Long-context reliability and resource envelope](docs/assets/bench/long-context-runtime-envelope.png)
+
+![KV-aware routing performance](docs/assets/bench/routing-performance.png)
+
+![Scenario-level TTFT comparison](docs/assets/bench/scenario-latency.png)
+
+![Reliability and observability evidence](docs/assets/bench/operational-evidence.png)
+
+The machine-readable source reports remain in [`artifacts/bench/`](artifacts/bench/); the image sources are kept beside
+the PNGs as SVG files under [`docs/assets/bench/`](docs/assets/bench/).
 
 ## Delivery priorities
 

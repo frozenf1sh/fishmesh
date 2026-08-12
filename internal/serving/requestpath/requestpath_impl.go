@@ -141,9 +141,10 @@ func (s *service) buildSnapshot(backends []backend.Backend) (State, routing.Snap
 	if s.kvCache != nil {
 		state.KVCache = projectKVCacheState(s.kvCache.State())
 	}
+	inflight := s.inflightSnapshot()
 	snapshot := routing.Snapshot{
-		Backends: state.Backends, Inflight: s.inflightSnapshot(), Observations: state.Observations,
-		Ineligible: make(map[backend.ID]routing.Reason), Loads: routingLoads(backends, state.Observations),
+		Backends: state.Backends, Inflight: inflight, Observations: state.Observations,
+		Ineligible: make(map[backend.ID]routing.Reason), Loads: routingLoads(backends, state.Observations, inflight, s.config),
 	}
 	for _, candidate := range backends {
 		open := s.circuits.IsOpen(candidate.ID)
@@ -176,13 +177,13 @@ func (s *service) buildKVAwareInput(ctx context.Context, input tokenization.Inpu
 	}
 	profile, err := s.tokenizer.Tokenize(ctx, input)
 	if err != nil {
-		if isContextError(err) {
+		if requestContextCanceled(ctx, err) || !canDegradeTokenization(err) {
 			return routing.KVAwareInput{}, KVTokenizationFailed, err
 		}
 		return routing.KVAwareInput{}, KVTokenizationFailed, nil
 	}
 	if err := s.kvReconcile(ctx, candidates); err != nil {
-		if isContextError(err) {
+		if requestContextCanceled(ctx, err) {
 			return routing.KVAwareInput{}, KVLookupFailed, err
 		}
 		return routing.KVAwareInput{}, KVLookupFailed, nil
@@ -194,7 +195,7 @@ func (s *service) buildKVAwareInput(ctx context.Context, input tokenization.Inpu
 	}
 	snapshot, err := s.kvCache.Lookup(ctx, query)
 	if err != nil {
-		if isContextError(err) {
+		if requestContextCanceled(ctx, err) {
 			return routing.KVAwareInput{}, KVLookupFailed, err
 		}
 		return routing.KVAwareInput{}, KVLookupFailed, nil
@@ -267,20 +268,30 @@ func (s *service) activeObservations(backends []backend.Backend) map[backend.ID]
 	return result
 }
 
-func routingLoads(backends []backend.Backend, observations map[backend.ID]observation.Backend) map[backend.ID]routing.Load {
+func routingLoads(backends []backend.Backend, observations map[backend.ID]observation.Backend, inflight map[backend.ID]int64, config Config) map[backend.ID]routing.Load {
 	loads := make(map[backend.ID]routing.Load, len(backends))
 	for _, candidate := range backends {
-		observation, ok := observations[candidate.ID]
-		if !ok {
-			continue
-		}
-		queue, queueOK := nonNegativeCount(observation.QueueLength)
-		running, runningOK := nonNegativeCount(observation.RunningRequests)
+		state := routing.Load{}
+		observed, ok := observations[candidate.ID]
+		queue, queueOK := nonNegativeCount(observed.QueueLength)
+		running, runningOK := nonNegativeCount(observed.RunningRequests)
 		if queueOK && runningOK {
-			loads[candidate.ID] = routing.Load{QueueDepth: queue, Running: running, Valid: true}
+			state.QueueDepth = queue
+			state.Running = running
+			state.Valid = true
+		}
+		state.HardOverload = hardOverloaded(state, inflight[candidate.ID], config)
+		if ok || state.HardOverload {
+			loads[candidate.ID] = state
 		}
 	}
 	return loads
+}
+
+func hardOverloaded(load routing.Load, localInflight int64, config Config) bool {
+	queueOverloaded := load.Valid && config.HardQueueDepth > 0 && load.QueueDepth >= config.HardQueueDepth
+	localOverloaded := config.HardLocalInflight > 0 && localInflight >= config.HardLocalInflight
+	return queueOverloaded || localOverloaded
 }
 
 // predictionInput 在 orchestration 层把 routing 的纯快照投影为预测域的数值值对象。
@@ -331,8 +342,20 @@ func backendIDs(backends []backend.Backend) []backend.ID {
 	return ids
 }
 
-func isContextError(err error) bool {
-	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+func requestContextCanceled(ctx context.Context, err error) bool {
+	// Render adapter 内部产生的 deadline 是可以降级的上游故障。只有调用方已经
+	// 取消，或明确返回 context.Canceled，才必须在创建 backend lease 前终止请求。
+	return ctx.Err() != nil || errors.Is(err, context.Canceled)
+}
+
+func canDegradeTokenization(err error) bool {
+	var typed *tokenization.Error
+	if errors.As(err, &typed) {
+		return typed.IsTransient()
+	}
+	// 没有 typed code 的 adapter 错误保持历史上的可降级行为；调用方取消已经
+	// 在上一个判断中单独保护。
+	return !errors.Is(err, context.Canceled)
 }
 
 func (s *service) inflightSnapshot() map[backend.ID]int64 {

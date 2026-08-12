@@ -80,10 +80,10 @@ func (c Config) Validate() error {
 	if err := c.ObservationMode.Validate(); err != nil {
 		return err
 	}
-	if c.ObservationMode == observation.ModePrometheus && (c.Observation.Interval <= 0 || c.Observation.MaxAge <= 0) {
-		return fmt.Errorf("Prometheus observation interval and max age must be positive")
-	}
 	if c.ObservationMode == observation.ModePrometheus {
+		if err := c.Observation.Validate(); err != nil {
+			return fmt.Errorf("Prometheus observation: %w", err)
+		}
 		if err := c.Prometheus.Validate(); err != nil {
 			return fmt.Errorf("Prometheus: %w", err)
 		}

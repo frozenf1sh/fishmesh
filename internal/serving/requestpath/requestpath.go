@@ -96,6 +96,10 @@ type Config struct {
 	RequireFreshDiscovery bool
 	DiscoveryMaxAge       time.Duration
 	ReconcileInterval     time.Duration
+	// HardQueueDepth and HardLocalInflight are safety gates for KV-aware
+	// candidates. Zero disables the corresponding gate.
+	HardQueueDepth    int64
+	HardLocalInflight int64
 }
 
 // Dependencies 是由组合根注入的原子能力。
@@ -123,6 +127,9 @@ func (c Config) Validate() error {
 	}
 	if c.RequireFreshDiscovery && c.DiscoveryMaxAge <= 0 {
 		return fmt.Errorf("requestpath discovery max age must be positive")
+	}
+	if c.HardQueueDepth < 0 || c.HardLocalInflight < 0 {
+		return fmt.Errorf("requestpath hard overload thresholds must not be negative")
 	}
 	return nil
 }

@@ -24,6 +24,7 @@ import (
 type environmentValues struct {
 	endpointRefresh, endpointMaxAge                   time.Duration
 	observationInterval, observationMaxAge            time.Duration
+	observationRequestTimeout                         time.Duration
 	requestTimeout, shutdownTimeout                   time.Duration
 	maxRequestBody                                    int64
 	sessionKeyTTL, circuitOpenDuration                time.Duration
@@ -34,6 +35,8 @@ type environmentValues struct {
 	kvAwareQueueTokenPenalty                          int64
 	kvAwareRunningTokenPenalty                        int64
 	kvAwareInflightTokenPenalty                       int64
+	kvAwareHardQueueDepth                             int64
+	kvAwareHardLocalInflight                          int64
 	sessionKeyQueueDelta, circuitAlpha, circuitError  float64
 }
 
@@ -65,6 +68,9 @@ func loadEnvironmentValues(defaults Config) (environmentValues, error) {
 		},
 		func() error {
 			return assignDuration(envObservationMaxAge, defaults.Observation.MaxAge, &values.observationMaxAge)
+		},
+		func() error {
+			return assignDuration(envObservationRequestTimeout, defaults.Observation.RequestTimeout, &values.observationRequestTimeout)
 		},
 		func() error {
 			return assignDuration(envRequestTimeout, defaults.Gateway.RequestTimeout, &values.requestTimeout)
@@ -110,6 +116,12 @@ func loadEnvironmentValues(defaults Config) (environmentValues, error) {
 			return assignNonNegativeInt64(envKVAwareInflightTokenPenalty, defaults.Routing.KVAware.InflightTokenPenalty, &values.kvAwareInflightTokenPenalty)
 		},
 		func() error {
+			return assignNonNegativeInt64(envKVAwareHardQueueDepth, defaults.RequestPath.HardQueueDepth, &values.kvAwareHardQueueDepth)
+		},
+		func() error {
+			return assignNonNegativeInt64(envKVAwareHardLocalInflight, defaults.RequestPath.HardLocalInflight, &values.kvAwareHardLocalInflight)
+		},
+		func() error {
 			return assignFloat(envCircuitEWMAAlpha, defaults.Circuit.EWMAAlpha, &values.circuitAlpha)
 		},
 		func() error {
@@ -126,6 +138,9 @@ func loadEnvironmentValues(defaults Config) (environmentValues, error) {
 	}
 	if values.maxRequestBody <= 0 {
 		return environmentValues{}, fmt.Errorf("%s must be positive", envMaxRequestBodyBytes)
+	}
+	if values.observationRequestTimeout <= 0 {
+		return environmentValues{}, fmt.Errorf("%s must be positive", envObservationRequestTimeout)
 	}
 	return values, nil
 }
@@ -162,17 +177,20 @@ func (v environmentValues) buildConfig(defaults Config) (Config, error) {
 		}},
 		Identity:        identity.Config{Namespace: namespace, BaseURL: apiURL, TokenFile: tokenFile, CAFile: caFile},
 		ObservationMode: observation.Mode(valueOrDefault(envObservationMode, string(defaults.ObservationMode))),
-		Observation:     observation.Config{Interval: v.observationInterval, MaxAge: v.observationMaxAge, RequestTimeout: defaults.Observation.RequestTimeout, Clock: defaults.Observation.Clock},
+		Observation:     observation.Config{Interval: v.observationInterval, MaxAge: v.observationMaxAge, RequestTimeout: v.observationRequestTimeout, Clock: defaults.Observation.Clock},
 		Prometheus:      defaults.Prometheus,
 		Routing: routing.Config{Mode: routingMode, Service: service, SessionKey: routing.SessionKeyConfig{
 			TTL: v.sessionKeyTTL, MaxEntries: v.sessionKeyMaxEntries, InflightDelta: v.sessionKeyInflightDelta, QueueDepthDelta: v.sessionKeyQueueDelta, Clock: defaults.Routing.SessionKey.Clock,
 		}, KVAware: routing.KVAwareConfig{
 			QueueTokenPenalty: v.kvAwareQueueTokenPenalty, RunningTokenPenalty: v.kvAwareRunningTokenPenalty, InflightTokenPenalty: v.kvAwareInflightTokenPenalty,
 		}},
-		Circuit:      circuit.Config{EWMAAlpha: v.circuitAlpha, ErrorThreshold: v.circuitError, MinimumRequests: v.circuitMinimumRequests, OpenDuration: v.circuitOpenDuration, Clock: defaults.Circuit.Clock},
-		Admission:    admission.Config{MaxInflight: v.maxInflight},
-		Transport:    transport.Config{KeepAlive: v.keepAlive, RequestTimeout: v.requestTimeout, MaxConnsPerHost: v.maxConnections, IdleConnTimeout: defaults.Transport.IdleConnTimeout},
-		RequestPath:  requestpath.Config{Service: service, RequireFreshDiscovery: discoveryMode == discovery.ModeEndpointSlice, DiscoveryMaxAge: v.endpointMaxAge, ReconcileInterval: reconcileInterval},
+		Circuit:   circuit.Config{EWMAAlpha: v.circuitAlpha, ErrorThreshold: v.circuitError, MinimumRequests: v.circuitMinimumRequests, OpenDuration: v.circuitOpenDuration, Clock: defaults.Circuit.Clock},
+		Admission: admission.Config{MaxInflight: v.maxInflight},
+		Transport: transport.Config{KeepAlive: v.keepAlive, RequestTimeout: v.requestTimeout, MaxConnsPerHost: v.maxConnections, IdleConnTimeout: defaults.Transport.IdleConnTimeout},
+		RequestPath: requestpath.Config{
+			Service: service, RequireFreshDiscovery: discoveryMode == discovery.ModeEndpointSlice, DiscoveryMaxAge: v.endpointMaxAge,
+			ReconcileInterval: reconcileInterval, HardQueueDepth: v.kvAwareHardQueueDepth, HardLocalInflight: v.kvAwareHardLocalInflight,
+		},
 		Tokenization: tokenization.Config{BaseURL: valueOrDefault(envKVAwareRenderURL, defaults.Tokenization.BaseURL), Model: valueOrDefault(envKVAwareModel, defaults.Tokenization.Model), Timeout: defaults.Tokenization.Timeout, MaxRequestBytes: defaults.Tokenization.MaxRequestBytes, MaxResponseBytes: defaults.Tokenization.MaxResponseBytes, MaxTotalTokens: defaults.Tokenization.MaxTotalTokens},
 		KVCache:      defaults.KVCache,
 		Prediction: prediction.Config{

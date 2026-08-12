@@ -103,6 +103,28 @@ func TestKVAwarePathPreservesCanceledTokenization(t *testing.T) {
 	}
 }
 
+func TestKVAwarePathDegradesInternalRenderTimeout(t *testing.T) {
+	resolver := &mutableResolver{backends: []backend.Backend{{ID: "a", URL: "http://a:8000"}}}
+	path, err := New(Config{Service: backend.Backend{ID: "service", URL: "http://service:8000"}}, Dependencies{
+		Resolver: resolver, Strategy: newKVAwareStrategy(t), Circuits: newTestBreaker(t),
+		Tokenizer: failingTokenizer{err: &tokenization.Error{Code: tokenization.CodeUpstreamUnavailable, Err: context.DeadlineExceeded}},
+		KVCache:   &recordingKVCache{}, KVReconcile: func(context.Context, []backend.Backend) error { return nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer path.Close()
+
+	lease, err := path.Select(context.Background(), Request{Route: string(tokenization.RouteChatCompletions), Body: []byte(`{"model":"qwen","messages":[]}`)})
+	if err != nil {
+		t.Fatalf("internal Render timeout should degrade: %v", err)
+	}
+	if lease.State.KV != KVTokenizationFailed || lease.Decision.Reason != routing.ReasonKVAwareSignalUnavailable || lease.Decision.Policy != routing.PolicyKVAwareLoadFallbackV1 {
+		t.Fatalf("degradation decision/state = %+v / %q", lease.Decision, lease.State.KV)
+	}
+	lease.Complete(OutcomeClientCanceled)
+}
+
 func TestKVAwarePathRequiresTokenizerAndKVCache(t *testing.T) {
 	resolver := &mutableResolver{}
 	_, err := New(Config{Service: backend.Backend{ID: "service", URL: "http://service:8000"}}, Dependencies{

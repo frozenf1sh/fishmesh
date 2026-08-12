@@ -28,6 +28,24 @@ patches:
       - op: replace
         path: /data/FISHMESH_ENDPOINT_MAX_AGE
         value: 30s
+      - op: replace
+        path: /data/FISHMESH_BACKEND_OBSERVATION_MODE
+        value: prometheus
+      - op: replace
+        path: /data/FISHMESH_BACKEND_OBSERVATION_INTERVAL
+        value: 500ms
+      - op: replace
+        path: /data/FISHMESH_BACKEND_OBSERVATION_MAX_AGE
+        value: 2s
+      - op: replace
+        path: /data/FISHMESH_BACKEND_OBSERVATION_REQUEST_TIMEOUT
+        value: 400ms
+      - op: replace
+        path: /data/FISHMESH_KV_AWARE_HARD_QUEUE_DEPTH
+        value: "16"
+      - op: replace
+        path: /data/FISHMESH_KV_AWARE_HARD_LOCAL_INFLIGHT
+        value: "32"
       - op: add
         path: /data/FISHMESH_KV_AWARE_MODEL
         value: qwen2.5-0.5b-instruct
@@ -42,7 +60,7 @@ patches:
         value: kv-aware-v1
       - op: add
         path: /metadata/annotations/fishmesh.io~1config-version
-        value: r6c-lite
+        value: r6i1-load-gates
   - target:
       kind: ServiceAccount
       name: fishmesh-gateway
@@ -52,23 +70,23 @@ patches:
         value: true
       - op: add
         path: /metadata/annotations/fishmesh.io~1permission-scope
-        value: namespace-scoped-read-only-endpointslices
+        value: namespace-scoped-read-only-endpointslices-and-pods
   - target:
       kind: Deployment
       name: fishmesh-gateway
     patch: |-
       - op: replace
         path: /spec/template/spec/containers/0/image
-        value: fishmesh-gateway:r6g-final-r1
+        value: fishmesh-gateway:r6i1-load-gates-r1
       - op: replace
         path: /spec/template/spec/automountServiceAccountToken
         value: true
       - op: add
         path: /spec/template/metadata/annotations/fishmesh.io~1gateway-image-revision
-        value: r6g-final-r1
+        value: r6i1-load-gates-r1
       - op: replace
         path: /spec/template/metadata/annotations/fishmesh.io~1image-amd64-digest
-        value: sha256:7d7fbce59f9795de2383239faacbd001d5590933a683f0ac8234cf23371e28bd
+        value: sha256:d8db3eac20b9cedadbec853793f16fb56a73bcd209986d9e79946d3fb4854a35
       - op: add
         path: /spec/template/metadata/annotations/fishmesh.io~1runtime-profile
         value: lite-kv-aware

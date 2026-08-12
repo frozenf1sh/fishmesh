@@ -33,6 +33,7 @@ type runtime struct {
 	observations observation.Reader
 	resolver     discovery.Resolver
 	transport    transport.Pool
+	renderClient *http.Client
 	kvCache      kvcache.Index
 
 	close sync.Once
@@ -82,7 +83,7 @@ func buildRuntime(config servingconfig.Config, logger *slog.Logger) (*runtime, e
 	}
 	assembled := &runtime{resolver: resolver}
 
-	// 2. 按配置创建可选的慢速 backend observation。
+	// 2. 按配置创建有界的可选 backend observation。
 	//    observation 是请求路径的输入快照，不在这里预先计算路由结果；禁用观测时
 	//    返回 nil，requestpath 会按其明确的 unknown/load fallback 语义继续工作。
 	observations, err := buildObservations(config, identityConfig, resolver)
@@ -109,7 +110,13 @@ func buildRuntime(config servingconfig.Config, logger *slog.Logger) (*runtime, e
 	var index kvcache.Index
 	var reconcile func(context.Context, []backend.Backend) error
 	if config.Routing.Mode == routing.ModeKVAware {
-		tokenizer, err = tokenization.NewVLLMRenderer(config.Tokenization, tokenization.Dependencies{HTTPClient: http.DefaultClient})
+		renderClient, clientErr := newRenderHTTPClient(config.Tokenization)
+		if clientErr != nil {
+			assembled.Close()
+			return nil, fmt.Errorf("create KV-aware Render client: %w", clientErr)
+		}
+		assembled.renderClient = renderClient
+		tokenizer, err = tokenization.NewVLLMRenderer(config.Tokenization, tokenization.Dependencies{HTTPClient: renderClient})
 		if err != nil {
 			assembled.Close()
 			return nil, fmt.Errorf("create KV-aware tokenizer: %w", err)
@@ -205,6 +212,9 @@ func (r *runtime) Close() {
 		}
 		if r.resolver != nil {
 			_ = r.resolver.Close()
+		}
+		if r.renderClient != nil {
+			r.renderClient.CloseIdleConnections()
 		}
 		if r.transport != nil {
 			r.transport.Close()

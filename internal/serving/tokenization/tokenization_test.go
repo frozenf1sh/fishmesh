@@ -81,6 +81,26 @@ func TestTypedErrorPreservesCause(t *testing.T) {
 	}
 }
 
+func TestErrorIsTransientOnlyForRenderFailures(t *testing.T) {
+	tests := []struct {
+		name string
+		err  *Error
+		want bool
+	}{
+		{name: "render timeout", err: &Error{Code: CodeUpstreamUnavailable}, want: true},
+		{name: "upstream overload", err: &Error{Code: CodeUpstreamRejected, UpstreamStatus: 429}, want: true},
+		{name: "upstream client error", err: &Error{Code: CodeUpstreamRejected, UpstreamStatus: 400}, want: false},
+		{name: "invalid request", err: &Error{Code: CodeInvalidRequest}, want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := test.err.IsTransient(); got != test.want {
+				t.Fatalf("IsTransient() = %t, want %t", got, test.want)
+			}
+		})
+	}
+}
+
 func requireErrorCode(t *testing.T, err error, expected ErrorCode) *Error {
 	t.Helper()
 	var typed *Error

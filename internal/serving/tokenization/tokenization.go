@@ -68,6 +68,23 @@ func (e *Error) Unwrap() error {
 	return e.Err
 }
 
+// IsTransient 判断 Render 故障是否可以安全地让 KV-aware 选路降级到
+// load-balanced。请求形状错误仍然是硬失败；临时 Render 不可用、超时或异常
+// 上游响应只表示本次请求无法获得 KV locality。
+func (e *Error) IsTransient() bool {
+	if e == nil {
+		return false
+	}
+	switch e.Code {
+	case CodeUpstreamUnavailable, CodeInvalidResponse, CodeResponseTooLarge:
+		return true
+	case CodeUpstreamRejected:
+		return e.UpstreamStatus == http.StatusTooManyRequests || e.UpstreamStatus >= http.StatusInternalServerError
+	default:
+		return false
+	}
+}
+
 // Input 是一次分词请求。Body 必须是对应 route 的完整 JSON 请求体。
 type Input struct {
 	Route Route

@@ -15,6 +15,8 @@ func TestConfigValidateCentralizesFallbackAndFreshnessChecks(t *testing.T) {
 	for _, config := range []Config{
 		{Service: backend.Backend{ID: "service", URL: "/relative"}},
 		{Service: service, RequireFreshDiscovery: true},
+		{Service: service, HardQueueDepth: -1},
+		{Service: service, HardLocalInflight: -1},
 	} {
 		if err := config.Validate(); err == nil {
 			t.Fatalf("invalid requestpath config was accepted: %+v", config)

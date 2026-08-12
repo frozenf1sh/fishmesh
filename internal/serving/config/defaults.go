@@ -101,6 +101,10 @@ func DefaultConfig() Config {
 		RequestPath: requestpath.Config{
 			Service:         service,
 			DiscoveryMaxAge: 90 * time.Second,
+			// Disabled by default for compatibility. KV-aware deployment profiles
+			// must choose explicit thresholds for their tested capacity.
+			HardQueueDepth:    0,
+			HardLocalInflight: 0,
 		},
 		Tokenization: tokenization.Config{
 			BaseURL:          defaultServiceURL,
