@@ -21,7 +21,7 @@ A Kubernetes Service balances connections. It cannot answer request-level questi
 - which Pod still owns the longest cached prefix for this prompt;
 - whether that cache benefit is worth waiting behind the Pod's queued work;
 - when a stream cancellation, Pod rollout or telemetry gap must invalidate local state;
-- why a request used exact cache routing, degraded to load-only or fell back.
+- why a request used KV-aware cache routing, degraded to load-balanced or fell back.
 
 Session affinity alone is insufficient. Two unrelated sessions can share a long system prompt and reuse the same
 KV blocks, while a restarted Pod may have lost every block associated with an otherwise stable session key.
@@ -34,7 +34,7 @@ KV blocks, while a restarted Pod may have lost every block associated with an ot
 OpenAI client
   -> fishmesh-gateway Service / Deployment
        -> bounded request body
-       -> vLLM Render API -> exact token IDs
+       -> vLLM Render API -> KV-aware token IDs
        -> per-Pod KV index <- vLLM KVEvents
        -> cache + load + health routing
        -> selected vLLM Pod IP
@@ -67,18 +67,20 @@ The deployed baseline already provides:
 - OpenAI-compatible HTTP/SSE proxying, cancellation propagation, stream outcome classification and TTFT metrics;
 - EndpointSlice watch/list, Ready filtering, periodic relist, freshness and explicit Service fallback;
 - per-backend vLLM queue/running observations with per-field validity and age;
-- `bounded-affinity-v1`: SHA-256 session-key storage, Rendezvous Hash, bounded TTL registry and load spillover;
+- three routing modes: `load-balanced` for ordinary in-flight balancing, `session-key` for a client-supplied
+  session key with bounded stickiness, and `kv-aware` for real KV locality plus known load (their policy
+  identifiers are `load-balanced-v1`, `session-key-v1`, and `kv-aware-v1`);
 - non-blocking admission, per-backend connection bounds, transport-error EWMA circuits and state garbage collection;
 - Prometheus routing/discovery/backend metrics and `X-FishMesh-*` request provenance;
 - strict configuration, probes, graceful shutdown, least-privilege RBAC and race-tested request lifecycle;
 - a pinned llm-d Router v0.9.0 adapter and `fishmesh-epp` composition root with local contract tests.
 
 The R6A–R6B real-signal and request-path work is complete: vLLM Render/KVEvents/replay produced a per-Pod
-cross-session match for a shared system prompt, and the Gateway consumes that state for `exact-cache-load-v1`.
+cross-session match for a shared system prompt, and the Gateway consumes that state for `kv-aware-v1`.
 Real eviction, subscriber recovery and Pod replacement remove stale locality; unknown or stale state explicitly
-degrades to load-aware routing rather than masquerading as a zero-token match.
+degrades to load-balanced routing rather than masquerading as a zero-token match.
 
-`X-FishMesh-Prefix-Key` remains an optional compatibility session hint; the exact demo below deliberately omits it
+`X-FishMesh-Session-Key` remains an optional compatibility session hint; the KV-aware demo below deliberately omits it
 to demonstrate cache reuse across distinct user messages.
 
 ## Routing contract
@@ -90,7 +92,7 @@ The target policy remains deliberately explainable:
 3. estimate queued work and uncached prefill cost from fresh load samples;
 4. apply a hard overload guard so cache locality cannot dominate severe pressure;
 5. use a small benefit margin/hysteresis to avoid routing churn;
-6. degrade from exact-cache-load to load-aware when KV state is unavailable or stale;
+6. degrade from kv-aware to load-balanced when KV state is unavailable or stale;
 7. use an optional session hint only as a tie-breaker or short-term stability signal;
 8. expose a typed policy, reason, cache source and degradation state for every decision.
 
@@ -99,11 +101,12 @@ operable path from real engine state to a lightweight streaming data plane, plus
 
 ## Five-minute Lite demo
 
-This demo assumes the Lite prerequisites in [`deploy/lite-exact/README.md`](deploy/lite-exact/README.md): a K3s
-cluster, the model PV and an importable Gateway image. It first proves the safe default (`bounded-affinity`), then
-temporarily enables the explicit exact overlay. Standard mode / llm-d integration is intentionally deferred.
+This demo assumes the Lite prerequisites in [`deploy/lite-kv-aware/README.md`](deploy/lite-kv-aware/README.md): a K3s
+cluster, the model PV and an importable Gateway image. It first proves the ordinary `load-balanced` default, then
+temporarily enables the explicit KV-aware overlay. The optional `session-key` mode is shown by the session-key
+experiment overlay. Standard mode / llm-d integration is intentionally deferred.
 
-Verify the repository and the bounded-affinity baseline:
+Verify the repository and the load-balanced baseline:
 
 ```bash
 make ci
@@ -112,18 +115,18 @@ kubectl --kubeconfig ~/.kube/fishmesh.yaml get nodes
 kubectl --kubeconfig ~/.kube/fishmesh.yaml -n kubellm get deployment
 ```
 
-Install the exact overlay and wait for its real KV signal path. The checked-in overlay uses `r6d2-r1`.
+Install the KV-aware overlay and wait for its real KV signal path. The checked-in overlay uses `r6d2-r1`.
 
 ```bash
 make image VERSION=r6d2-r1
-kubectl --kubeconfig ~/.kube/fishmesh.yaml apply -k deploy/lite-exact
+kubectl --kubeconfig ~/.kube/fishmesh.yaml apply -k deploy/lite-kv-aware
 kubectl --kubeconfig ~/.kube/fishmesh.yaml -n kubellm rollout status deploy/qwen-vllm --timeout=10m
 kubectl --kubeconfig ~/.kube/fishmesh.yaml -n kubellm rollout status deploy/fishmesh-gateway --timeout=5m
 kubectl --kubeconfig ~/.kube/fishmesh.yaml -n kubellm port-forward svc/fishmesh-gateway 8080:8080
 ```
 
 In a second terminal, make two streaming requests with the same long system prompt and different user messages.
-Do **not** send `X-FishMesh-Prefix-Key`; save response headers separately.
+Do **not** send `X-FishMesh-Session-Key`; save response headers separately.
 
 ```bash
 SYSTEM_PROMPT="$(printf 'FishMesh demo policy: answer concisely, state assumptions, preserve streaming semantics, and never reveal hidden reasoning. %.0s' {1..32})"
@@ -150,12 +153,12 @@ curl -sS -D /tmp/fishmesh-second.headers -N http://127.0.0.1:8080/v1/chat/comple
     "max_tokens": 64
   }'
 
-grep -iE 'x-fishmesh-(exact-status|policy|route-reason|cached-prefix-tokens)' \
+grep -iE 'x-fishmesh-(kv-status|policy|route-reason|cached-prefix-tokens)' \
   /tmp/fishmesh-first.headers /tmp/fishmesh-second.headers
 ```
 
-The first request may correctly show `match-unavailable` with `exact-load-fallback-v1` while replay becomes fresh.
-After a valid prewarm, the second should show `available`, `exact-cache-load-v1`, `exact-cache-load`, and a
+The first request may correctly show `match-unavailable` with `kv-aware-load-fallback-v1` while replay becomes fresh.
+After a valid prewarm, the second should show `available`, `kv-aware-v1`, `kv-aware`, and a
 non-zero `X-FishMesh-Cached-Prefix-Tokens`. `available` with zero cached tokens is a real zero match; it is not the
 same state as unavailable. Restore the default when finished:
 `kubectl --kubeconfig ~/.kube/fishmesh.yaml apply -k deploy/baseline/base`.
@@ -165,26 +168,38 @@ loaded rules and a provisioned `FishMesh Gateway` dashboard. It intentionally ha
 receiver, so rules are evaluated and visible but are not delivered externally. See
 [`deploy/monitoring/README.md`](deploy/monitoring/README.md) and [`docs/notes/runbook.md`](docs/notes/runbook.md).
 
-## Local conversation and bounded profiles
+## Local client and final pressure test
 
-`fishmesh-client` is a separate local Go client, not part of the Gateway image or the frozen development loadgen.
+`fishmesh-client` is the only checked-in external test client; it is not part of the Gateway image.
 It streams text while printing the fixed `X-FishMesh-*` decision-header allowlist, TTFT and total duration to stderr.
-Keep the port-forward above running, then use an explicit history path for a normal multi-turn conversation:
+Keep the port-forward above running, then start a normal multi-turn conversation. If `--history` is omitted, the
+client creates a private timestamped file under `~/.local/state/fishmesh/`; pass `--history` when you want to resume
+the same conversation later:
 
 ```bash
 go run ./cmd/fishmesh-client chat \
-  --history ~/.local/state/fishmesh/chat.json \
   --system 'Answer concisely.'
 ```
 
-For a short, bounded profile, it writes append-only JSONL metadata, every attempt (including failures), and a
-summary. Defaults are 200 requests, concurrency 4, 32 tokens and a 90-second timeout; higher concurrency requires
-an explicit acknowledgement.
+```bash
+go run ./cmd/fishmesh-client chat \
+  --history ~/.local/state/fishmesh/chat.json
+```
+
+For the final pressure test, `bench` reads a deterministic matrix of prompt lengths, quantities, batches, same-prefix,
+different-prefix and mixed-prefix scenarios. It writes `plan.json`, every request attempt as `requests.jsonl`, and
+automatic `report.json`/`report.md` summaries grouped by scenario and batch. Prompt text, raw SSE and API keys are never
+written to these artifacts.
 
 ```bash
 go run ./cmd/fishmesh-client bench \
-  --mode shared-prefix --output /tmp/fishmesh-profile.jsonl
+  --plan configs/final-pressure.json \
+  --output-dir artifacts/bench/final-pressure
 ```
+
+Omitting `--plan` uses the built-in final matrix. Batches are sequential, requests inside a batch are bounded by the
+declared concurrency, and batch pauses give KVEvents/replay time to settle. The client never changes routing mode,
+clears cache, rolls Pods or starts another workload.
 
 The client reads an optional `FISHMESH_API_KEY` only for the outgoing authorization header. It never writes that key,
 prompts, raw SSE payloads or arbitrary upstream headers into history or benchmark JSONL. It does not switch routing
@@ -197,26 +212,25 @@ ANSI output. Benchmark JSONL is always plain.
 | Priority | Scope | Decision |
 | --- | --- | --- |
 | Primary | Gateway, request path, routing, discovery, observation, circuit, admission and transport | Productize |
-| New core | tokenization, KVEvents/index and exact-cache-load policy | Complete; Lite exact overlay is available |
+| New core | tokenization, KVEvents/index and kv-aware policy | Complete; Lite KV-aware overlay is available |
 | Standard | llm-d adapter, `fishmesh-epp`, Gateway/InferencePool deployment | Keep; complete after Lite MVP |
-| Development only | simulator and load generator | Freeze features; retain for regression/benchmark |
-| Frozen | analyst and Diagnostics context | Security/build fixes only; remove from default image/deploy |
+| Final test tool | `fishmesh-client bench` | Maintain the matrix and report contract |
+| Historical | simulator, loadgen, analyst and one-time probes | Removed from the default tree; conclusions remain in stage notes/Git history |
 | Excluded | eBPF, Agent actuator, FishMesh CRD/Operator, P/D, shared DB and generic AI Gateway | Outside this MVP |
 
-Removing a module from the product surface does not mean immediately deleting its history. Low-priority code is
-first frozen and split out of release artifacts; physical deletion, if useful, is a separate reviewable change.
+Historical implementation code is kept recoverable through Git history, while the default tree contains only the
+Gateway product, the final client and the active Lite deployment surface.
 
 ## Roadmap
 
-1. **R6A–R6C (complete):** real Render/KVEvents/replay, bounded capability domains, exact request path,
+1. **R6A–R6C (complete):** real Render/KVEvents/replay, bounded capability domains, KV-aware request path,
    gateway-only Lite image and real rollout/failure acceptance. Monitoring assets are present but not live-validated.
-2. **R6D (complete):** bounded Service/load-only/exact profiles, including controlled c=1 prefix segments; results
+2. **R6D (complete):** bounded Service/load-balanced/KV-aware profiles, including controlled c=1 prefix segments; results
    are correctness/profile evidence only.
 3. **Lite release closeout (in progress):** user demo, release artifacts and upgrade/rollback guidance.
 4. **R6E — Standard delivery (deferred):** Gateway/HTTPRoute/InferencePool/EPP deployment and wire-level contracts.
 
-Experiments only decide an implementation, verify acceptance or prevent regression. Existing simulator and
-historical experiment artifacts are not independent product tracks.
+Experiments only decide an implementation or verify acceptance; they are not independent product tracks.
 
 ## Engineering rules
 
@@ -229,7 +243,7 @@ Production code uses clear Chinese comments to explain invariants, ownership, ca
 degradation. Comments must explain why the behavior exists, not translate the Go syntax.
 
 See the [project charter](docs/design/project-charter.md), [architecture](docs/design/architecture.md),
-[implementation plan](docs/design/plan.md), [ADR-002](docs/design/decisions/002-lite-exact-kv-routing.md) and
+[implementation plan](docs/design/plan.md), [ADR-002](docs/design/decisions/002-lite-kv-aware-routing.md) and
 [current status](docs/notes/project-status.md).
 
 ## Verified environment and limitations

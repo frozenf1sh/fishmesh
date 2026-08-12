@@ -59,13 +59,16 @@ patches:
     patch: |-
       - op: replace
         path: /spec/template/spec/containers/0/image
-        value: fishmesh-gateway:r6f-r2
+        value: fishmesh-gateway:r6g-final-r1
       - op: replace
         path: /spec/template/spec/automountServiceAccountToken
         value: true
       - op: add
         path: /spec/template/metadata/annotations/fishmesh.io~1gateway-image-revision
-        value: r6f-r2
+        value: r6g-final-r1
+      - op: replace
+        path: /spec/template/metadata/annotations/fishmesh.io~1image-amd64-digest
+        value: sha256:7d7fbce59f9795de2383239faacbd001d5590933a683f0ac8234cf23371e28bd
       - op: add
         path: /spec/template/metadata/annotations/fishmesh.io~1runtime-profile
         value: lite-kv-aware

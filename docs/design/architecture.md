@@ -2,8 +2,8 @@
 
 > 状态：R1–R5C、R6A 已完成，2026-08-11 进入 R6B。方向见
 > [`project-charter.md`](project-charter.md)，代码规则见
-> [`code-organization.md`](code-organization.md)，Exact KV 决策见
-> [`ADR-002`](decisions/002-lite-exact-kv-routing.md)。
+> [`code-organization.md`](code-organization.md)，KV-aware 决策见
+> [`ADR-002`](decisions/002-lite-kv-aware-routing.md)。
 
 ## 1. 架构原则
 
@@ -104,7 +104,7 @@ tokenization/
 - 支持的 OpenAI route 到 Render API 的显式映射；
 - model、token IDs、cache salt/额外 hash 输入的稳定值对象；
 - timeout、取消、响应体上限和错误分类；
-- exact 不可用时返回 typed degradation，不自行选择 backend。
+- KV-aware 不可用时返回 typed degradation，不自行选择 backend。
 
 它不负责 KVEvents、index、routing、HTTP response 或 fallback。
 
@@ -178,13 +178,13 @@ R6B 完成后，`requestpath` 主流程保持一个抽象层级：
 
 ```go
 func (s *service) Select(ctx context.Context, request Request) (Lease, error) {
-	// 1. 获得与模型模板一致的真实 Token IDs；失败时记录 exact 降级原因。
+	// 1. 获得与模型模板一致的真实 Token IDs；失败时记录 KV-aware 降级原因。
 	prompt := s.tokenize(ctx, request)
 
 	// 2. 构建 endpoint、负载、故障和逐 Pod cache match 的不可变快照。
 	snapshot := s.snapshot(ctx, prompt)
 
-	// 3. 应用 eligibility 与 exact-cache-load 纯策略。
+	// 3. 应用 eligibility 与 kv-aware 纯策略。
 	decision, err := s.router.Select(request.Profile(prompt), snapshot)
 	if err != nil {
 		return Lease{}, err
@@ -232,7 +232,7 @@ EndpointSnapshot {
 3. 根据 queued work/prefill rate 估算等待与 prefill 成本；
 4. 使用 hard overload guard；
 5. 用最小 benefit margin/hysteresis 避免为很小 cache 差异抖动；
-6. exact 无效时回到 load-aware；
+6. KV-aware 无效时回到 load-balanced；
 7. session hint 只做 tie-break；
 8. 返回 typed policy/reason/degradation 和解释字段。
 
@@ -290,20 +290,18 @@ Pod IP，不能再把已选择请求交给随机 backend Service。
 
 ### Diagnostics
 
-`fishmesh-analyst`、Diagnostics domain/application/adapters/delivery 全部冻结。只允许安全或构建
-修复；R6C 从默认镜像、默认部署和 README 主流程移除。不得为 exact KV 增加新 collector 或让
-Analyst 进入请求路径。
+`fishmesh-analyst`、Diagnostics domain/application/adapters/delivery 已从默认工作树移除。历史实现和
+验收结论保留在 Git 历史与阶段记录中；不得为 KV-aware 恢复独立 collector 或让 Analyst 进入请求路径。
 
 ### Simulator
 
-`internal/simulator` 保留现有 delay、queue/running、HTTP error、stream abort、held stream 和
-控制 API，用于 deterministic fault/race regression。R6 不增加模拟 KVEvents 来替代真实门禁；
-只有生产实现已有 KV event 状态机后，才允许加入最小 deterministic fixture 防回归。
+`internal/simulator` 和依赖它的 simulator E2E 已移出默认工作树。真实 Gateway 行为由 domain contract
+tests、httptest fixture 和最终真实集群验收覆盖；不再维护第二套独立模拟服务。
 
 ### Workload
 
-loadgen 只作为独立客户端和有限 benchmark 工具，不 import Serving 内部包，不进入 product
-image，不扩展成实验平台。
+最终 workload 只保留 `fishmesh-client bench`。它不 import Serving 内部包，不进入 product image，不切换
+路由模式或清理集群状态；历史 loadgen 通过 Git 历史保留，不再参与 `go test ./...` 或默认 manifest。
 
 ## 11. 演进顺序
 

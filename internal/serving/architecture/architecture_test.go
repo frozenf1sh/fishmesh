@@ -17,7 +17,6 @@ type dependencyRule struct {
 
 func TestAtomicDomainDependencies(t *testing.T) {
 	rules := []dependencyRule{
-		newRule("internal/simulator"),
 		newRule("internal/serving/admission"),
 		newRule("internal/serving/backend"),
 		newRule("internal/serving/tokenization"),
@@ -32,7 +31,6 @@ func TestAtomicDomainDependencies(t *testing.T) {
 		newRule("internal/serving/requestpath", "internal/serving/backend", "internal/serving/circuit", "internal/serving/discovery", "internal/serving/kvcache", "internal/serving/observation", "internal/serving/prediction", "internal/serving/routing", "internal/serving/tokenization"),
 		newRule("internal/serving/gateway", "internal/serving/admission", "internal/serving/backend", "internal/serving/discovery", "internal/serving/observation", "internal/serving/requestpath", "internal/serving/routing", "internal/serving/transport"),
 		newRule("internal/serving/config", "internal/serving/admission", "internal/serving/backend", "internal/serving/circuit", "internal/serving/discovery", "internal/serving/gateway", "internal/serving/identity", "internal/serving/kvcache", "internal/serving/observation", "internal/serving/prediction", "internal/serving/requestpath", "internal/serving/routing", "internal/serving/tokenization", "internal/serving/transport"),
-		newRule("internal/workload/loadgen"),
 	}
 
 	root := repositoryRoot(t)

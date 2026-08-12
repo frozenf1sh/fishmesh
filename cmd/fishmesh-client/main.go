@@ -4,11 +4,13 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/frozenf1sh/fishmesh/internal/workload/client"
@@ -30,6 +32,9 @@ const (
 	ansiBlue   = ansiEscape + "34m"
 	ansiPurple = ansiEscape + "35m"
 	ansiDim    = ansiEscape + "2m"
+
+	defaultHistoryRelativeDir = ".local/state/fishmesh"
+	defaultHistoryTimestamp   = "20060102T150405.000000000Z"
 )
 
 // colorMode 只控制面向人的诊断输出；机器可读输出永远不包含 ANSI 控制序列。
@@ -76,7 +81,7 @@ func runRequest(arguments []string, output, diagnostics io.Writer) error {
 	endpoint, model, maxTokens, timeout := commonFlags(set)
 	prompt := set.String("prompt", "", "required user prompt")
 	system := set.String("system", "", "optional system prompt")
-	prefixKey := set.String("prefix-key", "", "optional compatibility session hint")
+	sessionKey := set.String("session-key", "", "optional compatibility session hint")
 	color := set.String("color", string(colorAuto), "auto|always|never terminal diagnostic colors")
 	if err := set.Parse(arguments); err != nil {
 		return err
@@ -97,7 +102,7 @@ func runRequest(arguments []string, output, diagnostics io.Writer) error {
 		messages = append(messages, client.Message{Role: client.RoleSystem, Content: *system})
 	}
 	messages = append(messages, client.Message{Role: client.RoleUser, Content: *prompt})
-	result, err := service.Send(context.Background(), client.Request{Messages: messages, PrefixKey: *prefixKey, StreamOutput: output})
+	result, err := service.Send(context.Background(), client.Request{Messages: messages, SessionKey: *sessionKey, StreamOutput: output})
 	fmt.Fprintln(output)
 	fprintlnDiagnosticEvidence(diagnostics, result, colorEnabled)
 	return err
@@ -107,25 +112,32 @@ func runChat(arguments []string, input io.Reader, output, diagnostics io.Writer)
 	set := flag.NewFlagSet("chat", flag.ContinueOnError)
 	set.SetOutput(diagnostics)
 	endpoint, model, maxTokens, timeout := commonFlags(set)
-	historyPath := set.String("history", "", "required local history JSON path")
+	historyPath := set.String("history", "", "local history JSON path (default ~/.local/state/fishmesh/<timestamp>.json)")
 	system := set.String("system", "", "initial system prompt for an empty history")
-	prefixKey := set.String("prefix-key", "", "optional compatibility session hint")
+	sessionKey := set.String("session-key", "", "optional compatibility session hint")
 	clear := set.Bool("clear", false, "remove the selected history and exit")
 	color := set.String("color", string(colorAuto), "auto|always|never terminal diagnostic colors")
 	if err := set.Parse(arguments); err != nil {
 		return err
 	}
-	if *historyPath == "" {
-		return errors.New("--history is required")
+	if *clear && *historyPath == "" {
+		return errors.New("--clear requires --history so an existing conversation is selected explicitly")
+	}
+	resolvedHistoryPath, err := resolveHistoryPath(*historyPath, time.Now())
+	if err != nil {
+		return err
 	}
 	if *clear {
-		return client.ClearHistory(*historyPath)
+		return client.ClearHistory(resolvedHistoryPath)
+	}
+	if *historyPath == "" {
+		fmt.Fprintf(diagnostics, "using default history=%s\n", resolvedHistoryPath)
 	}
 	colorEnabled, err := colorForDiagnostics(*color, diagnostics)
 	if err != nil {
 		return err
 	}
-	messages, err := client.LoadHistory(*historyPath)
+	messages, err := client.LoadHistory(resolvedHistoryPath)
 	if err != nil {
 		return err
 	}
@@ -144,18 +156,31 @@ func runChat(arguments []string, input io.Reader, output, diagnostics io.Writer)
 			continue
 		}
 		requestMessages := append(append([]client.Message(nil), messages...), client.Message{Role: client.RoleUser, Content: prompt})
-		result, requestErr := service.Send(context.Background(), client.Request{Messages: requestMessages, PrefixKey: *prefixKey, StreamOutput: output})
+		result, requestErr := service.Send(context.Background(), client.Request{Messages: requestMessages, SessionKey: *sessionKey, StreamOutput: output})
 		fmt.Fprintln(output)
 		fprintlnDiagnosticEvidence(diagnostics, result, colorEnabled)
 		if requestErr != nil {
 			return requestErr
 		}
 		messages = append(requestMessages, client.Message{Role: client.RoleAssistant, Content: result.Text})
-		if err := client.SaveHistory(*historyPath, messages); err != nil {
+		if err := client.SaveHistory(resolvedHistoryPath, messages); err != nil {
 			return err
 		}
 	}
 	return scanner.Err()
+}
+
+// resolveHistoryPath keeps the CLI's implicit conversation state in the user's private state directory.
+// A timestamped file makes each invocation independent unless the user explicitly supplies --history.
+func resolveHistoryPath(path string, now time.Time) (string, error) {
+	if path != "" {
+		return path, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve default history path: %w", err)
+	}
+	return filepath.Join(home, defaultHistoryRelativeDir, now.UTC().Format(defaultHistoryTimestamp)+".json"), nil
 }
 
 // colorForDiagnostics 默认不向重定向 stderr 或测试 writer 写终端控制序列，避免污染日志和脚本输入。
@@ -198,13 +223,13 @@ func fprintlnDiagnosticEvidence(diagnostics io.Writer, result client.Result, col
 // formatDiagnosticEvidence 只突出人类排障关键值，不改变固定 header allowlist 或 JSONL schema。
 func formatDiagnosticEvidence(result client.Result, color bool) string {
 	headers := result.Headers
-	return fmt.Sprintf("ttft=%s duration=%s routing_mode=%s route_reason=%s policy=%s exact_status=%s cached_prefix_tokens=%d backend_id=%s preferred_backend_id=%s upstream=%s spillover_reason=%s",
+	return fmt.Sprintf("ttft=%s duration=%s routing_mode=%s route_reason=%s policy=%s kv_status=%s cached_prefix_tokens=%d backend_id=%s preferred_backend_id=%s upstream=%s spillover_reason=%s",
 		colorize(result.TTFT.Round(time.Millisecond).String(), ansiCyan, color),
 		colorize(result.Duration.Round(time.Millisecond).String(), ansiDim, color),
 		colorize(headers.RoutingMode, ansiBlue, color),
 		colorize(headers.RouteReason, ansiYellow, color),
 		colorize(headers.Policy, ansiGreen, color),
-		colorize(headers.ExactStatus, ansiYellow, color),
+		colorize(headers.KVStatus, ansiYellow, color),
 		headers.CachedPrefixTokens,
 		colorize(headers.BackendID, ansiPurple, color), headers.PreferredBackendID, headers.Upstream, headers.SpilloverReason)
 }
@@ -217,35 +242,85 @@ func colorize(value, sequence string, enabled bool) string {
 }
 
 func runBenchmark(arguments []string, diagnostics io.Writer) error {
-	defaults := client.DefaultBenchmarkConfig()
 	set := flag.NewFlagSet("bench", flag.ContinueOnError)
 	set.SetOutput(diagnostics)
-	endpoint, model, maxTokens, timeout := commonFlags(set)
-	mode := set.String("mode", string(defaults.Mode), "uniform|shared-prefix|hot-prefix|conversation")
-	requests := set.Int("requests", defaults.Requests, "number of requests")
-	concurrency := set.Int("concurrency", defaults.Concurrency, "parallel requests; over 4 requires opt-in")
-	prefixGroups := set.Int("prefix-groups", defaults.PrefixGroups, "shared-prefix groups")
-	prefixBytes := set.Int("prefix-bytes", defaults.PrefixBytes, "generated prefix bytes")
-	hotRatio := set.Int("hot-prefix-ratio", 80, "percentage routed to hot prefix group")
-	allowHigh := set.Bool("allow-high-concurrency", false, "acknowledge GPU load above the safe default")
-	resultPath := set.String("output", "", "required append-only JSONL result path")
-	runID := set.String("run-id", "", "optional result run ID")
+	endpoint := set.String("endpoint", defaultEndpoint, "OpenAI-compatible Gateway URL")
+	model := set.String("model", defaultModel, "model name")
+	maxTokens := set.Int("max-tokens", 0, "override plan max generated tokens")
+	timeout := set.Duration("timeout", 0, "override plan request timeout")
+	planPath := set.String("plan", "", "JSON benchmark plan; omitted uses the built-in final matrix")
+	outputDir := set.String("output-dir", "", "report directory; default artifacts/bench/<run-id>")
+	runID := set.String("run-id", "", "override the plan run ID")
+	allowHigh := set.Bool("allow-high-concurrency", false, "acknowledge high concurrency declared by the plan")
 	if err := set.Parse(arguments); err != nil {
 		return err
 	}
-	if *resultPath == "" {
-		return errors.New("--output is required")
+	var plan client.BenchmarkPlan
+	var err error
+	if *planPath == "" {
+		plan = client.DefaultBenchmarkPlan()
+	} else {
+		plan, err = client.LoadBenchmarkPlan(*planPath)
+		if err != nil {
+			return err
+		}
 	}
-	service, err := newClient(*endpoint, *model, *maxTokens, *timeout)
+	if *maxTokens > 0 {
+		plan.MaxTokens = *maxTokens
+	}
+	if *timeout > 0 {
+		plan.RequestTimeoutMS = int((*timeout) / time.Millisecond)
+	}
+	if *runID != "" {
+		plan.RunID = *runID
+	}
+	if plan.RunID == "" {
+		plan.RunID = time.Now().UTC().Format(defaultHistoryTimestamp)
+	}
+	if *allowHigh {
+		plan.AllowHighConcurrency = true
+	}
+	if err := plan.Validate(); err != nil {
+		return err
+	}
+	requestTimeout := time.Duration(plan.RequestTimeoutMS) * time.Millisecond
+	service, err := newClient(*endpoint, *model, plan.MaxTokens, requestTimeout)
 	if err != nil {
 		return err
 	}
-	file, err := os.OpenFile(*resultPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		return fmt.Errorf("open benchmark output: %w", err)
+	if *outputDir == "" {
+		*outputDir = filepath.Join("artifacts", "bench", plan.RunID)
 	}
-	defer file.Close()
-	summary, err := service.Benchmark(context.Background(), client.BenchmarkConfig{RunID: *runID, Mode: client.BenchmarkMode(*mode), Requests: *requests, Concurrency: *concurrency, PrefixGroups: *prefixGroups, PrefixBytes: *prefixBytes, HotPrefixRatio: *hotRatio, MaxTokens: *maxTokens, RequestTimeout: *timeout, AllowHighConcurrency: *allowHigh}, file)
-	fmt.Fprintf(diagnostics, "completed=%d succeeded=%d failed=%d ttft_p50=%.2fms ttft_p95=%.2fms cached_prefix_samples=%d cached_prefix_sum=%d\n", summary.Completed, summary.Succeeded, summary.Failed, summary.TTFTP50MS, summary.TTFTP95MS, summary.CachedPrefixSamples, summary.CachedPrefixSum)
-	return err
+	if err := os.MkdirAll(*outputDir, 0o755); err != nil {
+		return fmt.Errorf("create benchmark output directory: %w", err)
+	}
+	planJSON, err := json.MarshalIndent(plan, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode benchmark plan: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(*outputDir, "plan.json"), planJSON, 0o644); err != nil {
+		return fmt.Errorf("write benchmark plan: %w", err)
+	}
+	requestsPath := filepath.Join(*outputDir, "requests.jsonl")
+	file, err := os.OpenFile(requestsPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return fmt.Errorf("open benchmark requests: %w", err)
+	}
+	report, runErr := service.RunPlan(context.Background(), plan, file)
+	closeErr := file.Close()
+	if runErr == nil && closeErr != nil {
+		runErr = fmt.Errorf("close benchmark requests: %w", closeErr)
+	}
+	reportJSON, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode benchmark report: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(*outputDir, "report.json"), reportJSON, 0o644); err != nil {
+		return fmt.Errorf("write benchmark report: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(*outputDir, "report.md"), []byte(report.Markdown()), 0o644); err != nil {
+		return fmt.Errorf("write benchmark markdown report: %w", err)
+	}
+	fmt.Fprintf(diagnostics, "run_id=%s output_dir=%s completed=%d succeeded=%d failed=%d ttft_p50=%.2fms ttft_p95=%.2fms report=%s\n", report.RunID, *outputDir, report.Completed, report.Succeeded, report.Failed, report.TTFTP50MS, report.TTFTP95MS, filepath.Join(*outputDir, "report.md"))
+	return runErr
 }

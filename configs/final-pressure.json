@@ -1,0 +1,17 @@
+{
+  "run_id": "final-pressure",
+  "max_tokens": 32,
+  "request_timeout_ms": 90000,
+  "allow_high_concurrency": false,
+  "scenarios": [
+    {"name": "same-short", "prefix_pattern": "same-prefix", "prefix_bytes": 256, "prefix_groups": 2, "batches": 2, "batch_size": 8, "concurrency": 2},
+    {"name": "same-medium", "prefix_pattern": "same-prefix", "prefix_bytes": 2048, "prefix_groups": 2, "batches": 3, "batch_size": 8, "concurrency": 2},
+    {"name": "same-long", "prefix_pattern": "same-prefix", "prefix_bytes": 8192, "prefix_groups": 1, "batches": 2, "batch_size": 12, "concurrency": 2},
+    {"name": "different-short", "prefix_pattern": "different-prefix", "prefix_bytes": 256, "prefix_groups": 1, "batches": 2, "batch_size": 8, "concurrency": 2},
+    {"name": "different-medium", "prefix_pattern": "different-prefix", "prefix_bytes": 2048, "prefix_groups": 1, "batches": 3, "batch_size": 8, "concurrency": 2},
+    {"name": "different-long", "prefix_pattern": "different-prefix", "prefix_bytes": 8192, "prefix_groups": 1, "batches": 2, "batch_size": 12, "concurrency": 2},
+    {"name": "mixed-short", "prefix_pattern": "mixed-prefix", "prefix_bytes": 256, "prefix_groups": 4, "batches": 2, "batch_size": 8, "concurrency": 4, "mixed_hot_ratio": 60, "mixed_unique_ratio": 20},
+    {"name": "mixed-medium", "prefix_pattern": "mixed-prefix", "prefix_bytes": 2048, "prefix_groups": 4, "batches": 3, "batch_size": 8, "concurrency": 4, "mixed_hot_ratio": 60, "mixed_unique_ratio": 20},
+    {"name": "mixed-long", "prefix_pattern": "mixed-prefix", "prefix_bytes": 8192, "prefix_groups": 4, "batches": 2, "batch_size": 12, "concurrency": 4, "mixed_hot_ratio": 60, "mixed_unique_ratio": 20}
+  ]
+}

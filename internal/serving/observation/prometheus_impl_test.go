@@ -9,7 +9,6 @@ import (
 
 	"github.com/frozenf1sh/fishmesh/internal/serving/backend"
 	"github.com/frozenf1sh/fishmesh/internal/serving/discovery"
-	"github.com/frozenf1sh/fishmesh/internal/simulator"
 )
 
 func TestPrometheusCollectorMapsPerBackendMetrics(t *testing.T) {
@@ -34,7 +33,7 @@ vllm:time_to_first_token_seconds_bucket{le="+Inf"} 10
 `))
 	}))
 	defer server.Close()
-	collector := NewPrometheus(PrometheusConfig{HTTPClient: server.Client(), Clock: func() time.Time { return time.Unix(5, 0) }})
+	collector := NewPrometheus(PrometheusConfig{HTTPClient: server.Client(), MetricsPath: "/metrics", Clock: func() time.Time { return time.Unix(5, 0) }})
 	state := collector.Collect(context.Background(), backend.Backend{ID: "endpoint-a", URL: server.URL + "/v1"})
 	if state.Status != StatusOK || state.ObservedAt != time.Unix(5, 0) {
 		t.Fatalf("unexpected state: %+v", state)
@@ -60,7 +59,7 @@ func TestServiceMarksStaleObservationDegraded(t *testing.T) {
 	defer resolver.Close()
 	now := time.Unix(100, 0)
 	service, err := New(
-		Config{Interval: time.Hour, MaxAge: 5 * time.Second, Clock: func() time.Time { return now }},
+		Config{Interval: time.Hour, MaxAge: 5 * time.Second, RequestTimeout: 5 * time.Second, Clock: func() time.Time { return now }},
 		Dependencies{Resolver: resolver, Collector: fakeCollector{clock: time.Unix(90, 0)}},
 	)
 	if err != nil {
@@ -87,26 +86,12 @@ func TestPrometheusCollectorPreservesObservedZero(t *testing.T) {
 		_, _ = writer.Write([]byte("# TYPE vllm:num_requests_waiting gauge\nvllm:num_requests_waiting 0\n"))
 	}))
 	defer server.Close()
-	collector := NewPrometheus(PrometheusConfig{HTTPClient: server.Client()})
+	collector := NewPrometheus(PrometheusConfig{HTTPClient: server.Client(), MetricsPath: "/metrics"})
 	state := collector.Collect(context.Background(), backend.Backend{ID: "a", URL: server.URL})
 	if !state.QueueLength.Valid || state.QueueLength.Value != 0 {
 		t.Fatalf("observed zero was treated as missing: %+v", state.QueueLength)
 	}
 	if state.RunningRequests.Valid {
 		t.Fatalf("missing running metric was treated as observed: %+v", state.RunningRequests)
-	}
-}
-
-func TestPrometheusCollectorReadsControlledSimulator(t *testing.T) {
-	controlled, err := simulator.New(simulator.Behavior{QueueDepth: 7, RunningRequests: 2})
-	if err != nil {
-		t.Fatal(err)
-	}
-	server := httptest.NewServer(controlled.Handler())
-	defer server.Close()
-	collector := NewPrometheus(PrometheusConfig{})
-	state := collector.Collect(context.Background(), backend.Backend{ID: "simulator", URL: server.URL})
-	if state.Status != StatusOK || !state.QueueLength.Valid || state.QueueLength.Value != 7 || !state.RunningRequests.Valid || state.RunningRequests.Value != 2 {
-		t.Fatalf("unexpected simulator observation: %+v", state)
 	}
 }

@@ -4,7 +4,7 @@
 bin/
 *.oci.tar
 *.test
-artifacts/published/
-artifacts/connection-matrix/
-artifacts/*.jsonl
+artifacts/
 *.jsonl.gz
+docs/diagrams/
+.workbuddy

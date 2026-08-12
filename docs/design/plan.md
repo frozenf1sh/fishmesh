@@ -2,7 +2,7 @@
 
 > 状态：交付优先路线，2026-08-11。R6A 已完成；R5D 不取消但后移。当前进入 R6B
 > tokenization 与 KV cache 能力域。最高方向约束见 [`project-charter.md`](project-charter.md)，决策见
-> [`ADR-002`](decisions/002-lite-exact-kv-routing.md)。
+> [`ADR-002`](decisions/002-lite-kv-aware-routing.md)。
 
 ## 1. 交付目标
 
@@ -28,24 +28,23 @@ llm-d。它证明生态兼容性，不取代 Lite 产品。
 - Go streaming proxy、SSE 透传、取消、TTFT 和 request provenance；
 - EndpointSlice Ready discovery、watch/relist、freshness/readiness 和 Service fallback；
 - per-backend vLLM queue/running observation；
-- bounded-affinity-v1、Rendezvous Hash、TTL/容量上限和负载 spillover；
+- session-key-v1、Rendezvous Hash、TTL/容量上限和负载 spillover；
 - admission、per-backend connection bounds、transport EWMA circuit 和 endpoint state GC；
 - Prometheus metrics、严格配置、graceful shutdown、最小 RBAC 和 Kustomize；
 - 两个 vLLM 0.23.0 副本、prefix caching 和真实 OpenAI/SSE smoke。
 
 ### 已实现但不是主产品
 
-- GPU-free simulator 和 loadgen；
-- `fishmesh-analyst` 与只读 Diagnostics 原型；
-- llm-d Router v0.9.0 Filter/Scorer adapter、`fishmesh-epp` 组合根和本地 conformance。
+- `fishmesh-client` 的最终矩阵压测与报告工具；
+- llm-d Router v0.9.0 Filter/Scorer adapter、`fishmesh-epp` 组合根和本地 conformance（暂挂）。
 
 ### 当前关键缺口
 
 - 产品请求路径还没有启用/消费 vLLM KVEvents（R6A 实验链路已通过并在结束后恢复基础清单）；
-- 当前 `X-FishMesh-Prefix-Key` 是客户端 session hint，不是真实 prefix cache 信号；
+- 当前 `X-FishMesh-Session-Key` 是客户端 session hint，不是真实 prefix cache 信号；
 - Gateway 还没有有界读取、重放请求体和真实 tokenization；
 - 没有逐 Pod KV block index、event freshness 或 eviction/restart 契约；
-- 默认镜像和部署仍捆绑低优先级二进制；
+- 默认 Lite 镜像与 manifest 已收缩到 Gateway/当前 Lite 交付面；llm-d Standard 与 validation 通过显式入口保留；
 - Lite mode 缺少完整安装、dashboard、alerts、runbook、release 和资源预算；
 - Standard mode 尚未完成 Gateway/EPP/InferencePool wire 部署。
 
@@ -57,7 +56,7 @@ llm-d。它证明生态兼容性，不取代 Lite 产品。
 client
   -> fishmesh-gateway Service
   -> bounded OpenAI request body
-  -> vLLM Render API -> exact Token IDs
+  -> vLLM Render API -> KV-aware Token IDs
   -> local KV index <- KVEvents from every vLLM Pod
   -> eligibility + cache/load/failure routing
   -> selected Pod IP
@@ -88,11 +87,11 @@ fallback 和 lease 不能在 EPP 中再运行一份；Standard mode 的空 subse
 ```text
 request
   -> bounded admission and body capture
-  -> exact tokenization
+  -> KV-aware tokenization
   -> endpoint / observation / cache snapshot
   -> eligibility
        Ready && Serving && fresh && circuit closed
-  -> exact-cache-load policy
+  -> kv-aware policy
        estimate uncached prefill + queued work
        apply hard overload guard and hysteresis
   -> bounded transport
@@ -105,7 +104,7 @@ request
 | --- | --- | --- |
 | Endpoint Ready/Serving/Terminating | eligibility | Kubernetes 生命周期事实 |
 | discovery freshness | fallback | 不使用无限陈旧地址 |
-| exact prompt Token IDs | block lookup | 来自同模型 vLLM Render API |
+| KV-aware prompt Token IDs | block lookup | 来自同模型 vLLM Render API |
 | per-Pod cached prefix tokens | locality | 来自 KVEvents index，必须带 freshness |
 | local in-flight / queued work | load cost | 与请求生命周期同步 |
 | vLLM waiting/running/KV usage | overload | 只使用有效且足够新的字段 |
@@ -118,7 +117,7 @@ request
 - 进程生命周期累计 TTFT histogram；
 - 全局累计 Prefix Cache hits/queries；
 - 节点级 GPU utilization、温度和显存；
-- 客户端自称的 prefix key；
+- 客户端自称的 session key；
 - eBPF RTT、重传或 socket stall；
 - LLM 生成的分数或没有量纲解释的任意权重。
 
@@ -140,10 +139,10 @@ Sample[T] {
 
 1. unknown/stale cache 不等于零命中；
 2. Pod UID、model、cache salt 和 endpoint 身份不能混淆；
-3. event 断流、gap 或无法 replay 时，相关 endpoint 的 exact sample 失效；
+3. event 断流、gap 或无法 replay 时，相关 endpoint 的 KV-aware sample 失效；
 4. `uncached_tokens` 不小于零，cache 命中不能绕过 hard overload guard；
 5. terminating、stale、open-circuit backend 不进入候选；
-6. session hint 缺失时仍能 exact/load-aware 路由，不形成空 key 热点；
+6. session hint 缺失时仍能 KV-aware/load-balanced 路由，不形成空 key 热点；
 7. request body、token slice、KV index、connections、in-flight、observations、circuits 和 labels
    均有容量上限或回收；
 8. 请求取消传播到 render/upstream，请求完成后计数必定释放；
@@ -156,8 +155,8 @@ Sample[T] {
 
 - gateway-only release image；
 - `deploy/lite` 声明式安装入口；
-- vLLM exact KVEvents 配置和兼容矩阵；
-- exact/load-only 配置与启动校验；
+- vLLM KV-awareEvents 配置和兼容矩阵；
+- KV-aware/load-balanced 配置与启动校验；
 - cache index/event/tokenization/route 指标；
 - Grafana dashboard、Prometheus alerts 和故障 runbook；
 - 真实集群 smoke、rollout、event stale/recovery 和 benchmark 脚本；
@@ -180,8 +179,7 @@ Sample[T] {
 - diagnostics demo fixture；
 - 历史 experiment overlays。
 
-它们可以作为单独 dev target 保留，但不能继续放在默认 release image、默认 Kustomize 或 README
-主流程中。
+它们的历史结论保留在阶段记录和 Git 历史中；当前默认工作树不再构建或渲染这些历史入口。
 
 ## 7. 实施里程碑
 
@@ -197,7 +195,7 @@ Sample[T] {
 - 记录 event lag、render/lookup latency、index entries 与 RSS；
 - 输出兼容性和 Go/no-go 结论。
 
-验收：[`ADR-002`](decisions/002-lite-exact-kv-routing.md) 第 9 节全部通过。失败时先决定
+验收：[`ADR-002`](decisions/002-lite-kv-aware-routing.md) 第 9 节全部通过。失败时先决定
 pin/upgrade 或删除方案，禁止用 simulator/累计 hit rate 代替。
 
 实测结果为跨会话 128-token 逐 Pod 命中、断流先 invalid 后 replay、3105 个真实 removed 后旧
@@ -211,7 +209,7 @@ pin/upgrade 或删除方案，禁止用 simulator/累计 hit rate 代替。
 2. vLLM Render adapter（阶段 19 已完成）；
 3. `kvcache` 契约、match/freshness 值对象、contract tests（阶段 20 已完成）；
 4. KVEvents/index adapter 和 membership cleanup（阶段 20 已完成）；
-5. `routing` exact-cache-load 输入与纯选择；
+5. `routing` kv-aware 输入与纯选择；
 6. `requestpath` tokenization/cache/load/degradation 编排；
 7. Gateway bounded body/replay 与 response passthrough；
 8. llmd adapter 的 precise `PrefixCacheMatchInfo` 翻译。
@@ -234,8 +232,8 @@ adapter、策略、部署和大规模包移动。
 使用现有真实集群先完成工程 profile，再决定是否需要独立物理 GPU 扩展结论：
 
 - direct Service；
-- FishMesh load-only；
-- FishMesh exact；
+- FishMesh load-balanced；
+- FishMesh KV-aware；
 - llm-d precise。
 
 预设工程目标而非提前声明结果：
@@ -243,21 +241,21 @@ adapter、策略、部署和大规模包移动。
 - routing decision p99 目标小于 1 ms（不含 Render）；
 - 长 SSE steady-state token throughput 目标达到 direct Service 的 95% 以上；
 - 2–8 endpoint、受控 index 容量下 Gateway RSS 目标为 256 MiB 级；
-- cache-cold workload 不显著劣于 load-only；
+- cache-cold workload 不显著劣于 load-balanced；
 - 公共长 prefix workload 的 TTFT 有稳定改善；
-- event stale 时不产生错误的 exact-cache 声明。
+- event stale 时不产生错误的 KV-aware-cache 声明。
 
 若目标未达成，优先优化 body copy、tokenization 调用、index bounds 和 proxy hot path，不通过
 删除正确性检查换性能。
 
-### R6H：成本式 Exact 路由（本地实现，集群验证后置）
+### R6H：成本式 KV-aware 路由（本地实现，集群验证后置）
 
-将 exact 策略从“先比较缓存、再比较负载”的词典序，改为统一的等价未缓存 token 成本：未缓存 token、
+将 KV-aware 策略从“先比较缓存、再比较负载”的词典序，改为统一的等价未缓存 token 成本：未缓存 token、
 已知 queue、已知 running 与 Gateway local in-flight 各自按显式 penalty 相加。hard overload、KV
-unknown/stale 的 load-aware 降级和 session hint 平局语义不变；不引入任意用户前缀的主动复制预热。
+unknown/stale 的 load-balanced 降级和 session hint 平局语义不变；不引入任意用户前缀的主动复制预热。
 
 GPU 节点恢复后才执行受控验收：先确认 observation 与 KV replay 均 fresh，再分别验证 cold 平局、共享
-前缀命中、busy cache owner、stale/replay 与 bounded-affinity 恢复。参数只可由该 profile 校准，当前两
+前缀命中、busy cache owner、stale/replay 与 session-key 恢复。参数只可由该 profile 校准，当前两
 个 time-sliced 副本的数据不得外推为生产性能结论。
 
 ### R6E：Standard mode 闭环
