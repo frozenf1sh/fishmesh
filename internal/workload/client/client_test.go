@@ -33,6 +33,12 @@ func TestSendStreamsTextAndReturnsDecisionHeaders(t *testing.T) {
 		writer.Header().Set(HeaderEstimatorConfidence, "calibrated")
 		writer.Header().Set(HeaderEstimatorVersion, "profile-v1")
 		writer.Header().Set(HeaderLocalDelta, "3")
+		writer.Header().Set(HeaderPredictionStatus, "available")
+		writer.Header().Set(HeaderPredictionModel, "learned-ridge-v1")
+		writer.Header().Set(HeaderPredictionWouldSelect, "backend-b")
+		writer.Header().Set(HeaderPredictionSelectedMS, "44.5")
+		writer.Header().Set(HeaderPredictionWouldSelectMS, "40.0")
+		writer.Header().Set(HeaderPredictionSamples, "16")
 		_, _ = writer.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n"))
 		_, _ = writer.Write([]byte("data: [DONE]\n\n"))
 	}))
@@ -55,6 +61,9 @@ func TestSendStreamsTextAndReturnsDecisionHeaders(t *testing.T) {
 	}
 	if result.Headers.PromptTokens != 1024 || result.Headers.UncachedTokens != 256 || result.Headers.EstimatedTTFTMS != 42.5 || !result.Headers.EstimatorValid || result.Headers.EstimatorVersion != "profile-v1" || result.Headers.LocalDelta != 3 {
 		t.Fatalf("estimator headers = %+v", result.Headers)
+	}
+	if result.Headers.PredictionStatus != "available" || result.Headers.PredictionModel != "learned-ridge-v1" || result.Headers.PredictionWouldSelect != "backend-b" || result.Headers.PredictionSelectedMS != 44.5 || result.Headers.PredictionWouldSelectMS != 40 || result.Headers.PredictionSamples != 16 {
+		t.Fatalf("prediction headers = %+v", result.Headers)
 	}
 }
 

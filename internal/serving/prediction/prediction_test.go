@@ -9,7 +9,7 @@ import (
 
 func TestTrackerContractsShadowNeverChangesSelectionAndRecordsOnlyFirstEvent(t *testing.T) {
 	now := time.Unix(100, 0)
-	tracker, err := New(Config{Mode: ModeShadow, MaxSamples: 8, MaxSampleAge: time.Minute, MinimumSamples: 2, Clock: func() time.Time { return now }})
+	tracker, err := New(Config{Mode: ModeShadow, MaxSamples: 8, MaxSampleAge: time.Minute, MinimumSamples: 2, RefitEvery: 1, Clock: func() time.Time { return now }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,7 +39,7 @@ func TestTrackerContractsShadowNeverChangesSelectionAndRecordsOnlyFirstEvent(t *
 
 func TestTrackerContractsUnknownLoadAndStaleSamplesDoNotBecomePredictions(t *testing.T) {
 	now := time.Unix(100, 0)
-	tracker, err := New(Config{Mode: ModeShadow, MaxSamples: 4, MaxSampleAge: time.Second, MinimumSamples: 1, Clock: func() time.Time { return now }})
+	tracker, err := New(Config{Mode: ModeShadow, MaxSamples: 4, MaxSampleAge: time.Second, MinimumSamples: 1, RefitEvery: 1, Clock: func() time.Time { return now }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,13 @@ func TestTrackerContractsUnknownLoadAndStaleSamplesDoNotBecomePredictions(t *tes
 }
 
 func TestConfigContractsRejectInvalidBounds(t *testing.T) {
-	if _, err := New(Config{Mode: ModeShadow, MaxSamples: 1, MaxSampleAge: time.Second, MinimumSamples: 2}); err == nil {
+	if _, err := New(Config{Mode: ModeShadow, MaxSamples: 1, MaxSampleAge: time.Second, MinimumSamples: 2, RefitEvery: 1}); err == nil {
 		t.Fatal("New accepted minimum samples above maximum")
+	}
+}
+
+func TestConfigRejectsUnboundedRefitInterval(t *testing.T) {
+	if _, err := New(Config{Mode: ModeShadow, MaxSamples: 4, MaxSampleAge: time.Second, MinimumSamples: 1}); err == nil {
+		t.Fatal("New accepted a non-positive refit interval")
 	}
 }

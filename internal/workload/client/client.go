@@ -12,29 +12,35 @@ import (
 )
 
 const (
-	HeaderRoutingMode         = "X-FishMesh-Routing-Mode"
-	HeaderRouteReason         = "X-FishMesh-Route-Reason"
-	HeaderBackendID           = "X-FishMesh-Backend-ID"
-	HeaderPreferredBackendID  = "X-FishMesh-Preferred-Backend-ID"
-	HeaderPolicy              = "X-FishMesh-Policy"
-	HeaderSpilloverReason     = "X-FishMesh-Spillover-Reason"
-	HeaderKVStatus            = "X-FishMesh-KV-Status"
-	HeaderCachedPrefixTokens  = "X-FishMesh-Cached-Prefix-Tokens"
-	HeaderPromptTokens        = "X-FishMesh-Prompt-Tokens"
-	HeaderUncachedTokens      = "X-FishMesh-Uncached-Tokens"
-	HeaderEstimatedTTFTMS     = "X-FishMesh-Estimated-TTFT-Ms"
-	HeaderEstimatorValid      = "X-FishMesh-Estimator-Valid"
-	HeaderEstimatorConfidence = "X-FishMesh-Estimator-Confidence"
-	HeaderEstimatorVersion    = "X-FishMesh-Estimator-Version"
-	HeaderEstimatorReason     = "X-FishMesh-Estimator-Reason"
-	HeaderLoadValid           = "X-FishMesh-Load-Valid"
-	HeaderLoadSampleAgeMS     = "X-FishMesh-Load-Sample-Age-Ms"
-	HeaderQueueDepth          = "X-FishMesh-Queue-Depth"
-	HeaderRunningRequests     = "X-FishMesh-Running-Requests"
-	HeaderLocalDelta          = "X-FishMesh-Local-Delta"
-	HeaderLocalInflight       = "X-FishMesh-Local-Inflight"
-	HeaderHardOverloadCount   = "X-FishMesh-Hard-Overload-Candidates"
-	HeaderUpstream            = "X-FishMesh-Upstream"
+	HeaderRoutingMode             = "X-FishMesh-Routing-Mode"
+	HeaderRouteReason             = "X-FishMesh-Route-Reason"
+	HeaderBackendID               = "X-FishMesh-Backend-ID"
+	HeaderPreferredBackendID      = "X-FishMesh-Preferred-Backend-ID"
+	HeaderPolicy                  = "X-FishMesh-Policy"
+	HeaderSpilloverReason         = "X-FishMesh-Spillover-Reason"
+	HeaderKVStatus                = "X-FishMesh-KV-Status"
+	HeaderCachedPrefixTokens      = "X-FishMesh-Cached-Prefix-Tokens"
+	HeaderPromptTokens            = "X-FishMesh-Prompt-Tokens"
+	HeaderUncachedTokens          = "X-FishMesh-Uncached-Tokens"
+	HeaderEstimatedTTFTMS         = "X-FishMesh-Estimated-TTFT-Ms"
+	HeaderEstimatorValid          = "X-FishMesh-Estimator-Valid"
+	HeaderEstimatorConfidence     = "X-FishMesh-Estimator-Confidence"
+	HeaderEstimatorVersion        = "X-FishMesh-Estimator-Version"
+	HeaderEstimatorReason         = "X-FishMesh-Estimator-Reason"
+	HeaderLoadValid               = "X-FishMesh-Load-Valid"
+	HeaderLoadSampleAgeMS         = "X-FishMesh-Load-Sample-Age-Ms"
+	HeaderQueueDepth              = "X-FishMesh-Queue-Depth"
+	HeaderRunningRequests         = "X-FishMesh-Running-Requests"
+	HeaderLocalDelta              = "X-FishMesh-Local-Delta"
+	HeaderLocalInflight           = "X-FishMesh-Local-Inflight"
+	HeaderHardOverloadCount       = "X-FishMesh-Hard-Overload-Candidates"
+	HeaderPredictionStatus        = "X-FishMesh-Prediction-Status"
+	HeaderPredictionModel         = "X-FishMesh-Prediction-Model"
+	HeaderPredictionWouldSelect   = "X-FishMesh-Prediction-Would-Select"
+	HeaderPredictionSelectedMS    = "X-FishMesh-Prediction-Selected-TTFT-Ms"
+	HeaderPredictionWouldSelectMS = "X-FishMesh-Prediction-Would-Select-TTFT-Ms"
+	HeaderPredictionSamples       = "X-FishMesh-Prediction-Samples"
+	HeaderUpstream                = "X-FishMesh-Upstream"
 
 	RoleSystem    Role = "system"
 	RoleUser      Role = "user"
@@ -76,29 +82,35 @@ type Request struct {
 
 // DecisionHeaders is the allowlisted request provenance returned by FishMesh. It does not retain arbitrary headers.
 type DecisionHeaders struct {
-	RoutingMode            string  `json:"routing_mode,omitempty"`
-	RouteReason            string  `json:"route_reason,omitempty"`
-	BackendID              string  `json:"backend_id,omitempty"`
-	PreferredBackendID     string  `json:"preferred_backend_id,omitempty"`
-	Policy                 string  `json:"policy,omitempty"`
-	SpilloverReason        string  `json:"spillover_reason,omitempty"`
-	KVStatus               string  `json:"kv_status,omitempty"`
-	CachedPrefixTokens     int     `json:"cached_prefix_tokens"`
-	PromptTokens           int     `json:"prompt_tokens,omitempty"`
-	UncachedTokens         int     `json:"uncached_tokens,omitempty"`
-	EstimatedTTFTMS        float64 `json:"estimated_ttft_ms,omitempty"`
-	EstimatorValid         bool    `json:"estimator_valid"`
-	EstimatorConfidence    string  `json:"estimator_confidence,omitempty"`
-	EstimatorVersion       string  `json:"estimator_version,omitempty"`
-	EstimatorReason        string  `json:"estimator_reason,omitempty"`
-	LoadValid              bool    `json:"load_valid"`
-	LoadSampleAgeMS        float64 `json:"load_sample_age_ms,omitempty"`
-	QueueDepth             int64   `json:"queue_depth,omitempty"`
-	RunningRequests        int64   `json:"running_requests,omitempty"`
-	LocalDelta             int64   `json:"local_delta,omitempty"`
-	LocalInflight          int64   `json:"local_inflight,omitempty"`
-	HardOverloadCandidates int     `json:"hard_overload_candidates,omitempty"`
-	Upstream               string  `json:"upstream,omitempty"`
+	RoutingMode             string  `json:"routing_mode,omitempty"`
+	RouteReason             string  `json:"route_reason,omitempty"`
+	BackendID               string  `json:"backend_id,omitempty"`
+	PreferredBackendID      string  `json:"preferred_backend_id,omitempty"`
+	Policy                  string  `json:"policy,omitempty"`
+	SpilloverReason         string  `json:"spillover_reason,omitempty"`
+	KVStatus                string  `json:"kv_status,omitempty"`
+	CachedPrefixTokens      int     `json:"cached_prefix_tokens"`
+	PromptTokens            int     `json:"prompt_tokens,omitempty"`
+	UncachedTokens          int     `json:"uncached_tokens,omitempty"`
+	EstimatedTTFTMS         float64 `json:"estimated_ttft_ms,omitempty"`
+	EstimatorValid          bool    `json:"estimator_valid"`
+	EstimatorConfidence     string  `json:"estimator_confidence,omitempty"`
+	EstimatorVersion        string  `json:"estimator_version,omitempty"`
+	EstimatorReason         string  `json:"estimator_reason,omitempty"`
+	LoadValid               bool    `json:"load_valid"`
+	LoadSampleAgeMS         float64 `json:"load_sample_age_ms,omitempty"`
+	QueueDepth              int64   `json:"queue_depth,omitempty"`
+	RunningRequests         int64   `json:"running_requests,omitempty"`
+	LocalDelta              int64   `json:"local_delta,omitempty"`
+	LocalInflight           int64   `json:"local_inflight,omitempty"`
+	HardOverloadCandidates  int     `json:"hard_overload_candidates,omitempty"`
+	PredictionStatus        string  `json:"prediction_status,omitempty"`
+	PredictionModel         string  `json:"prediction_model,omitempty"`
+	PredictionWouldSelect   string  `json:"prediction_would_select,omitempty"`
+	PredictionSelectedMS    float64 `json:"prediction_selected_ttft_ms,omitempty"`
+	PredictionWouldSelectMS float64 `json:"prediction_would_select_ttft_ms,omitempty"`
+	PredictionSamples       int     `json:"prediction_samples,omitempty"`
+	Upstream                string  `json:"upstream,omitempty"`
 }
 
 // Result is a completed request evidence record. HasCachedPrefixSample prevents unavailable state becoming a zero miss.

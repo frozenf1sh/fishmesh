@@ -175,6 +175,23 @@ func (s *Server) writeDecisionHeaders(writer http.ResponseWriter, requestID stri
 	}
 	writer.Header().Set(headerKVStatus, string(lease.State.KV))
 	writer.Header().Set(headerCachedPrefixTokens, strconv.Itoa(lease.State.CachedPrefixTokens))
+	shadow := lease.State.Prediction
+	if shadow.Status != "" {
+		writer.Header().Set(headerPredictionStatus, string(shadow.Status))
+		if shadow.ModelVersion != "" {
+			writer.Header().Set(headerPredictionModel, shadow.ModelVersion)
+		}
+		if shadow.WouldSelect != "" {
+			writer.Header().Set(headerPredictionWouldSelect, string(shadow.WouldSelect))
+		}
+		if shadow.SelectedEstimate > 0 {
+			writer.Header().Set(headerPredictionSelectedMS, strconv.FormatFloat(float64(shadow.SelectedEstimate)/float64(time.Millisecond), 'f', 3, 64))
+		}
+		if shadow.WouldSelectTTFT > 0 {
+			writer.Header().Set(headerPredictionWouldSelectMS, strconv.FormatFloat(float64(shadow.WouldSelectTTFT)/float64(time.Millisecond), 'f', 3, 64))
+		}
+		writer.Header().Set(headerPredictionSamples, strconv.Itoa(shadow.SamplesPerBackend))
+	}
 	evidence := lease.State.Estimate
 	if evidence.PromptTokens > 0 {
 		writer.Header().Set(headerPromptTokens, strconv.Itoa(evidence.PromptTokens))

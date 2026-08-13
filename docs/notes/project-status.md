@@ -132,6 +132,13 @@ Node Ready、vLLM 2/2、Gateway 1/1，真实请求返回 200；最终 Gateway ro
 再只做 R6I-7 learned-shadow；若误差不能稳定优于 static，不增加在线动态权重复杂度。完整证据见
 `docs/experiments/2026-08-16-r6i6-token-ladder.md`。
 
+R6I-7 的 learned-shadow 实现已完成：prediction 仍只记录已选 backend 的首个 SSE TTFT，样本有界、过期
+清理，模型按固定完成样本数重拟合，非负系数带特征量纲上界；Gateway 与 `fishmesh-client` 新增固定低基数
+shadow 证据头和 JSONL 字段，`compare` 可汇总 learned/static paired error 与 would-select 一致率。当前已用
+声明式 `r6i7-learned-shadow` overlay 部署 shadow + static 研究切片；实验前因一个旧 vLLM generation 的
+sequence gap 停止压测，随后按 PDB 逐个滚动重建 vLLM，两个 endpoint 已恢复 `kv_cache_status=ready`。正式门禁
+结果和是否允许 active 以 R6I-7 实验报告为准；R6I-6 的并发 promotion 失败仍是 active 的独立阻断条件。
+
 README 与 README_CN 现以五分钟 Lite demo 为入口：确认 `load-balanced` 默认基线后临时安装
 `lite-kv-aware`，用不带 session key 的同一长 system prompt、不同 user message 请求读取 KV-aware 决策头，
 再恢复基线；监控面板可同时观察请求、TTFT、KV 有效性/freshness、降级与 RSS。Standard mode（R6E/llm-d
@@ -386,7 +393,7 @@ VM 的影响更大：Kubernetes API 和 reconciliation 也会停止，应按完�
 2. 为正式实验加入实际 prompt token、cache salt/run nonce、cache generation、完整 provenance 和多轮统计，
    先在当前 4096 上下文内完成 512/1024/2048/3072 token 阶梯；
 3. GPU 容量允许后再评估 4096/8192/12288 token，禁止把 12 KiB 字节报告改称 12K token；
-4. learned-shadow 只有在 MAE/P95 error/agreement 门禁通过后才另立 active 决策；
+4. learned-shadow 只有在 R6I-7 MAE/P95 error/agreement 门禁通过且不违反 R6I-6 性能结论后，才另立 active 决策；
 5. Standard mode/llm-d 完整闭环继续后置，避免与 Lite TTFT 主线同时扩大；
 6. 在声称 NetworkPolicy 已生效前迁移到支持 policy enforcement 的 CNI；当前 Flannel 不能执行
    声明式 NetworkPolicy。

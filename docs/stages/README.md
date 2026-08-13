@@ -53,5 +53,6 @@
 | 44 | R6I-4 决策证据与对比报告 | 固定数值 headers/JSONL、低基数 estimator 指标与多轮 bootstrap A/B 汇总 |
 | 45 | R6I-5 缓存隔离与 Token 工作负载 | cache salt/run nonce、三种 cache 状态、实际 token 门禁与完整 provenance |
 | 46 | R6I-6 校准与 Token 阶梯 | 512–3072 token profile、并发阶梯、local-delta/原子 reservation 修正；static 未通过 active 门禁 |
+| 47 | R6I-7 Learned-shadow 实现与门禁 | 有界重拟合、低基数 shadow 证据、双轮真实实验门禁与可回滚 overlay |
 
 每个阶段完成后都会补充独立中文说明，并在文末明确下一阶段边界。

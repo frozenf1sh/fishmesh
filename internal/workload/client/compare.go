@@ -15,16 +15,23 @@ const maxComparisonJSONLLineBytes = 1 << 20
 
 // ComparisonArm 汇总一个 treatment 的 pooled 与跨轮证据。
 type ComparisonArm struct {
-	Runs                   int     `json:"runs"`
-	Succeeded              int     `json:"succeeded"`
-	Failed                 int     `json:"failed"`
-	TTFTP50MS              float64 `json:"ttft_p50_ms"`
-	TTFTP95MS              float64 `json:"ttft_p95_ms"`
-	TTFTP99MS              float64 `json:"ttft_p99_ms"`
-	RunMedianTTFTP95MS     float64 `json:"run_median_ttft_p95_ms"`
-	EstimatorSamples       int     `json:"estimator_samples"`
-	EstimatorMAEMS         float64 `json:"estimator_mae_ms"`
-	EstimatorAbsoluteP95MS float64 `json:"estimator_absolute_p95_ms"`
+	Runs                                int     `json:"runs"`
+	Succeeded                           int     `json:"succeeded"`
+	Failed                              int     `json:"failed"`
+	TTFTP50MS                           float64 `json:"ttft_p50_ms"`
+	TTFTP95MS                           float64 `json:"ttft_p95_ms"`
+	TTFTP99MS                           float64 `json:"ttft_p99_ms"`
+	RunMedianTTFTP95MS                  float64 `json:"run_median_ttft_p95_ms"`
+	EstimatorSamples                    int     `json:"estimator_samples"`
+	EstimatorMAEMS                      float64 `json:"estimator_mae_ms"`
+	EstimatorAbsoluteP95MS              float64 `json:"estimator_absolute_p95_ms"`
+	PredictionSamples                   int     `json:"prediction_samples"`
+	PredictionMAEMS                     float64 `json:"prediction_mae_ms"`
+	PredictionAbsoluteP95MS             float64 `json:"prediction_absolute_p95_ms"`
+	PredictionAgreementSamples          int     `json:"prediction_agreement_samples"`
+	PredictionAgreementPercent          float64 `json:"prediction_agreement_percent"`
+	PairedSamples                       int     `json:"paired_samples"`
+	PairedPredictionMinusEstimatorMAEMS float64 `json:"paired_prediction_minus_estimator_mae_ms"`
 }
 
 // ComparisonReport 是多轮 A/B 的机器可读汇总。
@@ -74,12 +81,13 @@ func (r ComparisonReport) Markdown() string {
 	output.WriteString("# FishMesh benchmark comparison\n\n")
 	fmt.Fprintf(&output, "- TTFT P95 delta: %.2f%%\n- Bootstrap 95%% CI: [%.2f%%, %.2f%%] (%d samples, seed %d)\n\n",
 		r.TTFTP95DeltaPercent, r.BootstrapLowPercent, r.BootstrapHighPercent, r.BootstrapSamples, r.Seed)
-	output.WriteString("| Arm | Runs | Success | Failed | P50 | P95 | P99 | Run median P95 | Estimator MAE | Estimator abs P95 |\n")
-	output.WriteString("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
+	output.WriteString("| Arm | Runs | Success | Failed | P50 | P95 | P99 | Run median P95 | Static MAE | Static abs P95 | Learned MAE | Learned abs P95 | Agree | Paired learned-static |\n")
+	output.WriteString("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
 	writeComparisonArm := func(name string, arm ComparisonArm) {
-		fmt.Fprintf(&output, "| %s | %d | %d | %d | %.2f | %.2f | %.2f | %.2f | %.2f | %.2f |\n",
+		fmt.Fprintf(&output, "| %s | %d | %d | %d | %.2f | %.2f | %.2f | %.2f | %.2f | %.2f | %.2f | %.2f | %.1f%% | %.2f |\n",
 			name, arm.Runs, arm.Succeeded, arm.Failed, arm.TTFTP50MS, arm.TTFTP95MS, arm.TTFTP99MS,
-			arm.RunMedianTTFTP95MS, arm.EstimatorMAEMS, arm.EstimatorAbsoluteP95MS)
+			arm.RunMedianTTFTP95MS, arm.EstimatorMAEMS, arm.EstimatorAbsoluteP95MS, arm.PredictionMAEMS,
+			arm.PredictionAbsoluteP95MS, arm.PredictionAgreementPercent, arm.PairedPredictionMinusEstimatorMAEMS)
 	}
 	writeComparisonArm("baseline", r.Baseline)
 	writeComparisonArm("treatment", r.Treatment)
@@ -132,7 +140,7 @@ func loadComparisonRuns(paths []string) ([][]BenchmarkAttempt, error) {
 
 func summarizeComparisonArm(runs [][]BenchmarkAttempt) ComparisonArm {
 	arm := ComparisonArm{Runs: len(runs)}
-	var ttfts, runP95, estimatorErrors []float64
+	var ttfts, runP95, estimatorErrors, predictionErrors, pairedDeltas []float64
 	for _, run := range runs {
 		var current []float64
 		for _, attempt := range run {
@@ -145,6 +153,16 @@ func summarizeComparisonArm(runs [][]BenchmarkAttempt) ComparisonArm {
 			ttfts = append(ttfts, attempt.TTFTMS)
 			if attempt.Headers.EstimatorValid && attempt.Headers.EstimatedTTFTMS > 0 {
 				estimatorErrors = append(estimatorErrors, math.Abs(attempt.TTFTMS-attempt.Headers.EstimatedTTFTMS))
+			}
+			if attempt.Headers.PredictionSelectedMS > 0 {
+				arm.PredictionSamples++
+				predictionErrors = append(predictionErrors, math.Abs(attempt.TTFTMS-attempt.Headers.PredictionSelectedMS))
+				if attempt.Headers.PredictionWouldSelect == attempt.Headers.BackendID {
+					arm.PredictionAgreementSamples++
+				}
+				if attempt.Headers.EstimatorValid && attempt.Headers.EstimatedTTFTMS > 0 {
+					pairedDeltas = append(pairedDeltas, math.Abs(attempt.TTFTMS-attempt.Headers.PredictionSelectedMS)-math.Abs(attempt.TTFTMS-attempt.Headers.EstimatedTTFTMS))
+				}
 			}
 		}
 		if len(current) > 0 {
@@ -160,6 +178,21 @@ func summarizeComparisonArm(runs [][]BenchmarkAttempt) ComparisonArm {
 		}
 		arm.EstimatorMAEMS /= float64(len(estimatorErrors))
 		arm.EstimatorAbsoluteP95MS = percentileCopy(estimatorErrors, 95)
+	}
+	if len(predictionErrors) > 0 {
+		for _, value := range predictionErrors {
+			arm.PredictionMAEMS += value
+		}
+		arm.PredictionMAEMS /= float64(len(predictionErrors))
+		arm.PredictionAbsoluteP95MS = percentileCopy(predictionErrors, 95)
+		arm.PredictionAgreementPercent = float64(arm.PredictionAgreementSamples) / float64(len(predictionErrors)) * 100
+	}
+	arm.PairedSamples = len(pairedDeltas)
+	if arm.PairedSamples > 0 {
+		for _, value := range pairedDeltas {
+			arm.PairedPredictionMinusEstimatorMAEMS += value
+		}
+		arm.PairedPredictionMinusEstimatorMAEMS /= float64(arm.PairedSamples)
 	}
 	return arm
 }

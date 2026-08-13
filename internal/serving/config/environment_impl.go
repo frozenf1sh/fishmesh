@@ -206,7 +206,7 @@ func (v environmentValues) buildConfig(defaults Config) (Config, error) {
 		KVCache:      defaults.KVCache,
 		Prediction: prediction.Config{
 			Mode: valueOrDefaultMode(envPredictionMode, defaults.Prediction.Mode), MaxSamples: defaults.Prediction.MaxSamples,
-			MaxSampleAge: defaults.Prediction.MaxSampleAge, MinimumSamples: defaults.Prediction.MinimumSamples, Clock: defaults.Prediction.Clock,
+			MaxSampleAge: defaults.Prediction.MaxSampleAge, MinimumSamples: defaults.Prediction.MinimumSamples, RefitEvery: defaults.Prediction.RefitEvery, Clock: defaults.Prediction.Clock,
 		},
 	}
 	return config, nil

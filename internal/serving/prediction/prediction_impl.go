@@ -13,7 +13,12 @@ const (
 	featureCount          = 5 // 常数项、未缓存 token、queue、running、local in-flight。
 	coordinateDescentPass = 64
 	ridgeRegularization   = 1.0
+	modelVersion          = "learned-ridge-v1"
 )
+
+// 系数以毫秒为单位，按特征量纲分别设上界。上界不是性能假设，而是防止
+// 小样本或异常观测把影子模型放大成不可解释的估计。
+var coefficientUpperBounds = [featureCount]float64{10_000, 10, 10_000, 10_000, 10_000}
 
 var _ Tracker = (*tracker)(nil)
 
@@ -29,6 +34,13 @@ type tracker struct {
 
 	mu      sync.Mutex
 	samples map[backend.ID][]sample
+	models  map[backend.ID]fittedModel
+}
+
+type fittedModel struct {
+	model       model
+	sampleCount int
+	version     uint64
 }
 
 type ticketState struct {
@@ -50,7 +62,7 @@ func New(config Config) (Tracker, error) {
 	if now == nil {
 		now = time.Now
 	}
-	return &tracker{config: config, now: now, samples: make(map[backend.ID][]sample)}, nil
+	return &tracker{config: config, now: now, samples: make(map[backend.ID][]sample), models: make(map[backend.ID]fittedModel)}, nil
 }
 
 func (t *tracker) Begin(input BeginInput) (Ticket, Shadow) {
@@ -86,6 +98,7 @@ func (t *tracker) Reconcile(backends []backend.ID) {
 	for id := range t.samples {
 		if _, ok := active[id]; !ok {
 			delete(t.samples, id)
+			delete(t.models, id)
 		}
 	}
 }
@@ -100,11 +113,11 @@ func (t *tracker) shadowLocked(input BeginInput) Shadow {
 		if candidate.Backend == "" || !validFeatures(candidate.Features) {
 			return Shadow{Status: StatusLoadUnavailable}
 		}
-		model, ok := fit(t.samples[candidate.Backend], t.config.MinimumSamples)
+		fitted, ok := t.modelLocked(candidate.Backend)
 		if !ok {
 			return Shadow{Status: StatusInsufficientData}
 		}
-		estimate := model.estimate(candidate.Features)
+		estimate := fitted.model.estimate(candidate.Features)
 		if candidate.Backend == input.Selected {
 			result.SelectedEstimate = estimate
 			result.SamplesPerBackend = len(t.samples[candidate.Backend])
@@ -116,7 +129,26 @@ func (t *tracker) shadowLocked(input BeginInput) Shadow {
 	if result.SelectedEstimate <= 0 || result.WouldSelect == "" {
 		return Shadow{Status: StatusInsufficientData}
 	}
+	result.ModelVersion = modelVersion
 	return result
+}
+
+func (t *tracker) modelLocked(backendID backend.ID) (fittedModel, bool) {
+	samples := t.samples[backendID]
+	if len(samples) < t.config.MinimumSamples {
+		return fittedModel{}, false
+	}
+	cached, exists := t.models[backendID]
+	if exists && len(samples) >= cached.sampleCount && len(samples)-cached.sampleCount < t.config.RefitEvery {
+		return cached, true
+	}
+	fitted, ok := fit(samples, t.config.MinimumSamples)
+	if !ok {
+		return fittedModel{}, false
+	}
+	fittedState := fittedModel{model: fitted, sampleCount: len(samples), version: cached.version + 1}
+	t.models[backendID] = fittedState
+	return fittedState, true
 }
 
 func (t *tracker) record(backendID backend.ID, features Features, ttft time.Duration) {
@@ -140,6 +172,7 @@ func (t *tracker) pruneLocked(now time.Time) {
 		first := sort.Search(len(samples), func(index int) bool { return !samples[index].at.Before(cutoff) })
 		if first == len(samples) {
 			delete(t.samples, id)
+			delete(t.models, id)
 			continue
 		}
 		if first > 0 {
@@ -166,15 +199,14 @@ func validFeatures(features Features) bool {
 type model struct{ coefficients [featureCount]float64 }
 
 func fit(samples []sample, minimum int) (model, bool) {
-	if len(samples) < minimum {
-		return model{}, false
-	}
 	var normal [featureCount][featureCount]float64
 	var target [featureCount]float64
+	validSamples := 0
 	for _, value := range samples {
 		if value.ttft <= 0 || !validFeatures(value.features) {
 			continue
 		}
+		validSamples++
 		x := featureVector(value.features)
 		y := float64(value.ttft) / float64(time.Millisecond)
 		for row := range featureCount {
@@ -183,6 +215,9 @@ func fit(samples []sample, minimum int) (model, bool) {
 				normal[row][column] += x[row] * x[column]
 			}
 		}
+	}
+	if validSamples < minimum {
+		return model{}, false
 	}
 	for index := 1; index < featureCount; index++ {
 		normal[index][index] += ridgeRegularization
@@ -199,7 +234,7 @@ func fit(samples []sample, minimum int) (model, bool) {
 					residual -= normal[row][column] * coefficients[column]
 				}
 			}
-			coefficients[row] = math.Max(0, residual/normal[row][row])
+			coefficients[row] = math.Min(coefficientUpperBounds[row], math.Max(0, residual/normal[row][row]))
 		}
 	}
 	return model{coefficients: coefficients}, true

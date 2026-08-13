@@ -134,6 +134,7 @@ func DefaultConfig() Config {
 			MaxSamples:     128,
 			MaxSampleAge:   15 * time.Minute,
 			MinimumSamples: 16,
+			RefitEvery:     16,
 			Clock:          time.Now,
 		},
 	}

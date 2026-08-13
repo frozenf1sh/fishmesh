@@ -14,6 +14,7 @@ import (
 	"github.com/frozenf1sh/fishmesh/internal/serving/circuit"
 	"github.com/frozenf1sh/fishmesh/internal/serving/discovery"
 	"github.com/frozenf1sh/fishmesh/internal/serving/kvcache"
+	"github.com/frozenf1sh/fishmesh/internal/serving/prediction"
 	"github.com/frozenf1sh/fishmesh/internal/serving/requestpath"
 	"github.com/frozenf1sh/fishmesh/internal/serving/routing"
 	"github.com/frozenf1sh/fishmesh/internal/serving/tokenization"
@@ -65,7 +66,7 @@ func TestProxyBoundsAndReplaysBodyWhileExposingKVAwareDegradation(t *testing.T) 
 		State: requestpath.State{KV: requestpath.KVMatchUnavailable, Estimate: requestpath.EstimateEvidence{
 			PromptTokens: 1024, UncachedTokens: 512, EstimatedTTFT: 42 * time.Millisecond, Valid: true,
 			Confidence: routing.EstimateConfidenceCalibrated, Version: "profile-v1", LoadValid: true, QueueDepth: 2, LocalDelta: 3,
-		}},
+		}, Prediction: prediction.Shadow{Status: prediction.StatusAvailable, ModelVersion: "learned-ridge-v1", WouldSelect: "backend-b", SelectedEstimate: 44 * time.Millisecond, WouldSelectTTFT: 40 * time.Millisecond, SamplesPerBackend: 16}},
 	}}
 	server := newGatewayWithPath(t, path, routing.ModeKVAware, int64(len(requestBody)))
 
@@ -85,6 +86,9 @@ func TestProxyBoundsAndReplaysBodyWhileExposingKVAwareDegradation(t *testing.T) 
 	}
 	if response.Header().Get(headerPromptTokens) != "1024" || response.Header().Get(headerEstimatedTTFTMS) != "42.000" || response.Header().Get(headerEstimatorVersion) != "profile-v1" || response.Header().Get(headerQueueDepth) != "2" || response.Header().Get(headerLocalDelta) != "3" {
 		t.Fatalf("estimator headers = %v", response.Header())
+	}
+	if response.Header().Get(headerPredictionStatus) != "available" || response.Header().Get(headerPredictionModel) != "learned-ridge-v1" || response.Header().Get(headerPredictionWouldSelect) != "backend-b" || response.Header().Get(headerPredictionSelectedMS) != "44.000" || response.Header().Get(headerPredictionWouldSelectMS) != "40.000" || response.Header().Get(headerPredictionSamples) != "16" {
+		t.Fatalf("prediction headers = %v", response.Header())
 	}
 }
 

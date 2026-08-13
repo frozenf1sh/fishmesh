@@ -23,7 +23,7 @@ func TestCompareBenchmarkFilesPoolsRunsAndReportsEstimatorError(t *testing.T) {
 	if report.Baseline.Succeeded != 4 || report.Treatment.Succeeded != 4 || report.TTFTP95DeltaPercent >= 0 || report.Treatment.EstimatorSamples != 4 {
 		t.Fatalf("report = %+v", report)
 	}
-	if markdown := report.Markdown(); !strings.Contains(markdown, "Bootstrap 95% CI") || !strings.Contains(markdown, "Estimator MAE") {
+	if markdown := report.Markdown(); !strings.Contains(markdown, "Bootstrap 95% CI") || !strings.Contains(markdown, "Static MAE") || !strings.Contains(markdown, "Learned MAE") {
 		t.Fatalf("markdown = %q", markdown)
 	}
 }

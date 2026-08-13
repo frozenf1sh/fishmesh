@@ -1,0 +1,18 @@
+{
+  "run_id": "r6i7-learned-shadow-template",
+  "max_tokens": 32,
+  "request_timeout_ms": 180000,
+  "allow_high_concurrency": true,
+  "formal": true,
+  "treatment": "learned-shadow-static-routing",
+  "workload_seed": 20260816,
+  "cache_mode": "steady-warm",
+  "run_nonce": "replace-with-unique-run-nonce",
+  "cache_generation": "replace-with-vllm-pod-generation",
+  "scenarios": [
+    {"name": "shadow-512-same", "prefix_pattern": "same-prefix", "prefix_bytes": 2866, "prefix_groups": 2, "target_prompt_tokens": 512, "prompt_token_tolerance": 16, "batches": 2, "batch_size": 20, "concurrency": 8, "batch_pause_ms": 1000},
+    {"name": "shadow-1024-different", "prefix_pattern": "different-prefix", "prefix_bytes": 5932, "prefix_groups": 4, "target_prompt_tokens": 1024, "prompt_token_tolerance": 16, "batches": 2, "batch_size": 20, "concurrency": 8, "batch_pause_ms": 1000},
+    {"name": "shadow-2048-mixed", "prefix_pattern": "mixed-prefix", "prefix_bytes": 12076, "prefix_groups": 4, "target_prompt_tokens": 2048, "prompt_token_tolerance": 16, "mixed_hot_ratio": 50, "mixed_unique_ratio": 25, "batches": 2, "batch_size": 20, "concurrency": 8, "batch_pause_ms": 1000},
+    {"name": "shadow-3072-different", "prefix_pattern": "different-prefix", "prefix_bytes": 18220, "prefix_groups": 4, "target_prompt_tokens": 3072, "prompt_token_tolerance": 16, "batches": 2, "batch_size": 20, "concurrency": 8, "batch_pause_ms": 1000}
+  ]
+}

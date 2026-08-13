@@ -83,6 +83,9 @@ func decisionHeaders(headers http.Header) DecisionHeaders {
 		QueueDepth: nonNegativeInt64(headers.Get(HeaderQueueDepth)), RunningRequests: nonNegativeInt64(headers.Get(HeaderRunningRequests)),
 		LocalDelta: nonNegativeInt64(headers.Get(HeaderLocalDelta)), LocalInflight: nonNegativeInt64(headers.Get(HeaderLocalInflight)),
 		HardOverloadCandidates: nonNegativeInt(headers.Get(HeaderHardOverloadCount)),
+		PredictionStatus:       headers.Get(HeaderPredictionStatus), PredictionModel: headers.Get(HeaderPredictionModel),
+		PredictionWouldSelect: headers.Get(HeaderPredictionWouldSelect), PredictionSelectedMS: nonNegativeFloat(headers.Get(HeaderPredictionSelectedMS)),
+		PredictionWouldSelectMS: nonNegativeFloat(headers.Get(HeaderPredictionWouldSelectMS)), PredictionSamples: nonNegativeInt(headers.Get(HeaderPredictionSamples)),
 	}
 }
 

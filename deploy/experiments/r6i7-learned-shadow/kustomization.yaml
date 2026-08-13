@@ -1,0 +1,42 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: kubellm
+resources:
+  - ../r6i6-static-ttft
+patches:
+  - target:
+      kind: ConfigMap
+      name: fishmesh-gateway-config
+    patch: |-
+      - op: add
+        path: /data/FISHMESH_PREDICTION_MODE
+        value: shadow
+      - op: replace
+        path: /metadata/annotations/fishmesh.io~1config-version
+        value: r6i7-learned-shadow-v1
+  - target:
+      kind: Deployment
+      name: fishmesh-gateway
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/image
+        value: fishmesh-gateway:r6i7-learned-shadow-r1
+      - op: replace
+        path: /spec/template/metadata/annotations/fishmesh.io~1gateway-image-revision
+        value: r6i7-learned-shadow-r1
+      - op: replace
+        path: /spec/template/metadata/annotations/fishmesh.io~1runtime-profile
+        value: r6i7-learned-shadow-v1
+      - op: replace
+        path: /spec/template/metadata/annotations/fishmesh.io~1image-amd64-digest
+        value: sha256:490462aa2e930e2a4a113288b119be1adc5be8fd44fc0e91b44877eff5e200bf
+      - op: add
+        path: /spec/template/metadata/annotations/fishmesh.io~1prediction-model
+        value: learned-ridge-v1
+  - target:
+      kind: Deployment
+      name: qwen-vllm
+    patch: |-
+      - op: add
+        path: /spec/template/metadata/annotations/fishmesh.io~1r6i7-replay-reset
+        value: r6i7-20260816

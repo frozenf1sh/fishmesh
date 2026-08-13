@@ -32,7 +32,10 @@ type Config struct {
 	MaxSamples     int
 	MaxSampleAge   time.Duration
 	MinimumSamples int
-	Clock          func() time.Time
+	// RefitEvery bounds model churn. A model is refit only after this many
+	// additional completed observations, rather than once per request.
+	RefitEvery int
+	Clock      func() time.Time
 }
 
 // Validate 拒绝会造成无界保存或伪置信度的配置。
@@ -40,8 +43,8 @@ func (c Config) Validate() error {
 	if c.Mode != ModeOff && c.Mode != ModeShadow {
 		return fmt.Errorf("unsupported prediction mode %q", c.Mode)
 	}
-	if c.MaxSamples <= 0 || c.MaxSampleAge <= 0 || c.MinimumSamples <= 0 || c.MinimumSamples > c.MaxSamples {
-		return fmt.Errorf("prediction sample bounds must be positive and minimum must not exceed maximum")
+	if c.MaxSamples <= 0 || c.MaxSampleAge <= 0 || c.MinimumSamples <= 0 || c.MinimumSamples > c.MaxSamples || c.RefitEvery <= 0 {
+		return fmt.Errorf("prediction sample bounds and refit interval must be positive, and minimum must not exceed maximum")
 	}
 	return nil
 }
@@ -72,6 +75,7 @@ type BeginInput struct {
 // Shadow 是预测域给 delivery 的稳定值对象。WouldSelect 仅表示影子模型的输出。
 type Shadow struct {
 	Status            Status
+	ModelVersion      string
 	WouldSelect       backend.ID
 	SelectedEstimate  time.Duration
 	WouldSelectTTFT   time.Duration
