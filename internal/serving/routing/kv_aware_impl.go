@@ -60,6 +60,18 @@ func (s kvAwareStrategy) Select(_ string, snapshot Snapshot) (Decision, error) {
 			Reason: ReasonKVAwareHardOverloadFallback, Policy: PolicyKVAwareV1,
 		}, nil
 	}
+	if s.config.EstimatorMode == KVAwareEstimatorStatic && staticEstimatesUsable(candidates, snapshot.Estimates) {
+		selected := candidates[0]
+		for _, candidate := range candidates[1:] {
+			if staticEstimateLess(candidate, selected, snapshot.Estimates) {
+				selected = candidate
+			}
+		}
+		return Decision{
+			Backend: selected, PreferredBackendID: selected.ID,
+			Reason: ReasonKVAwareStatic, Policy: PolicyKVAwareStaticV1,
+		}, nil
+	}
 
 	// 线性扫描取成本最小者；词典序比较（成本 → ID）保证平局确定性，
 	// 不依赖 discovery 返回顺序。cost 为负数不可能出现（饱和运算保证）。
@@ -69,10 +81,33 @@ func (s kvAwareStrategy) Select(_ string, snapshot Snapshot) (Decision, error) {
 			selected = candidate
 		}
 	}
+	reason := ReasonKVAware
+	if s.config.EstimatorMode == KVAwareEstimatorStatic {
+		reason = ReasonKVAwareStaticFallback
+	}
 	return Decision{
 		Backend: selected, PreferredBackendID: selected.ID,
-		Reason: ReasonKVAware, Policy: PolicyKVAwareV1,
+		Reason: reason, Policy: PolicyKVAwareV1,
 	}, nil
+}
+
+func staticEstimatesUsable(backends []backend.Backend, estimates map[backend.ID]LatencyEstimate) bool {
+	for _, candidate := range backends {
+		estimate, ok := estimates[candidate.ID]
+		if !ok || !estimate.Valid || estimate.TTFT <= 0 || estimate.Version == "" || estimate.Confidence == EstimateConfidenceUncalibrated {
+			return false
+		}
+	}
+	return len(backends) > 0
+}
+
+func staticEstimateLess(candidate, current backend.Backend, estimates map[backend.ID]LatencyEstimate) bool {
+	candidateTTFT := estimates[candidate.ID].TTFT
+	currentTTFT := estimates[current.ID].TTFT
+	if candidateTTFT != currentTTFT {
+		return candidateTTFT < currentTTFT
+	}
+	return candidate.ID < current.ID
 }
 
 // withoutHardOverload 过滤掉已越过硬过载阈值的后端。
@@ -104,7 +139,8 @@ func kvAwareLess(candidate, current backend.Backend, snapshot Snapshot, config K
 //	未缓存 token 数
 //	+ 排队请求数 × QueueTokenPenalty   （尚未开始 prefill，最难受）
 //	+ 运行中请求数 × RunningTokenPenalty
-//	+ 本地在途请求数 × InflightTokenPenalty（仅在外部负载未知时）
+//	+ 本地新增在途数 × InflightTokenPenalty（外部负载有效时只补采样滞后）
+//	+ 本地在途请求数 × InflightTokenPenalty（外部负载未知时）
 //
 // queue/running 新鲜且完整时，它们已经包含 vLLM 接收的工作，不再叠加完整
 // local in-flight；外部负载未知时才用 local in-flight 作为单 Gateway fallback。
@@ -115,6 +151,7 @@ func kvAwareCost(candidate backend.Backend, snapshot Snapshot, config KVAwareCon
 	if load.Valid {
 		cost = saturatingAdd(cost, saturatingMultiply(load.QueueDepth, config.QueueTokenPenalty))
 		cost = saturatingAdd(cost, saturatingMultiply(load.Running, config.RunningTokenPenalty))
+		cost = saturatingAdd(cost, saturatingMultiply(load.LocalDelta, config.InflightTokenPenalty))
 		return cost
 	}
 	return saturatingAdd(cost, saturatingMultiply(snapshot.Inflight[candidate.ID], config.InflightTokenPenalty))

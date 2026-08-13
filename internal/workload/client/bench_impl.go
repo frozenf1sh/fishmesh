@@ -3,6 +3,7 @@ package client
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"sort"
@@ -24,7 +25,9 @@ type benchmarkJob struct {
 
 // RunPlan executes sequential batches and writes metadata, every attempt, and the final report as JSONL.
 func (c *Client) RunPlan(ctx context.Context, plan BenchmarkPlan, output io.Writer) (BenchmarkReport, error) {
-	if err := plan.Validate(); err != nil {
+	var err error
+	plan, err = PrepareBenchmarkPlan(plan)
+	if err != nil {
 		return BenchmarkReport{}, err
 	}
 	if output == nil {
@@ -42,7 +45,27 @@ func (c *Client) RunPlan(ctx context.Context, plan BenchmarkPlan, output io.Writ
 	}
 
 	attempts := make([]BenchmarkAttempt, 0, plannedRequests(plan))
-	for _, scenario := range plan.Scenarios {
+	for _, scenarioName := range plan.ExecutionOrder {
+		scenario := benchmarkScenarioByName(plan.Scenarios, scenarioName)
+		warmupBackends := make(map[string]string)
+		for warmup := 0; warmup < scenario.WarmupRequests; warmup++ {
+			attempt := c.runBenchmarkRequest(ctx, plan, scenario, -1, warmup, "warmup")
+			if err := writeJSONL(writer, attempt); err != nil {
+				return report, err
+			}
+			if attempt.Error != "" {
+				return finishBenchmarkReport(writer, report, attempts, fmt.Errorf("scenario %q warmup %d failed: %s", scenario.Name, warmup, attempt.Error))
+			}
+			if plan.CacheMode == CacheControlledWarm {
+				if attempt.Headers.BackendID == "" {
+					return finishBenchmarkReport(writer, report, attempts, fmt.Errorf("scenario %q warmup %d lacks backend provenance", scenario.Name, warmup))
+				}
+				if previous := warmupBackends[attempt.PrefixGroup]; previous != "" && previous != attempt.Headers.BackendID {
+					return finishBenchmarkReport(writer, report, attempts, fmt.Errorf("scenario %q prefix group %q warmed on multiple backends", scenario.Name, attempt.PrefixGroup))
+				}
+				warmupBackends[attempt.PrefixGroup] = attempt.Headers.BackendID
+			}
+		}
 		for batch := 0; batch < scenario.Batches; batch++ {
 			batchAttempts := c.runBenchmarkBatch(ctx, plan, scenario, batch)
 			for _, attempt := range batchAttempts {
@@ -58,8 +81,7 @@ func (c *Client) RunPlan(ctx context.Context, plan BenchmarkPlan, output io.Writ
 			}
 		}
 	}
-
-	return finishBenchmarkReport(writer, report, attempts, nil)
+	return finishBenchmarkReport(writer, report, attempts, benchmarkTokenEvidenceError(attempts))
 }
 
 func (c *Client) runBenchmarkBatch(ctx context.Context, plan BenchmarkPlan, scenario BenchmarkScenario, batch int) []BenchmarkAttempt {
@@ -76,18 +98,7 @@ func (c *Client) runBenchmarkBatch(ctx context.Context, plan BenchmarkPlan, scen
 		go func() {
 			defer wait.Done()
 			for job := range jobs {
-				messages, group := benchmarkMessagesForScenario(scenario, job.Request, scenario.Batches*scenario.BatchSize)
-				result, err := c.Send(ctx, Request{Messages: messages, MaxTokens: plan.MaxTokens})
-				record := BenchmarkAttempt{
-					RecordType: "request", RunID: plan.RunID, Scenario: scenario.Name, Pattern: scenario.Pattern,
-					Batch: job.Batch, Request: job.Request, PrefixBytes: scenario.PrefixBytes, PromptBytes: promptBytes(messages),
-					PrefixGroup: group, StatusCode: result.StatusCode, Headers: result.Headers,
-					TTFTMS: durationMS(result.TTFT), DurationMS: durationMS(result.Duration), CachedSample: result.HasCachedPrefixSample,
-				}
-				if err != nil {
-					record.Error = err.Error()
-				}
-				attempts <- record
+				attempts <- c.runBenchmarkRequest(ctx, plan, scenario, job.Batch, job.Request, "request")
 			}
 		}()
 	}
@@ -107,6 +118,77 @@ func (c *Client) runBenchmarkBatch(ctx context.Context, plan BenchmarkPlan, scen
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].Request < result[j].Request })
 	return result
+}
+
+func (c *Client) runBenchmarkRequest(ctx context.Context, plan BenchmarkPlan, scenario BenchmarkScenario, batch, request int, recordType string) BenchmarkAttempt {
+	messages, group := benchmarkMessagesForScenario(scenario, request, scenario.Batches*scenario.BatchSize)
+	cacheSalt, cacheScope := benchmarkCacheSalt(plan, scenario, batch, request, group)
+	result, err := c.Send(ctx, Request{Messages: messages, MaxTokens: plan.MaxTokens, CacheSalt: cacheSalt, IgnoreEOS: plan.IgnoreEOS})
+	record := BenchmarkAttempt{
+		RecordType: recordType, RunID: plan.RunID, Scenario: scenario.Name, Pattern: scenario.Pattern,
+		Batch: batch, Request: request, PrefixBytes: scenario.PrefixBytes, PromptBytes: promptBytes(messages),
+		TargetPromptTokens: scenario.TargetPromptTokens, PromptTokenTolerance: scenario.PromptTokenTolerance,
+		PrefixGroup: group, CacheMode: plan.CacheMode,
+		CacheScope: cacheScope, CacheGeneration: plan.CacheGeneration, StatusCode: result.StatusCode, Headers: result.Headers,
+		TTFTMS: durationMS(result.TTFT), DurationMS: durationMS(result.Duration), CachedSample: result.HasCachedPrefixSample,
+	}
+	if result.Headers.PromptTokens > 0 && scenario.TargetPromptTokens > 0 {
+		record.PromptTokenDelta = result.Headers.PromptTokens - scenario.TargetPromptTokens
+	}
+	if err != nil {
+		record.Error = err.Error()
+	}
+	return record
+}
+
+func benchmarkScenarioByName(scenarios []BenchmarkScenario, name string) BenchmarkScenario {
+	for _, scenario := range scenarios {
+		if scenario.Name == name {
+			return scenario
+		}
+	}
+	return BenchmarkScenario{}
+}
+
+func benchmarkCacheSalt(plan BenchmarkPlan, scenario BenchmarkScenario, batch, request int, group string) (string, string) {
+	var scope, identity string
+	switch plan.CacheMode {
+	case CacheCold:
+		scope, identity = "request", fmt.Sprintf("%s/%d/%d", scenario.Name, batch, request)
+	case CacheControlledWarm, CacheSteadyWarm:
+		scope, identity = "prefix-group", fmt.Sprintf("%s/%s", scenario.Name, group)
+	default:
+		return "", ""
+	}
+	digest := sha256.Sum256([]byte(fmt.Sprintf("fishmesh-bench-v1\x00%s\x00%s\x00%s\x00%s", plan.RunNonce, plan.CacheMode, scope, identity)))
+	return fmt.Sprintf("%x", digest[:]), scope
+}
+
+func benchmarkTokenEvidenceError(attempts []BenchmarkAttempt) error {
+	missing, violations := 0, 0
+	for _, attempt := range attempts {
+		if attempt.TargetPromptTokens == 0 {
+			continue
+		}
+		if attempt.Headers.PromptTokens == 0 {
+			missing++
+			continue
+		}
+		if absoluteInt(attempt.PromptTokenDelta) > attempt.PromptTokenTolerance {
+			violations++
+		}
+	}
+	if missing > 0 || violations > 0 {
+		return fmt.Errorf("prompt token evidence failed: missing=%d outside_tolerance=%d", missing, violations)
+	}
+	return nil
+}
+
+func absoluteInt(value int) int {
+	if value < 0 {
+		return -value
+	}
+	return value
 }
 
 func benchmarkMessages(scenario BenchmarkScenario, request int) ([]Message, string) {

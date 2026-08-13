@@ -43,6 +43,7 @@ type Config struct {
 	Tokenization    tokenization.Config
 	KVCache         kvcache.Config
 	Prediction      prediction.Config
+	StaticProfile   prediction.StaticProfile
 }
 
 // Validate 执行不需要外部 I/O 的跨配置约束检查。
@@ -97,6 +98,17 @@ func (c Config) Validate() error {
 		}
 		if err := c.KVCache.Validate(); err != nil {
 			return fmt.Errorf("kv-aware KV cache: %w", err)
+		}
+		if c.Routing.KVAware.EstimatorMode == routing.KVAwareEstimatorStatic {
+			if err := c.StaticProfile.Validate(); err != nil {
+				return fmt.Errorf("kv-aware static profile: %w", err)
+			}
+			if !c.StaticProfile.Calibrated {
+				return fmt.Errorf("kv-aware static profile must be calibrated before active routing")
+			}
+			if c.StaticProfile.Identity.Model != c.Tokenization.Model {
+				return fmt.Errorf("kv-aware static profile model must match tokenization model")
+			}
 		}
 	}
 	if err := c.Prediction.Validate(); err != nil {

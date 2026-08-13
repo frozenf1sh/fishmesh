@@ -1,0 +1,32 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: kubellm
+resources:
+  - ../long-context-kv-aware
+patches:
+  - target:
+      kind: ConfigMap
+      name: fishmesh-gateway-config
+    patch: |-
+      - op: replace
+        path: /data/FISHMESH_KV_AWARE_ESTIMATOR_MODE
+        value: token-cost
+      - op: replace
+        path: /metadata/annotations/fishmesh.io~1config-version
+        value: r6i6-calibration-token-cost
+  - target:
+      kind: Deployment
+      name: fishmesh-gateway
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/image
+        value: fishmesh-gateway:r6i6-static-ttft-r4
+      - op: replace
+        path: /spec/template/metadata/annotations/fishmesh.io~1gateway-image-revision
+        value: r6i6-static-ttft-r4
+      - op: replace
+        path: /spec/template/metadata/annotations/fishmesh.io~1image-amd64-digest
+        value: sha256:e7962f0c9ea7cabc200b9b2dc78d47901d53462a7241d6238227b1b3d688ac24
+      - op: replace
+        path: /spec/template/metadata/annotations/fishmesh.io~1runtime-profile
+        value: r6i6-calibration-token-cost

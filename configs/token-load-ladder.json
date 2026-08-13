@@ -1,0 +1,18 @@
+{
+  "run_id": "token-load-ladder-template",
+  "max_tokens": 256,
+  "ignore_eos": true,
+  "request_timeout_ms": 180000,
+  "allow_high_concurrency": true,
+  "treatment": "replace-at-run",
+  "workload_seed": 20260816,
+  "cache_mode": "controlled-warm",
+  "run_nonce": "replace-with-unique-run-nonce",
+  "cache_generation": "replace-with-vllm-pod-generation",
+  "scenarios": [
+    {"name": "load-c1", "prefix_pattern": "same-prefix", "prefix_bytes": 12076, "prefix_groups": 1, "target_prompt_tokens": 2048, "prompt_token_tolerance": 16, "warmup_requests": 1, "batches": 2, "batch_size": 4, "concurrency": 1, "batch_pause_ms": 1000},
+    {"name": "load-c4", "prefix_pattern": "same-prefix", "prefix_bytes": 12076, "prefix_groups": 1, "target_prompt_tokens": 2048, "prompt_token_tolerance": 16, "warmup_requests": 1, "batches": 2, "batch_size": 8, "concurrency": 4, "batch_pause_ms": 1000},
+    {"name": "load-c8", "prefix_pattern": "same-prefix", "prefix_bytes": 12076, "prefix_groups": 1, "target_prompt_tokens": 2048, "prompt_token_tolerance": 16, "warmup_requests": 1, "batches": 2, "batch_size": 16, "concurrency": 8, "batch_pause_ms": 1000},
+    {"name": "load-c16", "prefix_pattern": "same-prefix", "prefix_bytes": 12076, "prefix_groups": 1, "target_prompt_tokens": 2048, "prompt_token_tolerance": 16, "warmup_requests": 1, "batches": 2, "batch_size": 32, "concurrency": 16, "batch_pause_ms": 1000}
+  ]
+}

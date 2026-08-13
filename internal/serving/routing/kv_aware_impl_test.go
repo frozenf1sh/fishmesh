@@ -2,9 +2,101 @@ package routing
 
 import (
 	"testing"
+	"time"
 
 	"github.com/frozenf1sh/fishmesh/internal/serving/backend"
 )
+
+func TestKVAwareStaticEstimateCanOverrideTokenCost(t *testing.T) {
+	strategy, err := NewConfiguredKVAware(KVAwareConfig{EstimatorMode: KVAwareEstimatorStatic, QueueTokenPenalty: 64})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision, err := strategy.Select("", Snapshot{
+		Backends: testBackends(), Loads: map[backend.ID]Load{"a": {Valid: true}, "b": {Valid: true}},
+		KVAware: KVAwareInput{PromptTokens: 128, Matches: map[backend.ID]KVMatch{
+			"a": {Valid: true, MatchedTokens: 128}, "b": {Valid: true, MatchedTokens: 0},
+		}},
+		Estimates: map[backend.ID]LatencyEstimate{
+			"a": {TTFT: 200 * time.Millisecond, Valid: true, Confidence: EstimateConfidenceCalibrated, Version: "v1"},
+			"b": {TTFT: 100 * time.Millisecond, Valid: true, Confidence: EstimateConfidenceCalibrated, Version: "v1"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Backend.ID != "b" || decision.Policy != PolicyKVAwareStaticV1 || decision.Reason != ReasonKVAwareStatic {
+		t.Fatalf("decision = %+v, want static TTFT selection of b", decision)
+	}
+}
+
+func TestKVAwareStaticEstimateAllowsDegradedLoadFallback(t *testing.T) {
+	strategy, err := NewConfiguredKVAware(KVAwareConfig{EstimatorMode: KVAwareEstimatorStatic})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision, err := strategy.Select("", Snapshot{
+		Backends: testBackends(),
+		KVAware: KVAwareInput{PromptTokens: 16, Matches: map[backend.ID]KVMatch{
+			"a": {Valid: true}, "b": {Valid: true},
+		}},
+		Estimates: map[backend.ID]LatencyEstimate{
+			"a": {TTFT: 20 * time.Millisecond, Valid: true, Confidence: EstimateConfidenceDegraded, Version: "v1"},
+			"b": {TTFT: 30 * time.Millisecond, Valid: true, Confidence: EstimateConfidenceCalibrated, Version: "v1"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Backend.ID != "a" || decision.Policy != PolicyKVAwareStaticV1 {
+		t.Fatalf("decision = %+v, degraded local-load estimate should remain usable", decision)
+	}
+}
+
+func TestKVAwareStaticFallsBackToTokenCostWhenEstimateIsIncomplete(t *testing.T) {
+	strategy, err := NewConfiguredKVAware(KVAwareConfig{EstimatorMode: KVAwareEstimatorStatic})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision, err := strategy.Select("", Snapshot{
+		Backends: testBackends(),
+		KVAware: KVAwareInput{PromptTokens: 16, Matches: map[backend.ID]KVMatch{
+			"a": {Valid: true, MatchedTokens: 16}, "b": {Valid: true},
+		}},
+		Estimates: map[backend.ID]LatencyEstimate{
+			"a": {TTFT: 20 * time.Millisecond, Valid: true, Confidence: EstimateConfidenceCalibrated, Version: "v1"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Backend.ID != "a" || decision.Policy != PolicyKVAwareV1 || decision.Reason != ReasonKVAwareStaticFallback {
+		t.Fatalf("decision = %+v, want typed token-cost fallback", decision)
+	}
+}
+
+func TestKVAwareStaticCannotBypassHardOverload(t *testing.T) {
+	strategy, err := NewConfiguredKVAware(KVAwareConfig{EstimatorMode: KVAwareEstimatorStatic})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision, err := strategy.Select("", Snapshot{
+		Backends: testBackends(), Loads: map[backend.ID]Load{"a": {HardOverload: true}},
+		KVAware: KVAwareInput{PromptTokens: 16, Matches: map[backend.ID]KVMatch{
+			"a": {Valid: true, MatchedTokens: 16}, "b": {Valid: true},
+		}},
+		Estimates: map[backend.ID]LatencyEstimate{
+			"a": {TTFT: time.Millisecond, Valid: true, Confidence: EstimateConfidenceCalibrated, Version: "v1"},
+			"b": {TTFT: 100 * time.Millisecond, Valid: true, Confidence: EstimateConfidenceCalibrated, Version: "v1"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Backend.ID != "b" || decision.Policy != PolicyKVAwareStaticV1 {
+		t.Fatalf("decision = %+v, hard-overloaded estimate bypassed safety gate", decision)
+	}
+}
 
 // TestKVAwareInputDistinguishesUnknownFromZeroMatch 验证 KVAwareInput.UsableFor
 // 能区分两种本质不同的情况：真实的零命中（Valid=true, Matched=0）可用，
@@ -95,14 +187,14 @@ func TestKVAwareDoesNotInventUnknownLoadAsZero(t *testing.T) {
 	}
 }
 
-func TestKVAwareDoesNotDoubleCountLocalInflightWhenExternalLoadIsValid(t *testing.T) {
+func TestKVAwareAddsOnlyLocalDeltaWhenExternalLoadIsValid(t *testing.T) {
 	strategy, err := NewConfiguredKVAware(KVAwareConfig{InflightTokenPenalty: 64})
 	if err != nil {
 		t.Fatal(err)
 	}
 	decision, err := strategy.Select("session", Snapshot{
 		Backends: testBackends(), Inflight: map[backend.ID]int64{"a": 100},
-		Loads: map[backend.ID]Load{"a": {Valid: true}, "b": {Valid: true}},
+		Loads: map[backend.ID]Load{"a": {Valid: true, Running: 100}, "b": {Valid: true}},
 		KVAware: KVAwareInput{PromptTokens: 16, Matches: map[backend.ID]KVMatch{
 			"a": {Valid: true, MatchedTokens: 8}, "b": {Valid: true, MatchedTokens: 8},
 		}},
@@ -111,7 +203,17 @@ func TestKVAwareDoesNotDoubleCountLocalInflightWhenExternalLoadIsValid(t *testin
 		t.Fatal(err)
 	}
 	if decision.Backend.ID != "a" {
-		t.Fatalf("decision = %+v, valid external load must suppress duplicate local cost", decision)
+		t.Fatalf("decision = %+v, sampled running must suppress duplicate local cost", decision)
+	}
+	decision, err = strategy.Select("session", Snapshot{
+		Backends: testBackends(), Inflight: map[backend.ID]int64{"a": 2},
+		Loads: map[backend.ID]Load{"a": {Valid: true, LocalDelta: 2}, "b": {Valid: true}},
+		KVAware: KVAwareInput{PromptTokens: 16, Matches: map[backend.ID]KVMatch{
+			"a": {Valid: true, MatchedTokens: 8}, "b": {Valid: true, MatchedTokens: 8},
+		}},
+	})
+	if err != nil || decision.Backend.ID != "b" {
+		t.Fatalf("decision = %+v, err=%v; unsampled local delta must contribute", decision, err)
 	}
 }
 

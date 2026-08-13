@@ -51,6 +51,16 @@ func LoadEnvironment() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	if config.Routing.Mode == routing.ModeKVAware && config.Routing.KVAware.EstimatorMode == routing.KVAwareEstimatorStatic {
+		profileFile := strings.TrimSpace(os.Getenv(envKVAwareStaticProfileFile))
+		if profileFile == "" {
+			return Config{}, fmt.Errorf("%s must be configured for static TTFT routing", envKVAwareStaticProfileFile)
+		}
+		config.StaticProfile, err = loadStaticProfile(profileFile)
+		if err != nil {
+			return Config{}, fmt.Errorf("%s: %w", envKVAwareStaticProfileFile, err)
+		}
+	}
 	return config, config.Validate()
 }
 
@@ -182,6 +192,7 @@ func (v environmentValues) buildConfig(defaults Config) (Config, error) {
 		Routing: routing.Config{Mode: routingMode, Service: service, SessionKey: routing.SessionKeyConfig{
 			TTL: v.sessionKeyTTL, MaxEntries: v.sessionKeyMaxEntries, InflightDelta: v.sessionKeyInflightDelta, QueueDepthDelta: v.sessionKeyQueueDelta, Clock: defaults.Routing.SessionKey.Clock,
 		}, KVAware: routing.KVAwareConfig{
+			EstimatorMode:     routing.KVAwareEstimatorMode(valueOrDefault(envKVAwareEstimatorMode, string(defaults.Routing.KVAware.EstimatorMode))),
 			QueueTokenPenalty: v.kvAwareQueueTokenPenalty, RunningTokenPenalty: v.kvAwareRunningTokenPenalty, InflightTokenPenalty: v.kvAwareInflightTokenPenalty,
 		}},
 		Circuit:   circuit.Config{EWMAAlpha: v.circuitAlpha, ErrorThreshold: v.circuitError, MinimumRequests: v.circuitMinimumRequests, OpenDuration: v.circuitOpenDuration, Clock: defaults.Circuit.Clock},

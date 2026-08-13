@@ -111,6 +111,33 @@ func TestMetricsProjectPredictionShadowWithoutRequestLabels(t *testing.T) {
 	}
 }
 
+func TestMetricsProjectStaticEstimateAndHardOverloadWithoutRequestIdentity(t *testing.T) {
+	metrics := NewMetrics()
+	lease := requestpath.Lease{
+		Decision: routing.Decision{Backend: backend.Backend{ID: "backend-a"}, Reason: routing.ReasonKVAwareStatic},
+		State: requestpath.State{Estimate: requestpath.EstimateEvidence{
+			PromptTokens: 1024, EstimatedTTFT: 40 * time.Millisecond, Valid: true,
+			Confidence: routing.EstimateConfidenceCalibrated, Reason: "calibrated", HardOverloadedCandidates: 1,
+		}},
+	}
+	metrics.observeSelection(routing.ModeKVAware, lease)
+	metrics.observePrediction(lease, requestpath.FirstTokenObservation{Actual: 50 * time.Millisecond})
+
+	response := httptest.NewRecorder()
+	metrics.handler().ServeHTTP(response, httptest.NewRequest("GET", "/metrics", nil))
+	output := response.Body.String()
+	for _, want := range []string{
+		`fishmesh_gateway_static_estimator_selections_total{confidence="calibrated",estimator_reason="calibrated"} 1`,
+		`fishmesh_gateway_static_estimated_ttft_seconds_count 1`,
+		`fishmesh_gateway_static_estimator_absolute_error_seconds_sum 0.01`,
+		`fishmesh_gateway_hard_overload_selections_total{outcome="partial"} 1`,
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("metric %q missing:\n%s", want, output)
+		}
+	}
+}
+
 func TestMetricsDeleteBackendRemovesKVEventHistogramLabels(t *testing.T) {
 	metrics := NewMetrics()
 	metrics.observeKVEvent("backend-a", false, time.Millisecond)

@@ -3,6 +3,7 @@ package client
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -104,5 +105,97 @@ func TestBenchmarkMixedDistributionUsesScenarioSize(t *testing.T) {
 
 	if counts["shared-0"] != 29 || unique != 10 || counts["shared-1"]+counts["shared-2"]+counts["shared-3"] != 9 {
 		t.Fatalf("mixed distribution for 48 requests = counts=%v unique=%d", counts, unique)
+	}
+}
+
+func TestPrepareBenchmarkPlanRecordsDeterministicSeededOrder(t *testing.T) {
+	plan := BenchmarkPlan{
+		MaxTokens: 8, RequestTimeoutMS: 1000, WorkloadSeed: 42,
+		Scenarios: []BenchmarkScenario{
+			{Name: "a", Pattern: PrefixSame, PrefixBytes: 128, PrefixGroups: 1, Batches: 1, BatchSize: 1, Concurrency: 1},
+			{Name: "b", Pattern: PrefixSame, PrefixBytes: 128, PrefixGroups: 1, Batches: 1, BatchSize: 1, Concurrency: 1},
+			{Name: "c", Pattern: PrefixSame, PrefixBytes: 128, PrefixGroups: 1, Batches: 1, BatchSize: 1, Concurrency: 1},
+		},
+	}
+	first, err := PrepareBenchmarkPlan(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := PrepareBenchmarkPlan(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(first.ExecutionOrder, ",") != strings.Join(second.ExecutionOrder, ",") || len(first.ExecutionOrder) != 3 {
+		t.Fatalf("execution orders = %v / %v", first.ExecutionOrder, second.ExecutionOrder)
+	}
+}
+
+func TestCacheSaltIsolationScopesDoNotEnterAttemptRecords(t *testing.T) {
+	scenario := BenchmarkScenario{Name: "same", Pattern: PrefixSame, PrefixBytes: 128, PrefixGroups: 1}
+	cold := BenchmarkPlan{CacheMode: CacheCold, RunNonce: "cold-run"}
+	first, scope := benchmarkCacheSalt(cold, scenario, 0, 0, "shared-0")
+	second, _ := benchmarkCacheSalt(cold, scenario, 0, 1, "shared-0")
+	if first == second || scope != "request" {
+		t.Fatalf("cold salts/scopes = %q %q %q", first, second, scope)
+	}
+	warm := BenchmarkPlan{CacheMode: CacheControlledWarm, RunNonce: "warm-run"}
+	first, scope = benchmarkCacheSalt(warm, scenario, -1, 0, "shared-0")
+	second, _ = benchmarkCacheSalt(warm, scenario, 1, 9, "shared-0")
+	if first != second || scope != "prefix-group" {
+		t.Fatalf("warm salts/scopes = %q %q %q", first, second, scope)
+	}
+	body, err := json.Marshal(BenchmarkAttempt{CacheMode: CacheCold, CacheScope: "request", CacheGeneration: "generation-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), first) || strings.Contains(string(body), "cache_salt") {
+		t.Fatalf("attempt leaked derived cache salt: %s", body)
+	}
+}
+
+func TestControlledWarmAndFormalPlansRequireAuditableMetadata(t *testing.T) {
+	base := BenchmarkPlan{
+		MaxTokens: 8, RequestTimeoutMS: 1000, WorkloadSeed: 7, Treatment: "static", CacheMode: CacheControlledWarm,
+		RunNonce: "run-a", CacheGeneration: "pods-a",
+		Scenarios: []BenchmarkScenario{{Name: "same", Pattern: PrefixSame, PrefixBytes: 128, PrefixGroups: 1, Batches: 1, BatchSize: 1, Concurrency: 1}},
+	}
+	if _, err := PrepareBenchmarkPlan(base); err == nil || !strings.Contains(err.Error(), "warmup") {
+		t.Fatalf("controlled-warm plan without warmup error = %v", err)
+	}
+	base.Scenarios[0].WarmupRequests = 1
+	base.Formal = true
+	if _, err := PrepareBenchmarkPlan(base); err == nil || !strings.Contains(err.Error(), "provenance") {
+		t.Fatalf("formal plan without provenance error = %v", err)
+	}
+	base.Provenance = BenchmarkProvenance{
+		GitSHA: "abc", GatewayImage: "image@sha256:abc", GatewayPods: []string{"gateway-a/uid"}, VLLMVersion: "0.23.0",
+		Model: "qwen", ConfigDigest: "sha256:config", EstimatorProfile: "static-v1",
+	}
+	if _, err := PrepareBenchmarkPlan(base); err != nil {
+		t.Fatalf("complete formal plan rejected: %v", err)
+	}
+}
+
+func TestRunPlanReportsActualPromptTokenCompliance(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		writer.Header().Set(HeaderPromptTokens, "1018")
+		_, _ = writer.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n"))
+	}))
+	defer upstream.Close()
+	service, err := New(Config{Endpoint: upstream.URL, Model: "qwen", RequestTimeout: time.Second}, Dependencies{HTTPClient: upstream.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := BenchmarkPlan{
+		RunID: "tokens", MaxTokens: 8, RequestTimeoutMS: 1000,
+		Scenarios: []BenchmarkScenario{{Name: "tokens", Pattern: PrefixSame, PrefixBytes: 128, PrefixGroups: 1, Batches: 1, BatchSize: 2, Concurrency: 1, TargetPromptTokens: 1024, PromptTokenTolerance: 16}},
+	}
+	report, err := service.RunPlan(context.Background(), plan, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.PromptTokenMissing != 0 || report.PromptTokenViolations != 0 || report.Scenarios[0].ActualPromptTokenP50 != 1018 {
+		t.Fatalf("token report = %+v", report)
 	}
 }

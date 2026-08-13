@@ -254,6 +254,47 @@ func TestReadyRequiresUsableFreshDiscovery(t *testing.T) {
 	}
 }
 
+func TestConcurrentSelectionCommitsSnapshotAndReservationAtomically(t *testing.T) {
+	backends := []backend.Backend{{ID: "a", URL: "http://a:8000"}, {ID: "b", URL: "http://b:8000"}}
+	resolver := &mutableResolver{backends: backends, status: discovery.ResolverStatus{Status: discovery.StatusOK, ReadyBackends: 2}}
+	path, err := New(Config{Service: backend.Backend{ID: "service", URL: "http://service:8000"}}, Dependencies{
+		Resolver: resolver, Strategy: routing.NewLoadBalanced(), Circuits: newTestBreaker(t),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer path.Close()
+
+	const requests = 32
+	start := make(chan struct{})
+	leases := make(chan Lease, requests)
+	var wait sync.WaitGroup
+	wait.Add(requests)
+	for range requests {
+		go func() {
+			defer wait.Done()
+			<-start
+			lease, selectErr := path.Select(context.Background(), Request{})
+			if selectErr != nil {
+				t.Errorf("select: %v", selectErr)
+				return
+			}
+			leases <- lease
+		}()
+	}
+	close(start)
+	wait.Wait()
+	close(leases)
+	counts := map[backend.ID]int{}
+	for lease := range leases {
+		counts[lease.Decision.Backend.ID]++
+		lease.Complete(OutcomeClientCanceled)
+	}
+	if counts["a"] != requests/2 || counts["b"] != requests/2 {
+		t.Fatalf("concurrent reservations were not balanced: %v", counts)
+	}
+}
+
 func newTestBreaker(t *testing.T) circuit.Breaker {
 	t.Helper()
 	breaker, err := circuit.New(circuit.Config{

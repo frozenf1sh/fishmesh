@@ -20,19 +20,21 @@ import (
 var _ Path = (*service)(nil)
 
 type service struct {
-	config       Config
-	resolver     discovery.Resolver
-	observations observation.Reader
-	strategy     routing.Strategy
-	circuits     circuit.Breaker
-	tokenizer    tokenization.Tokenizer
-	kvCache      kvcache.Index
-	kvReconcile  func(context.Context, []backend.Backend) error
-	onRemove     func(backend.ID)
-	predictor    prediction.Tracker
-	cancel       context.CancelFunc
-	done         chan struct{}
-	close        sync.Once
+	config          Config
+	resolver        discovery.Resolver
+	observations    observation.Reader
+	strategy        routing.Strategy
+	circuits        circuit.Breaker
+	tokenizer       tokenization.Tokenizer
+	kvCache         kvcache.Index
+	kvReconcile     func(context.Context, []backend.Backend) error
+	onRemove        func(backend.ID)
+	predictor       prediction.Tracker
+	staticEstimator *prediction.StaticEstimator
+	cancel          context.CancelFunc
+	done            chan struct{}
+	close           sync.Once
+	selection       sync.Mutex // 将最终快照、选择与 lease reservation 作为一个短临界区提交。
 
 	mu       sync.RWMutex // 保护 active 与 counters 的成员关系，不保护 atomic 计数值。
 	active   map[backend.ID]struct{}
@@ -50,7 +52,7 @@ func New(config Config, dependencies Dependencies) (Path, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	service := &service{
 		config: config, resolver: dependencies.Resolver, observations: dependencies.Observations,
-		strategy: dependencies.Strategy, circuits: dependencies.Circuits, tokenizer: dependencies.Tokenizer, kvCache: dependencies.KVCache, kvReconcile: dependencies.KVReconcile, onRemove: dependencies.OnBackendRemoved, predictor: dependencies.Predictor,
+		strategy: dependencies.Strategy, circuits: dependencies.Circuits, tokenizer: dependencies.Tokenizer, kvCache: dependencies.KVCache, kvReconcile: dependencies.KVReconcile, onRemove: dependencies.OnBackendRemoved, predictor: dependencies.Predictor, staticEstimator: dependencies.StaticEstimator,
 		cancel: cancel, done: make(chan struct{}), active: map[backend.ID]struct{}{config.Service.ID: {}},
 		counters: map[backend.ID]*atomic.Int64{config.Service.ID: {}},
 	}
@@ -72,33 +74,88 @@ func (s *service) Select(ctx context.Context, request Request) (Lease, error) {
 	}
 
 	// 2. 合并观测、local in-flight 和 circuit，固定本次选择的健康候选。
-	state, snapshot := s.buildSnapshot(backends)
+	_, snapshot := s.buildSnapshot(backends)
 
 	// 3. KV-aware 模式使用真实 Token IDs 和 KV Match 构建纯 routing 输入；未知信号只降级，不伪装为零命中。
 	kvInput, kvStatus, err := s.buildKVAwareInput(ctx, tokenization.Input{Route: tokenization.Route(request.Route), Body: request.Body}, routing.EligibleBackends(snapshot))
 	if err != nil {
 		return Lease{}, err
 	}
+	// Tokenize/KV lookup 可并发执行；只有最终候选快照、决策和 counter reservation 串行提交，
+	// 防止同一批请求全部读取相同 local in-flight 后形成 thundering herd。
+	s.selection.Lock()
+	state, snapshot := s.buildSnapshot(backends)
 	state.KV, snapshot.KVAware = kvStatus, kvInput
+	if kvStatus == KVAvailable && s.staticEstimator != nil {
+		snapshot.Estimates = staticLatencyEstimates(snapshot, kvInput, s.staticEstimator)
+	}
 
 	// 4. 先由纯策略选择，再为最终 backend 登记可幂等 lease。
 	decision := s.selectDecision(request.RoutingKey, snapshot, state.Discovery)
 	if kvStatus == KVAvailable {
 		state.CachedPrefixTokens = kvInput.Matches[decision.Backend.ID].MatchedTokens
+		state.Estimate = selectedEstimateEvidence(snapshot, state.Observations, kvInput, decision.Backend.ID)
 	}
 
 	// 所有退出路径都由 Complete 幂等释放。
 	var ticket prediction.Ticket
-	if s.predictor != nil && kvStatus == KVAvailable && decision.Policy == routing.PolicyKVAwareV1 {
+	if s.predictor != nil && kvStatus == KVAvailable && (decision.Policy == routing.PolicyKVAwareV1 || decision.Policy == routing.PolicyKVAwareStaticV1) {
 		input := predictionInput(snapshot, kvInput, decision.Backend.ID)
 		ticket, state.Prediction = s.predictor.Begin(input)
 	}
 	counter := s.inflightCounter(decision.Backend.ID)
 	counter.Add(1)
+	s.selection.Unlock()
 	return Lease{
 		Decision: decision, State: state,
 		state: &leaseState{service: s, backendID: decision.Backend.ID, counter: counter, ticket: ticket},
 	}, nil
+}
+
+func selectedEstimateEvidence(snapshot routing.Snapshot, observations map[backend.ID]observation.Backend, kvInput routing.KVAwareInput, selected backend.ID) EstimateEvidence {
+	match := kvInput.Matches[selected]
+	load := snapshot.Loads[selected]
+	estimate := snapshot.Estimates[selected]
+	evidence := EstimateEvidence{
+		PromptTokens: kvInput.PromptTokens, CachedPrefixTokens: match.MatchedTokens,
+		UncachedTokens: kvInput.PromptTokens - match.MatchedTokens,
+		EstimatedTTFT:  estimate.TTFT, Valid: estimate.Valid, Confidence: estimate.Confidence,
+		Version: estimate.Version, Reason: estimate.Reason, LoadValid: load.Valid,
+		QueueDepth: load.QueueDepth, Running: load.Running, LocalDelta: load.LocalDelta, LocalInflight: snapshot.Inflight[selected],
+	}
+	if observed, ok := observations[selected]; ok {
+		evidence.LoadSampleAge = observed.Freshness
+	}
+	for _, candidate := range routing.EligibleBackends(snapshot) {
+		if snapshot.Loads[candidate.ID].HardOverload {
+			evidence.HardOverloadedCandidates++
+		}
+	}
+	return evidence
+}
+
+func staticLatencyEstimates(snapshot routing.Snapshot, kvInput routing.KVAwareInput, estimator *prediction.StaticEstimator) map[backend.ID]routing.LatencyEstimate {
+	estimates := make(map[backend.ID]routing.LatencyEstimate, len(snapshot.Backends))
+	identity := estimator.Identity()
+	for _, candidate := range routing.EligibleBackends(snapshot) {
+		match := kvInput.Matches[candidate.ID]
+		load := snapshot.Loads[candidate.ID]
+		estimate := estimator.Estimate(prediction.StaticInput{
+			Identity: identity,
+			Prompt: prediction.PromptWork{
+				PromptTokens: int64(kvInput.PromptTokens), CachedPrefixTokens: int64(match.MatchedTokens),
+			},
+			Load: prediction.LoadWork{
+				QueueDepth: load.QueueDepth, Running: load.Running, LocalDelta: load.LocalDelta,
+				LocalInflight: snapshot.Inflight[candidate.ID], Valid: load.Valid,
+			},
+		})
+		estimates[candidate.ID] = routing.LatencyEstimate{
+			TTFT: estimate.TTFT, Valid: estimate.Valid, Confidence: routing.EstimateConfidence(estimate.Confidence),
+			Version: estimate.Version, Reason: string(estimate.Reason),
+		}
+	}
+	return estimates
 }
 
 func (s *service) State(ctx context.Context) State {
@@ -279,6 +336,10 @@ func routingLoads(backends []backend.Backend, observations map[backend.ID]observ
 			state.QueueDepth = queue
 			state.Running = running
 			state.Valid = true
+			state.LocalDelta = inflight[candidate.ID] - running
+			if state.LocalDelta < 0 {
+				state.LocalDelta = 0
+			}
 		}
 		state.HardOverload = hardOverloaded(state, inflight[candidate.ID], config)
 		if ok || state.HardOverload {

@@ -1,6 +1,6 @@
 # FishMesh 项目当前状态
 
-最后项目状态更新时间：2026-08-16；集群最后真实验收时间：2026-08-15。仓库为
+最后项目状态更新时间：2026-08-16；集群最后真实验收时间：2026-08-16。仓库为
 `frozenf1sh/fishmesh`（private），当前 `main` 分支
 包含可信 serving baseline、三种 routing mode（`load-balanced`、`session-key`、`kv-aware`，
 对应策略标识为 `load-balanced-v1`、`session-key-v1`、`kv-aware-v1`）、request-path reliability
@@ -92,6 +92,45 @@ HardOverload，再交付以毫秒为单位的 calibrated-static TTFT estimator�
 `sha256:d8db3eac20b9cedadbec853793f16fb56a73bcd209986d9e79946d3fb4854a35`；rollout 后 GPU Node 保持 Ready、
 vLLM 2/2、Gateway 1/1，两 backend observation 均为 `ok`。8 个受控流式请求把一个 backend 的 running
 sample 从 0 提高到 8，结束后恢复 0；queue 未堆积，因此没有声称真实 HardOverload 已触发或 TTFT 已改善。
+
+R6I-2 已建立不参与实际选路的 calibrated-static TTFT 纯契约：profile 绑定 model、hardware、vLLM、
+prompt range 和版本，以 prompt token × cached-prefix ratio 二维单调网格插值 prefill duration，再加
+queue/running 或 local fallback 与 safety margin。未校准 profile 只能返回 `uncalibrated`，load unknown
+返回 `degraded`；身份不匹配、越界、非单调 profile 和 duration overflow 均显式拒绝。本阶段没有改变
+`kv-aware-v1` 的实际选择，也没有访问 GPU。
+
+R6I-3 已完成 static estimator 的请求路径接入：显式 `static-ttft` 模式从不超过 1 MiB 的 JSON profile
+构造 immutable estimator，requestpath 投影逐 backend estimate，routing 在 circuit/HardOverload 之后选择
+最小 TTFT。完整选择标记 `kv-aware-ttft-static-v1/kv-aware-static-ttft`；候选 estimate 缺失、无效或
+uncalibrated 时，整次选择原子回到 `kv-aware-v1/kv-aware-static-fallback`，不混合量纲。基础与当前 Lite
+manifest 仍为 `token-cost`，本阶段未 rollout、未改变当前集群流量。
+
+R6I-4 已补齐逐请求可审计证据：固定 `X-FishMesh-*` allowlist 和 benchmark JSONL 记录实际
+prompt/cached/uncached token、static estimate、confidence/version/reason、load age、queue/running、
+local in-flight 与 HardOverload 候选数，不记录 prompt、Token IDs 或 prefix identity。Prometheus 新增
+低基数 static selection/estimate/absolute-error 与 HardOverload outcome 指标；`fishmesh-client compare`
+可从多轮 request JSONL 生成 pooled P50/P95/P99、run-median P95、estimator MAE/P95 error 和固定 seed 的
+bootstrap 95% CI。本阶段未访问 GPU，完整 cache generation/provenance 留到 R6I-5。
+
+R6I-5 已把正式 benchmark 升级为缓存隔离协议：`cold` 每请求使用独立派生 `cache_salt`，
+`controlled-warm` 的 warmup 与同 prefix group 正式请求复用 salt 并验证 backend provenance，
+`steady-warm` 在独立 run namespace 内自然复用。每个 isolated run 固定 workload seed、执行顺序、
+treatment、唯一 nonce 和 vLLM cache generation；raw JSONL 不保存派生 salt。场景现在以 Gateway 返回的
+实际 prompt token 对目标/tolerance 做硬验收，报告 token min/P50/P95/max、缺失和越界。`formal=true`
+还要求 Git/image/Pod UID/vLLM/model/config/profile provenance。static profile 同时区分 4096 model capacity
+和例如 3072 的 calibrated prompt 上界，未测区间不会被外推为 calibrated。本阶段未访问 GPU。
+
+R6I-6 已在 RTX 4060 双 time-sliced vLLM 参考集群完成 512/1024/2048/3072 prompt token 校准与
+1/4/8/16 并发阶梯。低负载 static cold/warm estimator MAE 为 2.34/5.44 ms；2048-token 长生成阶梯中
+static 和 token-cost 均 120/120 成功，但 static TTFT P95 为 132.64 ms，对照为 128.62 ms（+3.13%，
+bootstrap 95% CI [-3.98%, +9.38%]），estimator MAE 为 27.57 ms，故未通过 active/default promotion
+门禁。实验同时修复 sampled running 的 local-delta 盲区和并发选择/reservation 非原子问题，并以 load
+bounds 禁止 static 向未测 queue/pressure 外推。当前参考集群已恢复 `r6i6-calibration-token-cost`：GPU
+Node Ready、vLLM 2/2、Gateway 1/1，真实请求返回 200；最终 Gateway rollout 后两个既有 vLLM generation
+的 replay 分别出现 awaiting/unrecoverable sequence gap，故请求显式降级为 `kv-aware-load-fallback-v1`，
+尚不构成 KV replay 恢复验收。为避免扰动健康 GPU，本轮没有重启 vLLM 掩盖该缺口。下一步先单独复验 replay，
+再只做 R6I-7 learned-shadow；若误差不能稳定优于 static，不增加在线动态权重复杂度。完整证据见
+`docs/experiments/2026-08-16-r6i6-token-ladder.md`。
 
 README 与 README_CN 现以五分钟 Lite demo 为入口：确认 `load-balanced` 默认基线后临时安装
 `lite-kv-aware`，用不带 session key 的同一长 system prompt、不同 user message 请求读取 KV-aware 决策头，

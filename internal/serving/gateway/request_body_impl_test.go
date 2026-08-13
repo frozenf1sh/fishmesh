@@ -62,7 +62,10 @@ func TestProxyBoundsAndReplaysBodyWhileExposingKVAwareDegradation(t *testing.T) 
 	defer upstream.Close()
 	path := &recordingPath{lease: requestpath.Lease{
 		Decision: routing.Decision{Backend: backend.Backend{ID: "backend-a", URL: upstream.URL}, PreferredBackendID: "backend-a", Reason: routing.ReasonKVAwareSignalUnavailable, Policy: routing.PolicyKVAwareLoadFallbackV1},
-		State:    requestpath.State{KV: requestpath.KVMatchUnavailable},
+		State: requestpath.State{KV: requestpath.KVMatchUnavailable, Estimate: requestpath.EstimateEvidence{
+			PromptTokens: 1024, UncachedTokens: 512, EstimatedTTFT: 42 * time.Millisecond, Valid: true,
+			Confidence: routing.EstimateConfidenceCalibrated, Version: "profile-v1", LoadValid: true, QueueDepth: 2, LocalDelta: 3,
+		}},
 	}}
 	server := newGatewayWithPath(t, path, routing.ModeKVAware, int64(len(requestBody)))
 
@@ -79,6 +82,9 @@ func TestProxyBoundsAndReplaysBodyWhileExposingKVAwareDegradation(t *testing.T) 
 	}
 	if response.Header().Get(headerCachedPrefixTokens) != "0" {
 		t.Fatalf("unknown cache must not publish a cached prefix: %v", response.Header())
+	}
+	if response.Header().Get(headerPromptTokens) != "1024" || response.Header().Get(headerEstimatedTTFTMS) != "42.000" || response.Header().Get(headerEstimatorVersion) != "profile-v1" || response.Header().Get(headerQueueDepth) != "2" || response.Header().Get(headerLocalDelta) != "3" {
+		t.Fatalf("estimator headers = %v", response.Header())
 	}
 }
 

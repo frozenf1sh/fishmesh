@@ -24,47 +24,51 @@ import (
 // /metrics，不依赖独立的 Prometheus 服务。抓取方（或人工 curl）拿到
 // 数据后自行聚合，减少实验环境的运行面。
 type Metrics struct {
-	registry              *prometheus.Registry
-	inflight              prometheus.Gauge         // 当前正在代理中的请求数（反映瞬时并发）
-	requests              *prometheus.CounterVec   // 完成的请求总数，按 method/status 分桶
-	requestSeconds        *prometheus.HistogramVec // 端到端请求耗时，按 method/status 分桶
-	ttftSeconds           prometheus.Histogram     // 首 token 延迟（TTFT），项目的核心测量指标
-	upstreamErrors        prometheus.Counter       // 上游传输层失败次数（区别于业务层 4xx/5xx）
-	streamErrors          prometheus.Counter       // response headers 之后的 upstream stream 读取失败
-	admissionRejections   prometheus.Counter       // Gateway 达到并发硬上限后拒绝的请求
-	circuitOpen           *prometheus.GaugeVec     // endpoint transport circuit 当前是否打开
-	circuitOpens          *prometheus.CounterVec   // endpoint transport circuit 打开次数
-	routingDecisions      *prometheus.CounterVec   // 路由模式和有限 backend ID 维度
-	routingReasons        *prometheus.CounterVec   // 固定枚举 reason，不使用请求 key 作为 label
-	sessionKeySpillovers  *prometheus.CounterVec   // session-key 发生溢出的次数，按触发原因分桶
-	routeFallbacks        prometheus.Counter       // 路由策略失败后的 Service fallback
-	observationStatus     *prometheus.GaugeVec
-	observationFreshness  *prometheus.GaugeVec
-	observationQueue      *prometheus.GaugeVec
-	observationRunning    *prometheus.GaugeVec
-	observationIdentity   *prometheus.GaugeVec
-	observationGPU        *prometheus.GaugeVec
-	discoveryStatus       *prometheus.GaugeVec
-	discoveryFreshness    prometheus.Gauge
-	discoveryReady        prometheus.Gauge
-	kvCacheValid          *prometheus.GaugeVec
-	kvCacheFreshness      *prometheus.GaugeVec
-	kvCacheLastSequence   *prometheus.GaugeVec
-	kvCacheAppliedBatches *prometheus.GaugeVec
-	kvCacheReplayBatches  *prometheus.GaugeVec
-	kvCacheStatus         *prometheus.GaugeVec
-	kvEventPublishToApply *prometheus.HistogramVec
-	kvAwareRequests       *prometheus.CounterVec
-	kvAwareDegradations   *prometheus.CounterVec
-	kvAwareCachedPrefix   prometheus.Histogram
-	predictionShadows     *prometheus.CounterVec
-	predictionErrors      prometheus.Histogram
-	kvCacheMu             sync.Mutex
-	kvCacheIDs            map[string]struct{}
-	kvCacheStatuses       map[string]string
-	observationMu         sync.Mutex
-	observationIDs        map[string]struct{}
-	identityLabels        map[string][2]string
+	registry                  *prometheus.Registry
+	inflight                  prometheus.Gauge         // 当前正在代理中的请求数（反映瞬时并发）
+	requests                  *prometheus.CounterVec   // 完成的请求总数，按 method/status 分桶
+	requestSeconds            *prometheus.HistogramVec // 端到端请求耗时，按 method/status 分桶
+	ttftSeconds               prometheus.Histogram     // 首 token 延迟（TTFT），项目的核心测量指标
+	upstreamErrors            prometheus.Counter       // 上游传输层失败次数（区别于业务层 4xx/5xx）
+	streamErrors              prometheus.Counter       // response headers 之后的 upstream stream 读取失败
+	admissionRejections       prometheus.Counter       // Gateway 达到并发硬上限后拒绝的请求
+	circuitOpen               *prometheus.GaugeVec     // endpoint transport circuit 当前是否打开
+	circuitOpens              *prometheus.CounterVec   // endpoint transport circuit 打开次数
+	routingDecisions          *prometheus.CounterVec   // 路由模式和有限 backend ID 维度
+	routingReasons            *prometheus.CounterVec   // 固定枚举 reason，不使用请求 key 作为 label
+	sessionKeySpillovers      *prometheus.CounterVec   // session-key 发生溢出的次数，按触发原因分桶
+	routeFallbacks            prometheus.Counter       // 路由策略失败后的 Service fallback
+	observationStatus         *prometheus.GaugeVec
+	observationFreshness      *prometheus.GaugeVec
+	observationQueue          *prometheus.GaugeVec
+	observationRunning        *prometheus.GaugeVec
+	observationIdentity       *prometheus.GaugeVec
+	observationGPU            *prometheus.GaugeVec
+	discoveryStatus           *prometheus.GaugeVec
+	discoveryFreshness        prometheus.Gauge
+	discoveryReady            prometheus.Gauge
+	kvCacheValid              *prometheus.GaugeVec
+	kvCacheFreshness          *prometheus.GaugeVec
+	kvCacheLastSequence       *prometheus.GaugeVec
+	kvCacheAppliedBatches     *prometheus.GaugeVec
+	kvCacheReplayBatches      *prometheus.GaugeVec
+	kvCacheStatus             *prometheus.GaugeVec
+	kvEventPublishToApply     *prometheus.HistogramVec
+	kvAwareRequests           *prometheus.CounterVec
+	kvAwareDegradations       *prometheus.CounterVec
+	kvAwareCachedPrefix       prometheus.Histogram
+	predictionShadows         *prometheus.CounterVec
+	predictionErrors          prometheus.Histogram
+	staticEstimatorSelections *prometheus.CounterVec
+	staticEstimatedTTFT       prometheus.Histogram
+	staticEstimatorErrors     prometheus.Histogram
+	hardOverloadSelections    *prometheus.CounterVec
+	kvCacheMu                 sync.Mutex
+	kvCacheIDs                map[string]struct{}
+	kvCacheStatuses           map[string]string
+	observationMu             sync.Mutex
+	observationIDs            map[string]struct{}
+	identityLabels            map[string][2]string
 }
 
 // NewMetrics 创建 standalone Gateway 自己的隔离 Prometheus registry。
@@ -154,7 +158,22 @@ func (m *Metrics) initializeRoutingMetrics() {
 		Namespace: metricNamespace, Subsystem: metricSubsystem, Name: metricPredictionAbsoluteErrorSeconds, Help: "Absolute error between actual first-event TTFT and the selected backend shadow estimate.",
 		Buckets: firstSSEEventBuckets(),
 	})
-	m.registry.MustRegister(m.circuitOpen, m.circuitOpens, m.routingDecisions, m.routingReasons, m.sessionKeySpillovers, m.routeFallbacks, m.predictionShadows, m.predictionErrors)
+	m.staticEstimatorSelections = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: metricNamespace, Subsystem: metricSubsystem, Name: metricStaticEstimatorSelectionsTotal, Help: "Static estimator selections by bounded confidence and reason.",
+	}, []string{labelConfidence, labelEstimatorReason})
+	m.staticEstimatedTTFT = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Namespace: metricNamespace, Subsystem: metricSubsystem, Name: metricStaticEstimatedTTFTSeconds, Help: "Selected backend static TTFT estimate.", Buckets: firstSSEEventBuckets(),
+	})
+	m.staticEstimatorErrors = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Namespace: metricNamespace, Subsystem: metricSubsystem, Name: metricStaticEstimatorErrorSeconds, Help: "Absolute error between selected static estimate and actual first-event TTFT.", Buckets: firstSSEEventBuckets(),
+	})
+	m.hardOverloadSelections = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: metricNamespace, Subsystem: metricSubsystem, Name: metricHardOverloadSelectionsTotal, Help: "Selections whose snapshot contained hard-overloaded candidates.",
+	}, []string{labelOutcome})
+	m.registry.MustRegister(
+		m.circuitOpen, m.circuitOpens, m.routingDecisions, m.routingReasons, m.sessionKeySpillovers, m.routeFallbacks,
+		m.predictionShadows, m.predictionErrors, m.staticEstimatorSelections, m.staticEstimatedTTFT, m.staticEstimatorErrors, m.hardOverloadSelections,
+	)
 }
 
 // initializeObservationMetrics 初始化每个 backend 的负载、身份和声明 GPU 资源指标。
@@ -469,6 +488,28 @@ func (m *Metrics) observeSelection(mode routing.Mode, lease requestpath.Lease) {
 			m.kvAwareDegradations.WithLabelValues(string(lease.State.KV)).Inc()
 		}
 	}
+	evidence := lease.State.Estimate
+	if evidence.PromptTokens > 0 {
+		confidence := string(evidence.Confidence)
+		if confidence == "" {
+			confidence = "unavailable"
+		}
+		reason := evidence.Reason
+		if reason == "" {
+			reason = "unavailable"
+		}
+		m.staticEstimatorSelections.WithLabelValues(confidence, reason).Inc()
+		if evidence.Valid && evidence.EstimatedTTFT > 0 {
+			m.staticEstimatedTTFT.Observe(evidence.EstimatedTTFT.Seconds())
+		}
+		if evidence.HardOverloadedCandidates > 0 {
+			outcome := "partial"
+			if decision.Reason == routing.ReasonKVAwareHardOverloadFallback {
+				outcome = "all"
+			}
+			m.hardOverloadSelections.WithLabelValues(outcome).Inc()
+		}
+	}
 	shadow := lease.State.Prediction
 	if shadow.Status != "" {
 		outcome := "unavailable"
@@ -486,7 +527,14 @@ func (m *Metrics) observeSelection(mode routing.Mode, lease requestpath.Lease) {
 //
 // requestpath 已经完成是否可用的判断，这里只记录绝对误差，不保存 prompt、Token IDs、
 // backend URL 或 prediction feature。无首事件、取消或上游失败的请求不会产生伪造样本。
-func (m *Metrics) observePrediction(_ requestpath.Lease, observation requestpath.FirstTokenObservation) {
+func (m *Metrics) observePrediction(lease requestpath.Lease, observation requestpath.FirstTokenObservation) {
+	if lease.State.Estimate.Valid && lease.State.Estimate.EstimatedTTFT > 0 && observation.Actual > 0 {
+		errorDuration := observation.Actual - lease.State.Estimate.EstimatedTTFT
+		if errorDuration < 0 {
+			errorDuration = -errorDuration
+		}
+		m.staticEstimatorErrors.Observe(errorDuration.Seconds())
+	}
 	if !observation.Valid {
 		return
 	}

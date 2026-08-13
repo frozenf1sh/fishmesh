@@ -198,6 +198,23 @@ go run ./cmd/fishmesh-client bench \
   --output-dir artifacts/bench/final-pressure
 ```
 
+Compare repeated A/B runs without re-reading prompts or raw SSE data:
+
+```bash
+go run ./cmd/fishmesh-client compare \
+  --baseline artifacts/bench/baseline-r1/requests.jsonl \
+  --treatment artifacts/bench/treatment-r1/requests.jsonl \
+  --output-dir artifacts/bench/comparison-r1
+```
+
+The report includes pooled TTFT percentiles, the median run-level P95, static-estimator error and a deterministic
+bootstrap confidence interval. Repeat each arm flag to include more runs.
+
+For cache-isolated token experiments, start from `configs/token-ladder-isolated.json`. Every isolated run records a
+workload seed, treatment, unique run nonce and vLLM cache generation. `cold`, `controlled-warm` and `steady-warm`
+derive bounded `cache_salt` values without writing them to artifacts. Declared token tiers are accepted only from the
+Gateway's actual prompt-token header and fail the run when evidence is missing or outside tolerance.
+
 Omitting `--plan` uses the built-in final matrix. Batches are sequential, requests inside a batch are bounded by the
 declared concurrency, and batch pauses give KVEvents/replay time to settle. The client never changes routing mode,
 clears cache, rolls Pods or starts another workload.
@@ -268,6 +285,13 @@ faster first token. See the [full true-mixed comparison report](artifacts/bench/
 
 The machine-readable source reports remain in [`artifacts/bench/`](artifacts/bench/); the image sources are kept beside
 the PNGs as SVG files under [`docs/assets/bench/`](docs/assets/bench/).
+
+The R6I token-calibration follow-up replaced arbitrary routing weights with a versioned millisecond profile inside a
+measured envelope. On the reference RTX 4060 cluster, static estimation was accurate at low load (2.34–5.44 ms MAE),
+but its 2048-token concurrency ladder did not pass the promotion gate: TTFT P95 was 132.64 ms versus 128.62 ms for
+token-cost (+3.13%, bootstrap 95% CI crossing zero). FishMesh therefore keeps token-cost as the active/default
+estimator and retains static TTFT as an explicit research overlay. See the
+[R6I-6 calibration report](docs/experiments/2026-08-16-r6i6-token-ladder.md).
 
 ## Delivery priorities
 

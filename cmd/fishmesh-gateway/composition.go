@@ -132,13 +132,22 @@ func buildRuntime(config servingconfig.Config, logger *slog.Logger) (*runtime, e
 		reconcile = kvAwareReconcile(index, config.Tokenization.Model)
 	}
 
-	// 5. prediction 只以 shadow 模式记录实际 TTFT；routing 不依赖该实现。
+	// 5. prediction tracker 只以 shadow 模式记录实际 TTFT；static estimator 是构造后
+	//    不可变的已校准 profile，由 requestpath 投影为 routing 稳定值。
 	//    预测器只接受请求完成后回写的首事件观测，不参与本次选择，避免影子实验改变
 	//    kv-aware 的行为或把未经验证的预测引入生产路由。
 	predictor, err := prediction.New(config.Prediction)
 	if err != nil {
 		assembled.Close()
 		return nil, fmt.Errorf("create TTFT predictor: %w", err)
+	}
+	var staticEstimator *prediction.StaticEstimator
+	if config.Routing.Mode == routing.ModeKVAware && config.Routing.KVAware.EstimatorMode == routing.KVAwareEstimatorStatic {
+		staticEstimator, err = prediction.NewStaticEstimator(config.StaticProfile)
+		if err != nil {
+			assembled.Close()
+			return nil, fmt.Errorf("create static TTFT estimator: %w", err)
+		}
 	}
 
 	// 6. 组合 RequestPath；backend 移除后在锁外统一清理 transport、metrics 和 KV instance。
@@ -147,7 +156,7 @@ func buildRuntime(config servingconfig.Config, logger *slog.Logger) (*runtime, e
 	pathService, err := requestpath.New(config.RequestPath, requestpath.Dependencies{
 		Resolver: resolver, Observations: observations, Strategy: components.strategy, Circuits: components.breaker,
 		Tokenizer: tokenizer, KVCache: index, KVReconcile: reconcile,
-		Predictor: predictor,
+		Predictor: predictor, StaticEstimator: staticEstimator,
 		OnBackendRemoved: func(backendID backend.ID) {
 			components.pool.Remove(backendID)
 			components.metrics.DeleteBackend(string(backendID), string(config.Routing.Mode))

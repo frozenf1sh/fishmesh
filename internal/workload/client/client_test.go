@@ -3,6 +3,7 @@ package client
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,9 +16,23 @@ func TestSendStreamsTextAndReturnsDecisionHeaders(t *testing.T) {
 		if request.Header.Get("Authorization") != "Bearer test-key" {
 			t.Fatalf("authorization header = %q", request.Header.Get("Authorization"))
 		}
+		var body struct {
+			CacheSalt string `json:"cache_salt"`
+			IgnoreEOS bool   `json:"ignore_eos"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil || body.CacheSalt != "isolated-salt" || !body.IgnoreEOS {
+			t.Fatalf("cache salt body = %+v, err=%v", body, err)
+		}
 		writer.Header().Set("Content-Type", "text/event-stream")
 		writer.Header().Set(HeaderKVStatus, "available")
 		writer.Header().Set(HeaderCachedPrefixTokens, "0")
+		writer.Header().Set(HeaderPromptTokens, "1024")
+		writer.Header().Set(HeaderUncachedTokens, "256")
+		writer.Header().Set(HeaderEstimatedTTFTMS, "42.5")
+		writer.Header().Set(HeaderEstimatorValid, "true")
+		writer.Header().Set(HeaderEstimatorConfidence, "calibrated")
+		writer.Header().Set(HeaderEstimatorVersion, "profile-v1")
+		writer.Header().Set(HeaderLocalDelta, "3")
 		_, _ = writer.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n"))
 		_, _ = writer.Write([]byte("data: [DONE]\n\n"))
 	}))
@@ -28,7 +43,7 @@ func TestSendStreamsTextAndReturnsDecisionHeaders(t *testing.T) {
 		t.Fatalf("new client: %v", err)
 	}
 	output := &bytes.Buffer{}
-	result, err := client.Send(context.Background(), Request{Messages: []Message{{Role: RoleUser, Content: "hi"}}, StreamOutput: output})
+	result, err := client.Send(context.Background(), Request{Messages: []Message{{Role: RoleUser, Content: "hi"}}, CacheSalt: "isolated-salt", IgnoreEOS: true, StreamOutput: output})
 	if err != nil {
 		t.Fatalf("send: %v", err)
 	}
@@ -37,6 +52,9 @@ func TestSendStreamsTextAndReturnsDecisionHeaders(t *testing.T) {
 	}
 	if result.Headers.KVStatus != "available" || result.Headers.CachedPrefixTokens != 0 {
 		t.Fatalf("decision headers = %+v", result.Headers)
+	}
+	if result.Headers.PromptTokens != 1024 || result.Headers.UncachedTokens != 256 || result.Headers.EstimatedTTFTMS != 42.5 || !result.Headers.EstimatorValid || result.Headers.EstimatorVersion != "profile-v1" || result.Headers.LocalDelta != 3 {
+		t.Fatalf("estimator headers = %+v", result.Headers)
 	}
 }
 

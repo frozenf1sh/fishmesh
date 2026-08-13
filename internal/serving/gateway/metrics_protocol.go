@@ -38,6 +38,10 @@ const (
 	metricKVAwareCachedPrefixTokens      = "kv_aware_cached_prefix_tokens"
 	metricPredictionShadowsTotal         = "prediction_shadows_total"
 	metricPredictionAbsoluteErrorSeconds = "prediction_absolute_error_seconds"
+	metricStaticEstimatorSelectionsTotal = "static_estimator_selections_total"
+	metricStaticEstimatedTTFTSeconds     = "static_estimated_ttft_seconds"
+	metricStaticEstimatorErrorSeconds    = "static_estimator_absolute_error_seconds"
+	metricHardOverloadSelectionsTotal    = "hard_overload_selections_total"
 
 	labelMethod            = "method"
 	labelStatus            = "status"
@@ -50,6 +54,9 @@ const (
 	labelKVCacheStatus     = "reason"
 	labelKVEventSource     = "source"
 	labelPredictionOutcome = "outcome"
+	labelConfidence        = "confidence"
+	labelEstimatorReason   = "estimator_reason"
+	labelOutcome           = "outcome"
 
 	kvCacheStatusReady   = "ready"
 	kvCacheStatusUnknown = "unknown"

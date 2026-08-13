@@ -48,5 +48,10 @@
 | 39 | R6H Render 降级与长上下文压测准备 | 修复冷 Render DNS/连接导致的选路前 503；完成真实 mixed 的 1568 请求反向顺序 A/B，TTFT P95 降低 76.7%、总耗时 P95 降低 55.0% |
 | 40 | R6I-0 可校准 TTFT 路由设计 | 固化 calibrated-static → learned-shadow → active gate 路线；先修 load/HardOverload，再做 token 阶梯与缓存隔离实验 |
 | 41 | R6I-1 负载观测与 HardOverload | Lite 启用有界 queue/running 抓取，requestpath 发布真实硬门，并消除 external load 与 local in-flight 重复成本 |
+| 42 | R6I-2 静态 TTFT 估算契约 | 版本化二维 prefill profile、毫秒 load cost、typed confidence/fallback 与纯函数门禁 |
+| 43 | R6I-3 静态 TTFT 路由接入 | requestpath 投影毫秒 estimate，routing 在安全门后选择，证据不完整时原子回退 token cost |
+| 44 | R6I-4 决策证据与对比报告 | 固定数值 headers/JSONL、低基数 estimator 指标与多轮 bootstrap A/B 汇总 |
+| 45 | R6I-5 缓存隔离与 Token 工作负载 | cache salt/run nonce、三种 cache 状态、实际 token 门禁与完整 provenance |
+| 46 | R6I-6 校准与 Token 阶梯 | 512–3072 token profile、并发阶梯、local-delta/原子 reservation 修正；static 未通过 active 门禁 |
 
 每个阶段完成后都会补充独立中文说明，并在文末明确下一阶段边界。

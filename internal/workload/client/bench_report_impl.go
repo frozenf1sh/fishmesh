@@ -34,6 +34,7 @@ func finalizeBenchmarkReport(report *BenchmarkReport, attempts []BenchmarkAttemp
 		summary := summarizeAttempts(items)
 		scenarioReport := BenchmarkScenarioReport{
 			Name: scenario.Name, Pattern: scenario.Pattern, PrefixBytes: scenario.PrefixBytes, PrefixGroups: scenario.PrefixGroups,
+			TargetPromptTokens: scenario.TargetPromptTokens, PromptTokenTolerance: scenario.PromptTokenTolerance,
 			Requested: scenario.Batches * scenario.BatchSize, Batches: make([]BenchmarkBatchReport, 0, scenario.Batches),
 		}
 		applyScenarioMetrics(&scenarioReport, summary)
@@ -60,6 +61,8 @@ func finalizeBenchmarkReport(report *BenchmarkReport, attempts []BenchmarkAttemp
 	report.TTFTP95MS = percentile(global.ttfts, 95)
 	report.DurationP50MS = percentile(global.durations, 50)
 	report.DurationP95MS = percentile(global.durations, 95)
+	report.PromptTokenMissing = global.promptTokenMissing
+	report.PromptTokenViolations = global.promptTokenViolations
 }
 
 type benchmarkMetrics struct {
@@ -68,6 +71,9 @@ type benchmarkMetrics struct {
 	kvStatuses, routeReasons     map[string]int
 	backends                     map[string]int
 	cachedSamples, cachedSum     int
+	promptTokens                 []int
+	promptTokenMissing           int
+	promptTokenViolations        int
 }
 
 func summarizeAttempts(attempts []BenchmarkAttempt) benchmarkMetrics {
@@ -98,6 +104,16 @@ func summarizeAttempts(attempts []BenchmarkAttempt) benchmarkMetrics {
 			metrics.cachedSamples++
 			metrics.cachedSum += attempt.Headers.CachedPrefixTokens
 		}
+		if attempt.TargetPromptTokens > 0 {
+			if attempt.Headers.PromptTokens == 0 {
+				metrics.promptTokenMissing++
+			} else {
+				metrics.promptTokens = append(metrics.promptTokens, attempt.Headers.PromptTokens)
+				if absoluteInt(attempt.PromptTokenDelta) > attempt.PromptTokenTolerance {
+					metrics.promptTokenViolations++
+				}
+			}
+		}
 	}
 	return metrics
 }
@@ -116,6 +132,14 @@ func applyScenarioMetrics(report *BenchmarkScenarioReport, metrics benchmarkMetr
 	report.DurationP50MS, report.DurationP95MS = percentile(metrics.durations, 50), percentile(metrics.durations, 95)
 	report.KVStatuses, report.RouteReasons, report.Backends = metrics.kvStatuses, metrics.routeReasons, metrics.backends
 	report.CachedPrefixSamples, report.CachedPrefixSum = metrics.cachedSamples, metrics.cachedSum
+	if len(metrics.promptTokens) > 0 {
+		report.ActualPromptTokenMin = minimumInt(metrics.promptTokens)
+		report.ActualPromptTokenP50 = percentileInt(metrics.promptTokens, 50)
+		report.ActualPromptTokenP95 = percentileInt(metrics.promptTokens, 95)
+		report.ActualPromptTokenMax = maximumInt(metrics.promptTokens)
+	}
+	report.PromptTokenMissing = metrics.promptTokenMissing
+	report.PromptTokenViolations = metrics.promptTokenViolations
 }
 
 func plannedRequests(plan BenchmarkPlan) int {
@@ -146,4 +170,33 @@ func percentile(values []float64, point int) float64 {
 	sort.Float64s(values)
 	index := (len(values) - 1) * point / 100
 	return values[index]
+}
+
+func percentileInt(values []int, point int) int {
+	if len(values) == 0 {
+		return 0
+	}
+	copied := append([]int(nil), values...)
+	sort.Ints(copied)
+	return copied[(len(copied)-1)*point/100]
+}
+
+func minimumInt(values []int) int {
+	minimum := values[0]
+	for _, value := range values[1:] {
+		if value < minimum {
+			minimum = value
+		}
+	}
+	return minimum
+}
+
+func maximumInt(values []int) int {
+	maximum := values[0]
+	for _, value := range values[1:] {
+		if value > maximum {
+			maximum = value
+		}
+	}
+	return maximum
 }

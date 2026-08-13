@@ -9,6 +9,8 @@ const (
 	envKVAwareQueueTokenPenalty    = "FISHMESH_KV_AWARE_QUEUE_TOKEN_PENALTY"
 	envKVAwareRunningTokenPenalty  = "FISHMESH_KV_AWARE_RUNNING_TOKEN_PENALTY"
 	envKVAwareInflightTokenPenalty = "FISHMESH_KV_AWARE_INFLIGHT_TOKEN_PENALTY"
+	envKVAwareEstimatorMode        = "FISHMESH_KV_AWARE_ESTIMATOR_MODE"
+	envKVAwareStaticProfileFile    = "FISHMESH_KV_AWARE_STATIC_PROFILE_FILE"
 	envPredictionMode              = "FISHMESH_PREDICTION_MODE"
 	envBackendEndpoints            = "FISHMESH_BACKEND_ENDPOINTS"
 	envEndpointDiscovery           = "FISHMESH_ENDPOINT_DISCOVERY"

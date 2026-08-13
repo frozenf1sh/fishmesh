@@ -165,7 +165,8 @@ entity/*     -> standard library only（仅在出现真实跨 domain 稳定模�
 - `tokenization` 选择 endpoint 或静默 fallback；
 - `gateway` 解析 KVEvents、维护 block map 或实现调度公式；
 - `llmd` 启动 Lite discovery/index/requestpath；
-- `prediction` 只能提供影子 TTFT 观测，不能反向参与 routing 决策；
+- `prediction` 提供纯 static estimator 与 learned-shadow tracker；它不能 import/call routing，
+  active 选择只能由 requestpath 投影稳定 estimate 后交给 routing；
 - 原子 domain import `gateway/requestpath/cmd`；
 - 新建 `shared/common/utils/helpers/manager` 隐藏所有权。
 - 把所有 Config/DTO 无差别搬入根 `entity` 包；实体必须按概念分包，并具有真实跨 domain 语义。
@@ -181,8 +182,8 @@ func (s *service) Select(ctx context.Context, request Request) (Lease, error) {
 	// 1. 获得与模型模板一致的真实 Token IDs；失败时记录 KV-aware 降级原因。
 	prompt := s.tokenize(ctx, request)
 
-	// 2. 构建 endpoint、负载、故障和逐 Pod cache match 的不可变快照。
-	snapshot := s.snapshot(ctx, prompt)
+// 2. 在短临界区内重建 endpoint/load/circuit 快照，并原子提交选择与 reservation。
+snapshot := s.snapshot(ctx, prompt)
 
 	// 3. 应用 eligibility 与 kv-aware 纯策略。
 	decision, err := s.router.Select(request.Profile(prompt), snapshot)
@@ -190,14 +191,15 @@ func (s *service) Select(ctx context.Context, request Request) (Lease, error) {
 		return Lease{}, err
 	}
 
-	// 4. 为实际选中的 backend 建立可幂等结算的请求 lease。
-	return s.leases.Acquire(decision), nil
+// 4. 为实际选中的 backend 建立可幂等结算的请求 lease；counter reservation 与选择不可分割。
+return s.leases.Acquire(decision), nil
 }
 ```
 
-示例只表达目标阅读体验，不提前规定最终函数签名。tokenization、snapshot、degradation 和 lease
-分别由小方法/能力包实现；主函数中不得出现 JSON、ZMQ、block hash、Prometheus label 或 map
-清理循环。
+示例只表达目标阅读体验，不提前规定最终函数签名。tokenization/KV lookup 可并发执行；最终 snapshot、
+策略选择和 local counter reservation 必须在短临界区原子提交，避免一批请求同时读取相同 in-flight 后集中到
+同一 backend。degradation 和 lease 分别由小方法/能力包实现；主函数中不得出现 JSON、ZMQ、block hash、
+Prometheus label 或 map 清理循环。
 
 Gateway 主流程同样只保留：admission、bounded body、Select、stream、Complete。请求 body 只保存
 一次，选路后以新的 reader 转发原始字节；响应不做完整缓存。
@@ -218,7 +220,9 @@ EndpointSnapshot {
   backend
   cached_prefix_tokens Sample[int]
   queued_work Sample[int64]
+  running_work Sample[int64]
   local_inflight
+  local_delta = max(local_inflight - sampled_running, 0)
   prefill_rate Sample[float64]
   kv_usage Sample[float64]
   eligibility
@@ -229,7 +233,7 @@ EndpointSnapshot {
 
 1. 过滤不合格 endpoint；
 2. 计算 `uncached_tokens`；
-3. 根据 queued work/prefill rate 估算等待与 prefill 成本；
+3. 根据 queued/running 与 local delta 估算等待和 prefill 成本；外部 load 未知时才使用完整 local in-flight；
 4. 使用 hard overload guard；
 5. 用最小 benefit margin/hysteresis 避免为很小 cache 差异抖动；
 6. KV-aware 无效时回到 load-balanced；
@@ -237,6 +241,8 @@ EndpointSnapshot {
 8. 返回 typed policy/reason/degradation 和解释字段。
 
 禁止第一版加入十几个归一化指标和任意权重。每个公式项必须有量纲、来源、缺失语义和测试。
+Calibrated-static profile 还必须声明实测 prompt/cache/load 包络；任一 load 维度越界时返回 typed
+`out-of-range` 并整次回退 token-cost，不允许外推后继续标记 calibrated。
 
 ## 8. 并发、生命周期和 HA
 
@@ -302,6 +308,9 @@ tests、httptest fixture 和最终真实集群验收覆盖；不再维护第二�
 
 最终 workload 只保留 `fishmesh-client bench`。它不 import Serving 内部包，不进入 product image，不切换
 路由模式或清理集群状态；历史 loadgen 通过 Git 历史保留，不再参与 `go test ./...` 或默认 manifest。
+正式实验由 plan 拥有 workload seed、执行顺序、cache mode/run nonce/generation 和运行 provenance；
+`cache_salt` 只在请求体内使用且不进入产物。prompt 档位以 Gateway 返回的实际 token 数验收，byte 仅是
+本地生成参数。warmup 使用独立 record type，`compare` 只汇总正式 request records。
 
 ## 11. 演进顺序
 

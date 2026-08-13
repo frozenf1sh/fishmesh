@@ -15,12 +15,15 @@ func TestRoutingLoadsPublishesQueueAndLocalHardOverload(t *testing.T) {
 			RunningRequests: observation.Sample[float64]{Value: 1, Valid: true},
 		},
 	}
-	loads := routingLoads(backends, observations, map[backend.ID]int64{"b": 3}, Config{
+	loads := routingLoads(backends, observations, map[backend.ID]int64{"a": 3, "b": 3}, Config{
 		HardQueueDepth: 4, HardLocalInflight: 3,
 	})
 
 	if !loads["a"].Valid || !loads["a"].HardOverload {
 		t.Fatalf("queue threshold was not published: %+v", loads["a"])
+	}
+	if loads["a"].LocalDelta != 2 {
+		t.Fatalf("local delta = %d, want 2", loads["a"].LocalDelta)
 	}
 	if loads["b"].Valid || !loads["b"].HardOverload {
 		t.Fatalf("local threshold must work without an observation: %+v", loads["b"])

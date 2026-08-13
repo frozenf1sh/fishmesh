@@ -27,6 +27,7 @@ const (
 	PolicySessionKeyV1          Policy = "session-key-v1"
 	PolicyServiceFallbackV1     Policy = "service-fallback-v1" // 固定 fallback，不是可配置 routing mode
 	PolicyKVAwareV1             Policy = "kv-aware-v1"
+	PolicyKVAwareStaticV1       Policy = "kv-aware-ttft-static-v1"
 	PolicyKVAwareLoadFallbackV1 Policy = "kv-aware-load-fallback-v1"
 
 	// Reason 是决策的可解释标签，由 requestpath 投影到观测与调试输出。
@@ -53,6 +54,8 @@ const (
 
 	// —— KV-aware 相关 ——
 	ReasonKVAware                     Reason = "kv-aware"                        // KV-aware 策略正常完成成本式选择
+	ReasonKVAwareStatic               Reason = "kv-aware-static-ttft"            // 使用 calibrated-static TTFT estimate 选择
+	ReasonKVAwareStaticFallback       Reason = "kv-aware-static-fallback"        // static estimate 不完整，回到 token cost
 	ReasonKVAwareSignalUnavailable    Reason = "kv-aware-signal-unavailable"     // KV/负载信号缺失，KV-aware 无法成立
 	ReasonKVAwareHardOverloadFallback Reason = "kv-aware-hard-overload-fallback" // 所有健康后端硬过载，保可用性优先
 )
@@ -93,9 +96,27 @@ type SessionKeyConfig struct {
 // KVAwareConfig 将各类已知压力折算为等价未缓存 token。它只决定同一已知 KV 状态下的
 // 取舍，不接受或掩盖未知 load；具体数值必须在目标硬件/profile 上校准。
 type KVAwareConfig struct {
+	EstimatorMode        KVAwareEstimatorMode
 	QueueTokenPenalty    int64 // 每个排队请求折算的 token 成本（尚未开始 prefill，惩罚最重）
 	RunningTokenPenalty  int64 // 每个运行中请求折算的 token 成本
 	InflightTokenPenalty int64 // 每个本地在途请求折算的 token 成本
+}
+
+const (
+	KVAwareEstimatorTokenCost KVAwareEstimatorMode = "token-cost"
+	KVAwareEstimatorStatic    KVAwareEstimatorMode = "static-ttft"
+)
+
+// KVAwareEstimatorMode 选择 KV-aware 候选比较使用的受控估算契约。
+type KVAwareEstimatorMode string
+
+func (m KVAwareEstimatorMode) Validate() error {
+	switch m {
+	case "", KVAwareEstimatorTokenCost, KVAwareEstimatorStatic:
+		return nil
+	default:
+		return fmt.Errorf("unsupported KV-aware estimator mode %q", m)
+	}
 }
 
 // Config 是组合根创建具体 routing strategy 的配置。
@@ -109,6 +130,9 @@ type Config struct {
 
 // Validate 拒绝会把压力变成负成本的配置；零允许在受控实验中单独关闭一个已知项。
 func (c KVAwareConfig) Validate() error {
+	if err := c.EstimatorMode.Validate(); err != nil {
+		return err
+	}
 	if c.QueueTokenPenalty < 0 || c.RunningTokenPenalty < 0 || c.InflightTokenPenalty < 0 {
 		return fmt.Errorf("kv-aware token penalties must not be negative")
 	}
@@ -159,14 +183,34 @@ type Snapshot struct {
 	Ineligible   map[backend.ID]Reason              // 被熔断/生命周期挡掉的后端及原因
 	Loads        map[backend.ID]Load                // 外部负载快照（queue/running）
 	KVAware      KVAwareInput                       // KV 缓存命中的只读投影
+	Estimates    map[backend.ID]LatencyEstimate     // requestpath 投影的逐 backend TTFT estimate
 }
 
 // Load 是 routing 解释的逐 backend 负载值；缺失观测必须显式标记，而不能伪装成零负载。
 type Load struct {
 	QueueDepth   int64 // 排队请求数（外部观测）
 	Running      int64 // 正在执行的请求数（外部观测）
+	LocalDelta   int64 // 尚未被外部 running 覆盖的本 Gateway 在途增量
 	Valid        bool  // 观测是否有效；false 表示未知，绝不能当作 0 参与比较
 	HardOverload bool  // 是否越过硬过载阈值；越过者在 KV-aware 策略中直接出局
+}
+
+const (
+	EstimateConfidenceCalibrated   EstimateConfidence = "calibrated"
+	EstimateConfidenceDegraded     EstimateConfidence = "degraded"
+	EstimateConfidenceUncalibrated EstimateConfidence = "uncalibrated"
+)
+
+// EstimateConfidence 是 routing 可解释但不拟合的置信度值。
+type EstimateConfidence string
+
+// LatencyEstimate 不暴露 estimator 实现，只保存一次选择使用的稳定毫秒值和 provenance。
+type LatencyEstimate struct {
+	TTFT       time.Duration
+	Valid      bool
+	Confidence EstimateConfidence
+	Version    string
+	Reason     string
 }
 
 // KVMatch 是 routing 对真实 KV 状态的只读投影。它不暴露 kvcache 的实现或第三方类型。

@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -25,6 +27,9 @@ func TestDefaultConfigIsComplete(t *testing.T) {
 	}
 	if config.Tokenization.Timeout <= 0 || config.KVCache.FreshnessTTL <= 0 || config.Prediction.MaxSamples <= 0 || config.Transport.IdleConnTimeout <= 0 {
 		t.Fatalf("default adapter bounds are incomplete: %+v %+v %+v %+v", config.Tokenization, config.KVCache, config.Prediction, config.Transport)
+	}
+	if config.Routing.KVAware.EstimatorMode != routing.KVAwareEstimatorTokenCost {
+		t.Fatalf("default estimator mode = %q", config.Routing.KVAware.EstimatorMode)
 	}
 }
 
@@ -134,6 +139,52 @@ func TestLoadEnvironmentMapsPredictionShadowMode(t *testing.T) {
 	}
 	if config.Prediction.Mode != "shadow" {
 		t.Fatalf("prediction mode = %q, want shadow", config.Prediction.Mode)
+	}
+}
+
+func TestLoadEnvironmentMapsCalibratedStaticProfile(t *testing.T) {
+	profilePath := filepath.Join(t.TempDir(), "profile.json")
+	profile := `{
+  "model":"qwen2.5-0.5b-instruct",
+  "hardware_profile":"rtx4060-timeslice",
+  "vllm_version":"0.23.0",
+  "min_prompt_tokens":512,
+  "max_model_tokens":4096,
+  "max_prompt_tokens":3072,
+  "version":"test-v1",
+  "calibrated":true,
+  "prompt_token_breakpoints":[512,3072],
+  "cached_ratio_breakpoints":[0,10000],
+  "prefill_ms":[[40,5],[320,20]],
+  "queue_wait_ms":30,
+  "running_delay_ms":10,
+  "local_delta_ms":6,
+  "local_fallback_ms":5,
+  "safety_margin_ms":2,
+  "load_bounds":{"max_queue_depth":0,"max_running":8,"max_local_delta":11,"max_local_fallback":32}
+}`
+	if err := os.WriteFile(profilePath, []byte(profile), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(envRoutingMode, string(routing.ModeKVAware))
+	t.Setenv(envEndpointDiscovery, string(discovery.ModeEndpointSlice))
+	t.Setenv(envKVAwareEstimatorMode, string(routing.KVAwareEstimatorStatic))
+	t.Setenv(envKVAwareStaticProfileFile, profilePath)
+	config, err := LoadEnvironment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.Routing.KVAware.EstimatorMode != routing.KVAwareEstimatorStatic || !config.StaticProfile.Calibrated || config.StaticProfile.Version != "test-v1" || config.StaticProfile.MaxPromptTokens != 3072 || config.StaticProfile.QueueWaitPerRequest != 30*time.Millisecond || config.StaticProfile.LocalDeltaPerRequest != 6*time.Millisecond || config.StaticProfile.LoadBounds.MaxRunning != 8 {
+		t.Fatalf("static profile was not mapped: %+v", config.StaticProfile)
+	}
+}
+
+func TestLoadEnvironmentRejectsStaticModeWithoutProfile(t *testing.T) {
+	t.Setenv(envRoutingMode, string(routing.ModeKVAware))
+	t.Setenv(envEndpointDiscovery, string(discovery.ModeEndpointSlice))
+	t.Setenv(envKVAwareEstimatorMode, string(routing.KVAwareEstimatorStatic))
+	if _, err := LoadEnvironment(); err == nil || !strings.Contains(err.Error(), envKVAwareStaticProfileFile) {
+		t.Fatalf("missing static profile was accepted: %v", err)
 	}
 }
 

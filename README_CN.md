@@ -191,6 +191,23 @@ go run ./cmd/fishmesh-client bench \
   --output-dir artifacts/bench/final-pressure
 ```
 
+多轮 A/B 可直接从不含 prompt 和原始 SSE 的 request JSONL 生成对比：
+
+```bash
+go run ./cmd/fishmesh-client compare \
+  --baseline artifacts/bench/baseline-r1/requests.jsonl \
+  --treatment artifacts/bench/treatment-r1/requests.jsonl \
+  --output-dir artifacts/bench/comparison-r1
+```
+
+报告包含 pooled TTFT 分位数、跨轮 P95 中位数、static estimator 误差和固定 seed 的 bootstrap 置信区间；
+重复传入每个 arm 参数即可纳入多轮结果。
+
+缓存隔离的 token 实验从 `configs/token-ladder-isolated.json` 开始。每轮记录 workload seed、treatment、
+唯一 run nonce 和真实 vLLM cache generation；`cold`、`controlled-warm`、`steady-warm` 会派生有界
+`cache_salt`，但不把 salt 写入产物。token 档位只以 Gateway 返回的实际 prompt-token header 验收，
+缺失或超出 tolerance 时即使报告已经落盘，命令仍失败。
+
 省略 `--plan` 时使用内置最终矩阵。批次之间顺序执行，批次内部使用受限并发，并留出 KVEvents/replay
 收敛时间。客户端只把可选 `FISHMESH_API_KEY` 放进出站 Authorization header，绝不会把它、prompt、原始
 SSE payload 或任意 upstream header 写入压测产物；也不会切路由模式、清 cache、滚动 Pod 或自行启动并行
@@ -254,6 +271,12 @@ TTFT P50 下降 9.9%–13.4%；短前缀场景的尾延迟仍有波动。四轮�
 
 机器可读的源报告仍保存在 [`artifacts/bench/`](artifacts/bench/)；图片对应的 SVG 源文件与 PNG 一起保存在
 [`docs/assets/bench/`](docs/assets/bench/)。
+
+R6I token 校准进一步把任意固定权重替换为“仅在实测包络内有效”的版本化毫秒 profile。参考 RTX 4060
+集群上，static 在低负载的 MAE 为 2.34–5.44 ms，但 2048-token 并发阶梯没有通过 promotion gate：TTFT
+P95 为 132.64 ms，对照 token-cost 为 128.62 ms（+3.13%，bootstrap 95% CI 跨 0）。因此当前和默认
+estimator 继续使用 token-cost，static TTFT 只作为显式研究 overlay 保留。详见
+[R6I-6 校准报告](docs/experiments/2026-08-16-r6i6-token-ladder.md)。
 
 ## 交付优先级
 

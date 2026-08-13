@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/frozenf1sh/fishmesh/internal/workload/client"
@@ -49,7 +50,7 @@ func main() {
 
 func run(arguments []string, input io.Reader, output, diagnostics io.Writer) error {
 	if len(arguments) == 0 {
-		return errors.New("usage: fishmesh-client <chat|request|bench> [flags]")
+		return errors.New("usage: fishmesh-client <chat|request|bench|compare> [flags]")
 	}
 	switch arguments[0] {
 	case "chat":
@@ -58,9 +59,63 @@ func run(arguments []string, input io.Reader, output, diagnostics io.Writer) err
 		return runRequest(arguments[1:], output, diagnostics)
 	case "bench":
 		return runBenchmark(arguments[1:], diagnostics)
+	case "compare":
+		return runCompare(arguments[1:], output, diagnostics)
 	default:
-		return fmt.Errorf("unknown command %q (use chat, request, or bench)", arguments[0])
+		return fmt.Errorf("unknown command %q (use chat, request, bench, or compare)", arguments[0])
 	}
+}
+
+type repeatedPaths []string
+
+func (p *repeatedPaths) String() string { return strings.Join(*p, ",") }
+func (p *repeatedPaths) Set(value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return errors.New("comparison path must not be empty")
+	}
+	*p = append(*p, value)
+	return nil
+}
+
+func runCompare(arguments []string, output, diagnostics io.Writer) error {
+	set := flag.NewFlagSet("compare", flag.ContinueOnError)
+	set.SetOutput(diagnostics)
+	var baseline, treatment repeatedPaths
+	set.Var(&baseline, "baseline", "baseline requests.jsonl path; repeat for multiple runs")
+	set.Var(&treatment, "treatment", "treatment requests.jsonl path; repeat for multiple runs")
+	bootstrap := set.Int("bootstrap", 2000, "bootstrap resamples for the P95 delta confidence interval")
+	seed := set.Int64("seed", 1, "deterministic bootstrap seed")
+	outputDir := set.String("output-dir", "", "comparison artifact directory")
+	if err := set.Parse(arguments); err != nil {
+		return err
+	}
+	report, err := client.CompareBenchmarkFiles(baseline, treatment, *bootstrap, *seed)
+	if err != nil {
+		return err
+	}
+	if *outputDir == "" {
+		*outputDir = filepath.Join("artifacts", "bench", "comparison-"+time.Now().UTC().Format(defaultHistoryTimestamp))
+	}
+	if err := os.MkdirAll(*outputDir, 0o755); err != nil {
+		return fmt.Errorf("create comparison output directory: %w", err)
+	}
+	body, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode comparison report: %w", err)
+	}
+	jsonPath := filepath.Join(*outputDir, "comparison.json")
+	markdownPath := filepath.Join(*outputDir, "comparison.md")
+	if err := os.WriteFile(jsonPath, append(body, '\n'), 0o644); err != nil {
+		return fmt.Errorf("write comparison JSON: %w", err)
+	}
+	markdown := report.Markdown()
+	if err := os.WriteFile(markdownPath, []byte(markdown), 0o644); err != nil {
+		return fmt.Errorf("write comparison markdown: %w", err)
+	}
+	fmt.Fprint(output, markdown)
+	fmt.Fprintf(diagnostics, "comparison_json=%s comparison_markdown=%s\n", jsonPath, markdownPath)
+	return nil
 }
 
 func commonFlags(set *flag.FlagSet) (endpoint, model *string, maxTokens *int, timeout *time.Duration) {
@@ -223,14 +278,15 @@ func fprintlnDiagnosticEvidence(diagnostics io.Writer, result client.Result, col
 // formatDiagnosticEvidence 只突出人类排障关键值，不改变固定 header allowlist 或 JSONL schema。
 func formatDiagnosticEvidence(result client.Result, color bool) string {
 	headers := result.Headers
-	return fmt.Sprintf("ttft=%s duration=%s routing_mode=%s route_reason=%s policy=%s kv_status=%s cached_prefix_tokens=%d backend_id=%s preferred_backend_id=%s upstream=%s spillover_reason=%s",
+	return fmt.Sprintf("ttft=%s duration=%s routing_mode=%s route_reason=%s policy=%s kv_status=%s prompt_tokens=%d cached_prefix_tokens=%d uncached_tokens=%d estimated_ttft_ms=%.3f estimator_confidence=%s estimator_version=%s load_valid=%t queue=%d running=%d local_delta=%d local_inflight=%d backend_id=%s preferred_backend_id=%s upstream=%s spillover_reason=%s",
 		colorize(result.TTFT.Round(time.Millisecond).String(), ansiCyan, color),
 		colorize(result.Duration.Round(time.Millisecond).String(), ansiDim, color),
 		colorize(headers.RoutingMode, ansiBlue, color),
 		colorize(headers.RouteReason, ansiYellow, color),
 		colorize(headers.Policy, ansiGreen, color),
 		colorize(headers.KVStatus, ansiYellow, color),
-		headers.CachedPrefixTokens,
+		headers.PromptTokens, headers.CachedPrefixTokens, headers.UncachedTokens, headers.EstimatedTTFTMS, headers.EstimatorConfidence, headers.EstimatorVersion,
+		headers.LoadValid, headers.QueueDepth, headers.RunningRequests, headers.LocalDelta, headers.LocalInflight,
 		colorize(headers.BackendID, ansiPurple, color), headers.PreferredBackendID, headers.Upstream, headers.SpilloverReason)
 }
 
@@ -251,6 +307,10 @@ func runBenchmark(arguments []string, diagnostics io.Writer) error {
 	planPath := set.String("plan", "", "JSON benchmark plan; omitted uses the built-in final matrix")
 	outputDir := set.String("output-dir", "", "report directory; default artifacts/bench/<run-id>")
 	runID := set.String("run-id", "", "override the plan run ID")
+	treatment := set.String("treatment", "", "override the isolated benchmark treatment name")
+	runNonce := set.String("run-nonce", "", "override the unique cache-isolation run nonce")
+	cacheGeneration := set.String("cache-generation", "", "override the vLLM cache generation identifier")
+	workloadSeed := set.Int64("workload-seed", 0, "override the deterministic workload seed")
 	allowHigh := set.Bool("allow-high-concurrency", false, "acknowledge high concurrency declared by the plan")
 	if err := set.Parse(arguments); err != nil {
 		return err
@@ -274,13 +334,27 @@ func runBenchmark(arguments []string, diagnostics io.Writer) error {
 	if *runID != "" {
 		plan.RunID = *runID
 	}
+	if *treatment != "" {
+		plan.Treatment = *treatment
+	}
+	if *runNonce != "" {
+		plan.RunNonce = *runNonce
+	}
+	if *cacheGeneration != "" {
+		plan.CacheGeneration = *cacheGeneration
+	}
+	if *workloadSeed != 0 {
+		plan.WorkloadSeed = *workloadSeed
+		plan.ExecutionOrder = nil
+	}
 	if plan.RunID == "" {
 		plan.RunID = time.Now().UTC().Format(defaultHistoryTimestamp)
 	}
 	if *allowHigh {
 		plan.AllowHighConcurrency = true
 	}
-	if err := plan.Validate(); err != nil {
+	plan, err = client.PrepareBenchmarkPlan(plan)
+	if err != nil {
 		return err
 	}
 	requestTimeout := time.Duration(plan.RequestTimeoutMS) * time.Millisecond

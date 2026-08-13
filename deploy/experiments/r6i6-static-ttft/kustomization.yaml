@@ -1,0 +1,47 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: kubellm
+resources:
+  - ../r6i6-calibration
+configMapGenerator:
+  - name: fishmesh-static-ttft-profile-r6i6-v1
+    files:
+      - profile.json=profile.json
+    options:
+      immutable: true
+patches:
+  - target:
+      kind: ConfigMap
+      name: fishmesh-gateway-config
+    patch: |-
+      - op: replace
+        path: /data/FISHMESH_KV_AWARE_ESTIMATOR_MODE
+        value: static-ttft
+      - op: replace
+        path: /data/FISHMESH_KV_AWARE_STATIC_PROFILE_FILE
+        value: /etc/fishmesh/static-ttft/profile.json
+      - op: replace
+        path: /metadata/annotations/fishmesh.io~1config-version
+        value: r6i6-static-ttft-v1
+  - target:
+      kind: Deployment
+      name: fishmesh-gateway
+    patch: |-
+      - op: replace
+        path: /spec/template/metadata/annotations/fishmesh.io~1runtime-profile
+        value: r6i6-static-ttft-v1
+      - op: add
+        path: /spec/template/metadata/annotations/fishmesh.io~1static-profile-sha256
+        value: b94a70a5d957f3b79a53c760fe3508dae1b97fed21292b688b5ae1be24094174
+      - op: add
+        path: /spec/template/spec/containers/0/volumeMounts
+        value:
+          - name: static-ttft-profile
+            mountPath: /etc/fishmesh/static-ttft
+            readOnly: true
+      - op: add
+        path: /spec/template/spec/volumes
+        value:
+          - name: static-ttft-profile
+            configMap:
+              name: fishmesh-static-ttft-profile-r6i6-v1

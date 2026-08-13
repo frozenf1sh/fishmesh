@@ -1,0 +1,29 @@
+{
+  "model": "qwen2.5-0.5b-instruct",
+  "hardware_profile": "rtx4060-8gb-timeslice-2x-vllm",
+  "vllm_version": "0.23.0",
+  "min_prompt_tokens": 512,
+  "max_model_tokens": 4096,
+  "max_prompt_tokens": 3072,
+  "version": "r6i6-rtx4060-vllm0.23.0-v1",
+  "calibrated": true,
+  "prompt_token_breakpoints": [512, 1024, 2048, 3072],
+  "cached_ratio_breakpoints": [0, 10000],
+  "prefill_ms": [
+    [32.125, 20.617],
+    [54.715, 23.135],
+    [88.171, 26.376],
+    [135.674, 30.097]
+  ],
+  "queue_wait_ms": 0,
+  "running_delay_ms": 4,
+  "local_delta_ms": 6,
+  "local_fallback_ms": 6,
+  "safety_margin_ms": 2,
+  "load_bounds": {
+    "max_queue_depth": 0,
+    "max_running": 8,
+    "max_local_delta": 11,
+    "max_local_fallback": 32
+  }
+}

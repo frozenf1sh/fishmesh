@@ -79,6 +79,7 @@ func DefaultConfig() Config {
 				Clock:           time.Now,
 			},
 			KVAware: routing.KVAwareConfig{
+				EstimatorMode:        routing.KVAwareEstimatorTokenCost,
 				QueueTokenPenalty:    512,
 				RunningTokenPenalty:  128,
 				InflightTokenPenalty: 64,

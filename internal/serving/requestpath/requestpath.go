@@ -73,6 +73,26 @@ type State struct {
 	CachedPrefixTokens int
 	// Prediction 是不参与本次实际选择的本地 TTFT 影子结论。
 	Prediction prediction.Shadow
+	Estimate   EstimateEvidence
+}
+
+// EstimateEvidence 是最终 backend 的低基数数值 provenance；不包含 prompt、token IDs 或 prefix identity。
+type EstimateEvidence struct {
+	PromptTokens             int
+	CachedPrefixTokens       int
+	UncachedTokens           int
+	EstimatedTTFT            time.Duration
+	Valid                    bool
+	Confidence               routing.EstimateConfidence
+	Version                  string
+	Reason                   string
+	LoadValid                bool
+	LoadSampleAge            time.Duration
+	QueueDepth               int64
+	Running                  int64
+	LocalDelta               int64
+	LocalInflight            int64
+	HardOverloadedCandidates int
 }
 
 // Completion 描述 lease 完成后发生的 circuit 状态变化。
@@ -114,6 +134,8 @@ type Dependencies struct {
 	OnBackendRemoved func(backend.ID)
 	// Predictor 是可选的纯观测能力；nil 保持预测关闭，不能影响既有选路。
 	Predictor prediction.Tracker
+	// StaticEstimator 是可选的纯 profile；nil 保持 token-cost 行为。
+	StaticEstimator *prediction.StaticEstimator
 }
 
 // Validate 检查 requestpath 的启动配置。
@@ -182,8 +204,8 @@ type FirstTokenObservation struct {
 // ObserveFirstToken 在首个非终止 SSE 事件时记录一次 TTFT；它不改变已经固定的 Decision。
 func (l Lease) ObserveFirstToken(ttft time.Duration) FirstTokenObservation {
 	if l.state == nil {
-		return FirstTokenObservation{}
+		return FirstTokenObservation{Actual: ttft}
 	}
 	observation := l.state.ticket.ObserveFirstToken(ttft)
-	return FirstTokenObservation{Valid: observation.Valid, Backend: observation.Backend, Predicted: observation.Predicted, Actual: observation.Actual, Error: observation.Error}
+	return FirstTokenObservation{Valid: observation.Valid, Backend: observation.Backend, Predicted: observation.Predicted, Actual: ttft, Error: observation.Error}
 }

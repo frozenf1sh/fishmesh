@@ -1,6 +1,7 @@
 # FishMesh R6I：可校准 TTFT 路由与可信实验多阶段开发方案
 
-> 状态：已批准并开始实施。设计决策见
+> 状态：R6I-0–R6I-6 已完成；static 通过低负载精度校验，但未通过并发 promotion gate，当前保持
+> `token-cost`。设计决策见
 > [`ADR-003`](decisions/003-calibrated-ttft-routing.md)。本计划优先交付安全、可解释的 Lite 调度器，
 > 再用隔离实验校准和证明，不把在线学习或大规模组件提前放进主请求路径。
 
@@ -32,6 +33,10 @@ R6I 完成时，FishMesh 应交付：
 
 阶段编号表达依赖，不要求在一个提交或一次 GPU 在线窗口全部完成。每个阶段必须在本地门禁通过后才进入下一个；
 GPU 不稳定不会阻止纯代码阶段，但禁止用 simulator 伪造真实性能验收。
+
+截至 2026-08-16，R6I-6 已完成：低负载 static estimator MAE 为 2.34–5.44 ms；2048-token 并发阶梯
+MAE 上升到 27.57 ms，整体 TTFT P95 相对 token-cost 为 +3.13%，置信区间跨 0。static 不进入默认/active，
+完整证据见 [`2026-08-16-r6i6-token-ladder.md`](../experiments/2026-08-16-r6i6-token-ladder.md)。
 
 ## 3. R6I-0：决策与契约
 

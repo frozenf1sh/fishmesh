@@ -189,7 +189,8 @@ flowchart TD
 
 - `backend` 不 import 任何 FishMesh 包；
 - `routing` 只依赖 backend/observation 和标准库；
-- `prediction` 只依赖 backend 和标准库，只提供影子观测，不参与 routing 决策；
+- `prediction` 只依赖 backend 和标准库，拥有纯 static estimator 与 learned-shadow tracker；它不直接
+  调用 routing，requestpath 只投影不可变 estimate；
 - `requestpath` 不依赖 HTTP、Prometheus DTO 或 Kubernetes wire type；
 - `requestpath` 可以依赖 prediction，因为它是 prediction 观测结果的编排投影点；
 - `gateway` 不 import Kubernetes platform client；

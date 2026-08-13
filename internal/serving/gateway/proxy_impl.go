@@ -175,6 +175,23 @@ func (s *Server) writeDecisionHeaders(writer http.ResponseWriter, requestID stri
 	}
 	writer.Header().Set(headerKVStatus, string(lease.State.KV))
 	writer.Header().Set(headerCachedPrefixTokens, strconv.Itoa(lease.State.CachedPrefixTokens))
+	evidence := lease.State.Estimate
+	if evidence.PromptTokens > 0 {
+		writer.Header().Set(headerPromptTokens, strconv.Itoa(evidence.PromptTokens))
+		writer.Header().Set(headerUncachedTokens, strconv.Itoa(evidence.UncachedTokens))
+		writer.Header().Set(headerEstimatedTTFTMS, strconv.FormatFloat(float64(evidence.EstimatedTTFT)/float64(time.Millisecond), 'f', 3, 64))
+		writer.Header().Set(headerEstimatorValid, strconv.FormatBool(evidence.Valid))
+		writer.Header().Set(headerEstimatorConfidence, string(evidence.Confidence))
+		writer.Header().Set(headerEstimatorVersion, evidence.Version)
+		writer.Header().Set(headerEstimatorReason, evidence.Reason)
+		writer.Header().Set(headerLoadValid, strconv.FormatBool(evidence.LoadValid))
+		writer.Header().Set(headerLoadSampleAgeMS, strconv.FormatFloat(float64(evidence.LoadSampleAge)/float64(time.Millisecond), 'f', 3, 64))
+		writer.Header().Set(headerQueueDepth, strconv.FormatInt(evidence.QueueDepth, 10))
+		writer.Header().Set(headerRunningRequests, strconv.FormatInt(evidence.Running, 10))
+		writer.Header().Set(headerLocalDelta, strconv.FormatInt(evidence.LocalDelta, 10))
+		writer.Header().Set(headerLocalInflight, strconv.FormatInt(evidence.LocalInflight, 10))
+		writer.Header().Set(headerHardOverloadCount, strconv.Itoa(evidence.HardOverloadedCandidates))
+	}
 }
 
 // writeUpstreamHeader 暴露实际连接到的 upstream host，便于单请求排障。
