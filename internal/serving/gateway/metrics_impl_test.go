@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/frozenf1sh/fishmesh/internal/serving/admission"
 	"github.com/frozenf1sh/fishmesh/internal/serving/backend"
 	"github.com/frozenf1sh/fishmesh/internal/serving/kvcache"
 	"github.com/frozenf1sh/fishmesh/internal/serving/prediction"
@@ -147,5 +148,46 @@ func TestMetricsDeleteBackendRemovesKVEventHistogramLabels(t *testing.T) {
 	metrics.handler().ServeHTTP(response, httptest.NewRequest("GET", "/metrics", nil))
 	if strings.Contains(response.Body.String(), `fishmesh_gateway_kv_event_publish_to_apply_seconds_count{backend_id="backend-a"`) {
 		t.Fatalf("removed backend retained KV event histogram labels:\n%s", response.Body.String())
+	}
+}
+
+func TestMetricsSeparatesAdmittedRequestsFromCapacityRejections(t *testing.T) {
+	metrics := NewMetrics()
+	metrics.observeAdmissionAccepted()
+	metrics.admissionRejections.Inc()
+
+	response := httptest.NewRecorder()
+	metrics.handler().ServeHTTP(response, httptest.NewRequest("GET", "/metrics", nil))
+	output := response.Body.String()
+	for _, want := range []string{
+		`fishmesh_gateway_admitted_requests_total 1`,
+		`fishmesh_gateway_admission_rejections_total 1`,
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("metric %q missing:\n%s", want, output)
+		}
+	}
+}
+
+func TestMetricsExposeAdmissionTuningState(t *testing.T) {
+	metrics := NewMetrics()
+	metrics.ObserveAdmissionTuning(admission.Decision{
+		Mode: admission.TuningActive, ObservedAt: time.Unix(100, 0), PreviousTarget: 16,
+		SuggestedTarget: 8, AppliedTarget: 8, HardLimit: 32, Valid: true, Changed: true, Reason: "overloaded",
+	})
+	response := httptest.NewRecorder()
+	metrics.handler().ServeHTTP(response, httptest.NewRequest("GET", "/metrics", nil))
+	output := response.Body.String()
+	for _, want := range []string{
+		`fishmesh_gateway_admission_target 8`,
+		`fishmesh_gateway_admission_hard_limit 32`,
+		`fishmesh_gateway_admission_suggested_target 8`,
+		`fishmesh_gateway_admission_tuning_actions_total 1`,
+		`fishmesh_gateway_admission_tuning_mode{mode="active"} 1`,
+		`fishmesh_gateway_admission_tuning_reason{reason="overloaded"} 1`,
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("metric %q missing:\n%s", want, output)
+		}
 	}
 }

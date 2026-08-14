@@ -1,0 +1,20 @@
+{
+  "run_id": "admission-dynamic-step-template",
+  "max_tokens": 256,
+  "ignore_eos": true,
+  "request_timeout_ms": 180000,
+  "allow_high_concurrency": true,
+  "skip_prompt_token_evidence": true,
+  "treatment": "replace-at-run",
+  "workload_seed": 20260816,
+  "execution_order": ["step-low", "step-medium", "step-high", "step-recovery"],
+  "cache_mode": "cold",
+  "run_nonce": "replace-with-unique-run-nonce",
+  "cache_generation": "replace-with-vllm-generation",
+  "scenarios": [
+    {"name": "step-low", "prefix_pattern": "same-prefix", "prefix_bytes": 4096, "prefix_groups": 1, "target_prompt_tokens": 768, "prompt_token_tolerance": 16, "batches": 2, "batch_size": 32, "concurrency": 16, "arrival_rate_qps": 2, "batch_pause_ms": 1000},
+    {"name": "step-medium", "prefix_pattern": "same-prefix", "prefix_bytes": 4096, "prefix_groups": 1, "target_prompt_tokens": 768, "prompt_token_tolerance": 16, "batches": 2, "batch_size": 64, "concurrency": 32, "arrival_rate_qps": 8, "batch_pause_ms": 1000},
+    {"name": "step-high", "prefix_pattern": "same-prefix", "prefix_bytes": 4096, "prefix_groups": 1, "target_prompt_tokens": 768, "prompt_token_tolerance": 16, "batches": 3, "batch_size": 96, "concurrency": 32, "arrival_rate_qps": 24, "batch_pause_ms": 1000},
+    {"name": "step-recovery", "prefix_pattern": "same-prefix", "prefix_bytes": 4096, "prefix_groups": 1, "target_prompt_tokens": 768, "prompt_token_tolerance": 16, "batches": 2, "batch_size": 32, "concurrency": 16, "arrival_rate_qps": 2, "batch_pause_ms": 1000}
+  ]
+}

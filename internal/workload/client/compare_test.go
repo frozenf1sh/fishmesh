@@ -28,6 +28,37 @@ func TestCompareBenchmarkFilesPoolsRunsAndReportsEstimatorError(t *testing.T) {
 	}
 }
 
+func TestCompareGatewayReportFilesAggregatesValidWindows(t *testing.T) {
+	directory := t.TempDir()
+	baseline := writeGatewayReport(t, directory, "baseline-report.json", 4, 3, 1, 2)
+	treatment := writeGatewayReport(t, directory, "treatment-report.json", 6, 5, 0.5, 3)
+	baselineArm, treatmentArm, err := CompareGatewayReportFiles([]string{baseline}, []string{treatment})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if baselineArm.ValidRuns != 1 || baselineArm.AcceptedRateQPS != 4 || baselineArm.CompletedRateQPS != 3 || baselineArm.RejectionRateQPS != 1 || baselineArm.LittleLawWaitMS != 2 {
+		t.Fatalf("baseline Gateway arm = %+v", baselineArm)
+	}
+	if treatmentArm.ValidRuns != 1 || treatmentArm.AcceptedRateQPS != 6 || treatmentArm.CompletedRateQPS != 5 || treatmentArm.RejectionRateQPS != 0.5 || treatmentArm.LittleLawWaitMS != 3 {
+		t.Fatalf("treatment Gateway arm = %+v", treatmentArm)
+	}
+}
+
+func writeGatewayReport(t *testing.T, directory, name string, accepted, completed, rejected, waitMS float64) string {
+	t.Helper()
+	path := filepath.Join(directory, name)
+	body, err := json.Marshal(BenchmarkReport{RecordType: "report", GatewayMetrics: &GatewayMetricsWindow{
+		Valid: true, AcceptedRateQPS: accepted, CompletedRateQPS: completed, RejectionRateQPS: rejected, LittleLawWaitMS: waitMS,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append(body, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
 func writeComparisonRun(t *testing.T, directory, name string, attempts []BenchmarkAttempt) string {
 	t.Helper()
 	path := filepath.Join(directory, name)

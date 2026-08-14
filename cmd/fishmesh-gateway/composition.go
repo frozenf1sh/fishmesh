@@ -35,6 +35,7 @@ type runtime struct {
 	transport    transport.Pool
 	renderClient *http.Client
 	kvCache      kvcache.Index
+	tuner        admission.Tuner
 
 	close sync.Once
 }
@@ -43,6 +44,7 @@ type requestComponents struct {
 	strategy  routing.Strategy
 	breaker   circuit.Breaker
 	admission admission.Controller
+	tuner     admission.Tuner
 	pool      transport.Pool
 	metrics   *gateway.Metrics
 }
@@ -102,6 +104,7 @@ func buildRuntime(config servingconfig.Config, logger *slog.Logger) (*runtime, e
 		return nil, err
 	}
 	assembled.transport = components.pool
+	assembled.tuner = components.tuner
 
 	// 4. KV-aware 模式由组合根显式创建 Render adapter、ZMQ source 与有界 KV index。
 	//    非 KV-aware 模式不启动 KV subscriber，也不为每个请求额外调用 Render；这是产品
@@ -196,9 +199,14 @@ func buildRequestComponents(config servingconfig.Config) (requestComponents, err
 	if err != nil {
 		return requestComponents{}, fmt.Errorf("create admission controller: %w", err)
 	}
+	metrics := gateway.NewMetrics()
+	tuner, err := admission.NewTuner(config.AdmissionTuning, admissionController, metrics.AdmissionSignal, metrics.ObserveAdmissionTuning)
+	if err != nil {
+		return requestComponents{}, fmt.Errorf("create admission tuner: %w", err)
+	}
 	return requestComponents{
 		strategy: strategy, breaker: breaker, admission: admissionController,
-		pool: transport.New(config.Transport), metrics: gateway.NewMetrics(),
+		tuner: tuner, pool: transport.New(config.Transport), metrics: metrics,
 	}, nil
 }
 
@@ -210,6 +218,9 @@ func buildRequestComponents(config servingconfig.Config) (requestComponents, err
 // defer 清理和测试显式清理可以安全地走同一条路径。
 func (r *runtime) Close() {
 	r.close.Do(func() {
+		if r.tuner != nil {
+			_ = r.tuner.Close()
+		}
 		if r.requestPath != nil {
 			_ = r.requestPath.Close()
 		}
@@ -311,6 +322,7 @@ func buildObservations(config servingconfig.Config, identityConfig identity.Conf
 		return nil, nil
 	}
 	var enricher identity.Enricher
+	var runtimeCollector observation.RuntimeCollector
 	var err error
 	if config.Discovery.Mode == discovery.ModeEndpointSlice {
 		enricher, err = identity.NewKubernetes(identityConfig)
@@ -318,8 +330,14 @@ func buildObservations(config servingconfig.Config, identityConfig identity.Conf
 			return nil, fmt.Errorf("create identity enricher: %w", err)
 		}
 	}
+	if config.Prometheus.Runtime.Endpoint != "" {
+		runtimeCollector, err = observation.NewPrometheusRuntime(config.Prometheus.Runtime)
+		if err != nil {
+			return nil, fmt.Errorf("create runtime observations: %w", err)
+		}
+	}
 	reader, err := observation.New(config.Observation, observation.Dependencies{
-		Resolver: resolver, Collector: observation.NewPrometheus(config.Prometheus), Identity: enricher,
+		Resolver: resolver, Collector: observation.NewPrometheus(config.Prometheus), Identity: enricher, Runtime: runtimeCollector,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create observations: %w", err)

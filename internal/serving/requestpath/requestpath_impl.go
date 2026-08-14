@@ -81,7 +81,7 @@ func (s *service) Select(ctx context.Context, request Request) (Lease, error) {
 	if err != nil {
 		return Lease{}, err
 	}
-	// Tokenize/KV lookup 可并发执行；只有最终候选快照、决策和 counter reservation 串行提交，
+	// Tokenize/KV reconcile 可并发执行；KV lookup 依赖 Token IDs，必须在两者完成后执行。只有最终候选快照、决策和 counter reservation 串行提交，
 	// 防止同一批请求全部读取相同 local in-flight 后形成 thundering herd。
 	s.selection.Lock()
 	state, snapshot := s.buildSnapshot(backends)
@@ -232,22 +232,38 @@ func (s *service) buildKVAwareInput(ctx context.Context, input tokenization.Inpu
 	if s.strategy.Name() != routing.ModeKVAware {
 		return routing.KVAwareInput{}, KVNotRequested, nil
 	}
-	profile, err := s.tokenizer.Tokenize(ctx, input)
-	if err != nil {
-		if requestContextCanceled(ctx, err) || !canDegradeTokenization(err) {
-			return routing.KVAwareInput{}, KVTokenizationFailed, err
+	type tokenizationResult struct {
+		profile tokenization.Result
+		err     error
+	}
+	parallelContext, cancel := context.WithCancel(ctx)
+	defer cancel()
+	profileResults := make(chan tokenizationResult, 1)
+	reconcileResults := make(chan error, 1)
+	go func() {
+		profile, err := s.tokenizer.Tokenize(parallelContext, input)
+		profileResults <- tokenizationResult{profile: profile, err: err}
+	}()
+	go func() {
+		reconcileResults <- s.kvReconcile(parallelContext, candidates)
+	}()
+	profileResult := <-profileResults
+	reconcileErr := <-reconcileResults
+	if profileResult.err != nil {
+		if requestContextCanceled(ctx, profileResult.err) || !canDegradeTokenization(profileResult.err) {
+			return routing.KVAwareInput{}, KVTokenizationFailed, profileResult.err
 		}
 		return routing.KVAwareInput{}, KVTokenizationFailed, nil
 	}
-	if err := s.kvReconcile(ctx, candidates); err != nil {
-		if requestContextCanceled(ctx, err) {
-			return routing.KVAwareInput{}, KVLookupFailed, err
+	if reconcileErr != nil {
+		if requestContextCanceled(ctx, reconcileErr) {
+			return routing.KVAwareInput{}, KVLookupFailed, reconcileErr
 		}
 		return routing.KVAwareInput{}, KVLookupFailed, nil
 	}
 
-	query := kvcache.Query{Model: profile.Model(), CacheSalt: profile.CacheSalt(), Backends: backendIDs(candidates)}
-	for _, prompt := range profile.Prompts() {
+	query := kvcache.Query{Model: profileResult.profile.Model(), CacheSalt: profileResult.profile.CacheSalt(), Backends: backendIDs(candidates)}
+	for _, prompt := range profileResult.profile.Prompts() {
 		query.TokenGroups = append(query.TokenGroups, prompt.TokenIDs())
 	}
 	snapshot, err := s.kvCache.Lookup(ctx, query)
@@ -257,7 +273,7 @@ func (s *service) buildKVAwareInput(ctx context.Context, input tokenization.Inpu
 		}
 		return routing.KVAwareInput{}, KVLookupFailed, nil
 	}
-	kvInput := routingInputFromMatches(profile.TotalTokens(), snapshot.Matches())
+	kvInput := routingInputFromMatches(profileResult.profile.TotalTokens(), snapshot.Matches())
 	if !kvInput.UsableFor(candidates) {
 		return kvInput, KVMatchUnavailable, nil
 	}
@@ -285,6 +301,8 @@ func (s *service) selectDecision(routingKey string, snapshot routing.Snapshot, s
 }
 
 func (s *service) kvAwareLoadFallback(routingKey string, snapshot routing.Snapshot) routing.Decision {
+	// KV signal 只决定是否能使用 locality；fallback 仍消费同一份 load-aware 普通策略，
+	// 因而 Render/KV index 暂时不可用时不会丢弃仍然新鲜的 vLLM queue/running 事实。
 	decision, err := routing.NewLoadBalanced().Select(routingKey, snapshot)
 	if err != nil || decision.Backend.ID == "" {
 		return s.fallback(routing.ReasonStrategyFallback)
@@ -341,6 +359,7 @@ func routingLoads(backends []backend.Backend, observations map[backend.ID]observ
 				state.LocalDelta = 0
 			}
 		}
+		state.RuntimeHardOverload = runtimeHardOverloaded(observed.Runtime, config)
 		state.HardOverload = hardOverloaded(state, inflight[candidate.ID], config)
 		if ok || state.HardOverload {
 			loads[candidate.ID] = state
@@ -352,7 +371,19 @@ func routingLoads(backends []backend.Backend, observations map[backend.ID]observ
 func hardOverloaded(load routing.Load, localInflight int64, config Config) bool {
 	queueOverloaded := load.Valid && config.HardQueueDepth > 0 && load.QueueDepth >= config.HardQueueDepth
 	localOverloaded := config.HardLocalInflight > 0 && localInflight >= config.HardLocalInflight
-	return queueOverloaded || localOverloaded
+	return queueOverloaded || localOverloaded || load.RuntimeHardOverload
+}
+
+func runtimeHardOverloaded(runtime observation.Runtime, config Config) bool {
+	return sampleAtOrAbove(runtime.CPUUsageCores, config.RuntimeCPUHardLimitCores) ||
+		sampleAtOrAbove(runtime.MemoryUsageBytes, config.RuntimeMemoryHardLimitBytes) ||
+		sampleAtOrAbove(runtime.GPUUtilizationPercent, config.RuntimeGPUUtilizationHardLimitPct) ||
+		sampleAtOrAbove(runtime.GPUMemoryUsedBytes, config.RuntimeGPUMemoryHardLimitBytes) ||
+		sampleAtOrAbove(runtime.GPUTemperatureCelsius, config.RuntimeGPUTemperatureHardLimitC)
+}
+
+func sampleAtOrAbove(sample observation.Sample[float64], limit float64) bool {
+	return limit > 0 && sample.Valid && !math.IsNaN(sample.Value) && !math.IsInf(sample.Value, 0) && sample.Value >= limit
 }
 
 // predictionInput 在 orchestration 层把 routing 的纯快照投影为预测域的数值值对象。

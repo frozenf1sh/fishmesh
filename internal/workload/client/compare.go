@@ -36,13 +36,26 @@ type ComparisonArm struct {
 
 // ComparisonReport 是多轮 A/B 的机器可读汇总。
 type ComparisonReport struct {
-	Baseline             ComparisonArm `json:"baseline"`
-	Treatment            ComparisonArm `json:"treatment"`
-	TTFTP95DeltaPercent  float64       `json:"ttft_p95_delta_percent"`
-	BootstrapLowPercent  float64       `json:"bootstrap_ci_low_percent"`
-	BootstrapHighPercent float64       `json:"bootstrap_ci_high_percent"`
-	BootstrapSamples     int           `json:"bootstrap_samples"`
-	Seed                 int64         `json:"seed"`
+	Baseline             ComparisonArm        `json:"baseline"`
+	Treatment            ComparisonArm        `json:"treatment"`
+	BaselineGateway      GatewayComparisonArm `json:"baseline_gateway,omitempty"`
+	TreatmentGateway     GatewayComparisonArm `json:"treatment_gateway,omitempty"`
+	TTFTP95DeltaPercent  float64              `json:"ttft_p95_delta_percent"`
+	BootstrapLowPercent  float64              `json:"bootstrap_ci_low_percent"`
+	BootstrapHighPercent float64              `json:"bootstrap_ci_high_percent"`
+	BootstrapSamples     int                  `json:"bootstrap_samples"`
+	Seed                 int64                `json:"seed"`
+}
+
+// GatewayComparisonArm summarizes report-level Gateway evidence across runs.
+type GatewayComparisonArm struct {
+	Runs             int     `json:"runs"`
+	ValidRuns        int     `json:"valid_runs"`
+	AcceptedRateQPS  float64 `json:"accepted_rate_qps"`
+	CompletedRateQPS float64 `json:"completed_rate_qps"`
+	RejectionRateQPS float64 `json:"rejection_rate_qps"`
+	AverageInflight  float64 `json:"average_inflight"`
+	LittleLawWaitMS  float64 `json:"little_law_wait_ms"`
 }
 
 // CompareBenchmarkFiles 汇总 request-level JSONL；不读取 prompt 或任意非 allowlist header。
@@ -75,6 +88,24 @@ func CompareBenchmarkFiles(baselinePaths, treatmentPaths []string, bootstrapSamp
 	return report, nil
 }
 
+// CompareGatewayReportFiles adds accepted/completed/rejected and Little's Law
+// evidence from the machine-readable benchmark reports. Invalid windows are
+// counted but excluded from the arithmetic, never silently treated as zero.
+func CompareGatewayReportFiles(baselinePaths, treatmentPaths []string) (GatewayComparisonArm, GatewayComparisonArm, error) {
+	if len(baselinePaths) == 0 || len(treatmentPaths) == 0 {
+		return GatewayComparisonArm{}, GatewayComparisonArm{}, fmt.Errorf("gateway comparison requires baseline and treatment reports")
+	}
+	baseline, err := loadGatewayReports(baselinePaths)
+	if err != nil {
+		return GatewayComparisonArm{}, GatewayComparisonArm{}, fmt.Errorf("baseline gateway reports: %w", err)
+	}
+	treatment, err := loadGatewayReports(treatmentPaths)
+	if err != nil {
+		return GatewayComparisonArm{}, GatewayComparisonArm{}, fmt.Errorf("treatment gateway reports: %w", err)
+	}
+	return summarizeGatewayReports(baseline), summarizeGatewayReports(treatment), nil
+}
+
 // Markdown renders a compact comparison suitable for tracked reports.
 func (r ComparisonReport) Markdown() string {
 	var output strings.Builder
@@ -91,7 +122,54 @@ func (r ComparisonReport) Markdown() string {
 	}
 	writeComparisonArm("baseline", r.Baseline)
 	writeComparisonArm("treatment", r.Treatment)
+	if r.BaselineGateway.Runs > 0 || r.TreatmentGateway.Runs > 0 {
+		output.WriteString("\n## Gateway capacity evidence\n\n")
+		output.WriteString("| Arm | Reports | Valid windows | Accepted QPS | Completed QPS | Rejection QPS | Average in-flight | Little's Law W ms |\n|---|---:|---:|---:|---:|---:|---:|---:|\n")
+		fmt.Fprintf(&output, "| baseline | %d | %d | %.3f | %.3f | %.3f | %.3f | %.2f |\n", r.BaselineGateway.Runs, r.BaselineGateway.ValidRuns, r.BaselineGateway.AcceptedRateQPS, r.BaselineGateway.CompletedRateQPS, r.BaselineGateway.RejectionRateQPS, r.BaselineGateway.AverageInflight, r.BaselineGateway.LittleLawWaitMS)
+		fmt.Fprintf(&output, "| treatment | %d | %d | %.3f | %.3f | %.3f | %.3f | %.2f |\n", r.TreatmentGateway.Runs, r.TreatmentGateway.ValidRuns, r.TreatmentGateway.AcceptedRateQPS, r.TreatmentGateway.CompletedRateQPS, r.TreatmentGateway.RejectionRateQPS, r.TreatmentGateway.AverageInflight, r.TreatmentGateway.LittleLawWaitMS)
+	}
 	return output.String()
+}
+
+func loadGatewayReports(paths []string) ([]BenchmarkReport, error) {
+	reports := make([]BenchmarkReport, 0, len(paths))
+	for _, path := range paths {
+		body, err := os.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
+		var report BenchmarkReport
+		if err := json.Unmarshal(body, &report); err != nil {
+			return nil, fmt.Errorf("decode %s: %w", path, err)
+		}
+		reports = append(reports, report)
+	}
+	return reports, nil
+}
+
+func summarizeGatewayReports(reports []BenchmarkReport) GatewayComparisonArm {
+	arm := GatewayComparisonArm{Runs: len(reports)}
+	for _, report := range reports {
+		if report.GatewayMetrics == nil || !report.GatewayMetrics.Valid {
+			continue
+		}
+		arm.ValidRuns++
+		arm.AcceptedRateQPS += report.GatewayMetrics.AcceptedRateQPS
+		arm.CompletedRateQPS += report.GatewayMetrics.CompletedRateQPS
+		arm.RejectionRateQPS += report.GatewayMetrics.RejectionRateQPS
+		arm.AverageInflight += report.GatewayMetrics.AverageInflight
+		arm.LittleLawWaitMS += report.GatewayMetrics.LittleLawWaitMS
+	}
+	if arm.ValidRuns == 0 {
+		return arm
+	}
+	count := float64(arm.ValidRuns)
+	arm.AcceptedRateQPS /= count
+	arm.CompletedRateQPS /= count
+	arm.RejectionRateQPS /= count
+	arm.AverageInflight /= count
+	arm.LittleLawWaitMS /= count
+	return arm
 }
 
 func loadComparisonRuns(paths []string) ([][]BenchmarkAttempt, error) {

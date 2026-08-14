@@ -118,8 +118,13 @@ type Config struct {
 	ReconcileInterval     time.Duration
 	// HardQueueDepth and HardLocalInflight are safety gates for KV-aware
 	// candidates. Zero disables the corresponding gate.
-	HardQueueDepth    int64
-	HardLocalInflight int64
+	HardQueueDepth                    int64
+	HardLocalInflight                 int64
+	RuntimeCPUHardLimitCores          float64
+	RuntimeMemoryHardLimitBytes       float64
+	RuntimeGPUUtilizationHardLimitPct float64
+	RuntimeGPUMemoryHardLimitBytes    float64
+	RuntimeGPUTemperatureHardLimitC   float64
 }
 
 // Dependencies 是由组合根注入的原子能力。
@@ -152,6 +157,9 @@ func (c Config) Validate() error {
 	}
 	if c.HardQueueDepth < 0 || c.HardLocalInflight < 0 {
 		return fmt.Errorf("requestpath hard overload thresholds must not be negative")
+	}
+	if c.RuntimeCPUHardLimitCores < 0 || c.RuntimeMemoryHardLimitBytes < 0 || c.RuntimeGPUUtilizationHardLimitPct < 0 || c.RuntimeGPUMemoryHardLimitBytes < 0 || c.RuntimeGPUTemperatureHardLimitC < 0 {
+		return fmt.Errorf("requestpath runtime hard overload thresholds must not be negative")
 	}
 	return nil
 }

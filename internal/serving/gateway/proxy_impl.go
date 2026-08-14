@@ -72,8 +72,11 @@ func (s *Server) proxy(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	defer permit.Release()
+	s.metrics.observeAdmissionAccepted()
 	s.metrics.inflight.Inc()
+	s.metrics.inflightTotal.Add(1)
 	defer s.metrics.inflight.Dec()
+	defer s.metrics.inflightTotal.Add(-1)
 
 	// 2. 一次性有界读取 body；同一份字节既是 Render 输入，也会重放给实际 upstream。
 	//    先读完再选路有两个原因：KV-aware Render 需要完整原始请求，限制也必须在任何
@@ -267,6 +270,7 @@ func (s *Server) rejectAdmission(writer http.ResponseWriter, requestID string, e
 	if errors.Is(err, admission.ErrCapacity) {
 		status = http.StatusTooManyRequests
 		s.metrics.admissionRejections.Inc()
+		s.metrics.rejectedTotal.Add(1)
 		writer.Header().Set(headerRetryAfter, retryAfterSeconds)
 		writer.Header().Set(headerRouteReason, string(routing.ReasonAdmissionCapacity))
 	}

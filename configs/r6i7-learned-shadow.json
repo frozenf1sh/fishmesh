@@ -9,6 +9,15 @@
   "cache_mode": "steady-warm",
   "run_nonce": "replace-with-unique-run-nonce",
   "cache_generation": "replace-with-vllm-pod-generation",
+  "provenance": {
+    "git_sha": "a455667905439fec5ac6c5ab6259389153707c6f",
+    "gateway_image": "fishmesh-gateway:r6i7-learned-shadow-r1@sha256:490462aa2e930e2a4a113288b119be1adc5be8fd44fc0e91b44877eff5e200bf",
+    "gateway_pods": ["fishmesh-gateway-5d6646b78f-9hfzk"],
+    "vllm_version": "0.23.0",
+    "model": "qwen2.5-0.5b-instruct",
+    "config_digest": "sha256:577ba9e45abcad1594a77b8dda30c5775e11610fa3c7479314c3a260660ef81f",
+    "estimator_profile": "r6i6-rtx4060-vllm0.23.0-v1@sha256:b94a70a5d957f3b79a53c760fe3508dae1b97fed21292b688b5ae1be24094174"
+  },
   "scenarios": [
     {"name": "shadow-512-same", "prefix_pattern": "same-prefix", "prefix_bytes": 2866, "prefix_groups": 2, "target_prompt_tokens": 512, "prompt_token_tolerance": 16, "batches": 2, "batch_size": 20, "concurrency": 8, "batch_pause_ms": 1000},
     {"name": "shadow-1024-different", "prefix_pattern": "different-prefix", "prefix_bytes": 5932, "prefix_groups": 4, "target_prompt_tokens": 1024, "prompt_token_tolerance": 16, "batches": 2, "batch_size": 20, "concurrency": 8, "batch_pause_ms": 1000},

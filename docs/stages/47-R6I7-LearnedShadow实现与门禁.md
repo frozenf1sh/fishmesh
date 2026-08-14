@@ -35,13 +35,25 @@ run 使用 512/1024/2048/3072 actual prompt tokens，same/different/mixed prefix
 R6I-6 已经显示 static 在并发 TTFT P95 未通过 promotion，因此仍需单独的 active ADR 和性能门禁，
 本阶段不直接打开 active。
 
-## 4. 验证
+## 4. 真实结果
+
+两轮各 160 个正式请求均为 160/160 成功、160/160 KV available，prompt token evidence 0 缺失/越界；
+每个 backend 每轮获得 60–66 条可用 shadow 记录。剔除实际 3078 token、超出 static 3072 上界的档位后，
+learned MAE 两轮约比 static 低 10.4%，P95 absolute error 两轮均不高于 static；但 would-select 一致率
+从第一轮 71.1% 降到第二轮 62.7%，未通过“两个独立 run 均至少 70%”门禁。完整数据见
+[`2026-08-16-r6i7-learned-shadow.md`](../experiments/2026-08-16-r6i7-learned-shadow.md)。
+
+因此 R6I-7 保留 shadow 研究能力，不允许 learned-active；R6I-6 的并发 P95 promotion 失败也继续独立阻断
+active。实验后已应用 token-cost + prediction off recovery overlay，Gateway/vLLM/GPU 均恢复 Ready，两个
+KV instance 为 ready/valid。
+
+## 5. 验证
 
 本阶段代码门禁：`go test ./...`、`go vet ./...`、`go build ./...`、R6I-7 Kustomize server dry-run
 和 `git diff --check`。真实实验结果写入
 `docs/experiments/2026-08-16-r6i7-learned-shadow.md`，并根据门禁结果更新当前运行状态。
 
-## 5. 回滚
+## 6. 回滚
 
 shadow 只影响样本和低基数观测；恢复 `deploy/experiments/r6i6-calibration` 即可关闭 prediction 并回到
 token-cost。任何 KV replay、GPU readiness 或成功率异常都优先恢复 token-cost，不用压测数据掩盖运行时故障。

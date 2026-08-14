@@ -18,6 +18,7 @@ type service struct {
 	resolver       BackendSource
 	collector      Collector
 	identity       identity.Enricher
+	runtime        RuntimeCollector
 	interval       time.Duration
 	maxAge         time.Duration
 	requestTimeout time.Duration
@@ -42,7 +43,7 @@ func New(config Config, dependencies Dependencies) (Reader, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	service := &service{
-		resolver: dependencies.Resolver, collector: dependencies.Collector, identity: dependencies.Identity, interval: config.Interval,
+		resolver: dependencies.Resolver, collector: dependencies.Collector, identity: dependencies.Identity, runtime: dependencies.Runtime, interval: config.Interval,
 		maxAge: config.MaxAge, requestTimeout: config.RequestTimeout, clock: config.Clock,
 		cancel: cancel, done: make(chan struct{}), states: make(map[backend.ID]Backend),
 	}
@@ -70,6 +71,7 @@ func (s *service) Snapshot() map[backend.ID]Backend {
 		}
 		state.QueueLength = freshSample(state.QueueLength, now, s.maxAge)
 		state.RunningRequests = freshSample(state.RunningRequests, now, s.maxAge)
+		state.Runtime = freshRuntime(state.Runtime, now, s.maxAge)
 		result[id] = state
 	}
 	return result
@@ -123,7 +125,6 @@ func (s *service) refresh(ctx context.Context) {
 			defer wait.Done()
 			collectContext, cancel := context.WithTimeout(ctx, s.requestTimeout)
 			state := s.collector.Collect(collectContext, backend)
-			cancel()
 			if identityState, ok := identities[backend.ID]; ok {
 				state.Identity = identityState
 				if identityState.Status == identity.StatusUnavailable && state.Status == StatusOK {
@@ -136,11 +137,16 @@ func (s *service) refresh(ctx context.Context) {
 				state.Status = StatusDegraded
 				state.Error = joinErrors(state.Error, "identity: "+identityErr)
 			}
+			if s.runtime != nil {
+				state.Runtime = s.runtime.Collect(collectContext, backend, state.Identity)
+			}
+			cancel()
 			if state.ObservedAt.IsZero() {
 				state.ObservedAt = s.clock()
 			}
 			state.QueueLength = normalizeSample(state.QueueLength, state.ObservedAt, state.Source)
 			state.RunningRequests = normalizeSample(state.RunningRequests, state.ObservedAt, state.Source)
+			state.Runtime = normalizeRuntime(state.Runtime, state.ObservedAt)
 			mu.Lock()
 			next[backend.ID] = state
 			mu.Unlock()
@@ -150,6 +156,33 @@ func (s *service) refresh(ctx context.Context) {
 	s.mu.Lock()
 	s.states = next
 	s.mu.Unlock()
+}
+
+func normalizeRuntime(runtime Runtime, fallbackTime time.Time) Runtime {
+	if runtime.ObservedAt.IsZero() {
+		runtime.ObservedAt = fallbackTime
+	}
+	runtime.CPUUsageCores = normalizeSample(runtime.CPUUsageCores, runtime.ObservedAt, runtime.Source)
+	runtime.MemoryUsageBytes = normalizeSample(runtime.MemoryUsageBytes, runtime.ObservedAt, runtime.Source)
+	runtime.GPUUtilizationPercent = normalizeSample(runtime.GPUUtilizationPercent, runtime.ObservedAt, runtime.Source)
+	runtime.GPUMemoryUsedBytes = normalizeSample(runtime.GPUMemoryUsedBytes, runtime.ObservedAt, runtime.Source)
+	runtime.GPUTemperatureCelsius = normalizeSample(runtime.GPUTemperatureCelsius, runtime.ObservedAt, runtime.Source)
+	return runtime
+}
+
+func freshRuntime(runtime Runtime, now time.Time, maxAge time.Duration) Runtime {
+	if runtime.ObservedAt.IsZero() || now.Sub(runtime.ObservedAt) <= maxAge {
+		return runtime
+	}
+	runtime.CPUUsageCores = freshSample(runtime.CPUUsageCores, now, maxAge)
+	runtime.MemoryUsageBytes = freshSample(runtime.MemoryUsageBytes, now, maxAge)
+	runtime.GPUUtilizationPercent = freshSample(runtime.GPUUtilizationPercent, now, maxAge)
+	runtime.GPUMemoryUsedBytes = freshSample(runtime.GPUMemoryUsedBytes, now, maxAge)
+	runtime.GPUTemperatureCelsius = freshSample(runtime.GPUTemperatureCelsius, now, maxAge)
+	if runtime.Error == "" {
+		runtime.Error = "runtime observation is stale"
+	}
+	return runtime
 }
 
 func normalizeSample[T any](sample Sample[T], fallbackTime time.Time, fallbackSource string) Sample[T] {

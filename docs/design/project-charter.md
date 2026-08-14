@@ -103,6 +103,7 @@ Standard mode 用来证明策略可以进入主流平台，不要求 FishMesh �
 | P0 主线 | Gateway、requestpath、routing、discovery、observation、transport、circuit、admission | 持续产品化 |
 | P0 新能力 | tokenization、KVEvents/index、KV-aware cache/load policy | R6A 通过后实施 |
 | P1 标准集成 | llmd adapter、fishmesh-epp、Gateway/InferencePool 部署 | Lite MVP 后闭环 |
+| 兼容冻结 | session-key、`X-FishMesh-Session-Key`、现有 session-key EPP/实验 overlay | 仅保留兼容、安全和构建修复，不再增加路由能力 |
 | 开发工具 | simulator、loadgen | 冻结功能，只允许回归修复和有限对照 |
 | 冻结模块 | analyst、Diagnostics Context | 只允许安全/构建修复，从默认镜像和部署移除 |
 | 历史材料 | 旧 experiments、overlay、阶段报告 | 保留，不继续扩张 |

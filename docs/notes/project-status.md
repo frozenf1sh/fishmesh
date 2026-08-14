@@ -2,16 +2,17 @@
 
 最后项目状态更新时间：2026-08-16；集群最后真实验收时间：2026-08-16。仓库为
 `frozenf1sh/fishmesh`（private），当前 `main` 分支
-包含可信 serving baseline、三种 routing mode（`load-balanced`、`session-key`、`kv-aware`，
-对应策略标识为 `load-balanced-v1`、`session-key-v1`、`kv-aware-v1`）、request-path reliability
+包含可信 serving baseline、两条维护中的 routing 主线（`load-balanced`、`kv-aware`；
+`session-key` 仅为 frozen compatibility mode，对应策略标识仍为 `load-balanced-v1`、`session-key-v1`、
+`kv-aware-v1`）、request-path reliability
 和工程优先的项目章程。
 
 Serving 默认配置已收口到 `internal/serving/config.DefaultConfig()`：环境变量只覆盖这一份
 standalone 产品默认，domain 包不再拥有生产 `DefaultConfig` 或对关键业务零值静默补值。运行时依赖
 （clock、HTTP client）以及 Kubernetes 协议端口等 adapter 级兜底仍保持在实现边界内。
 
-本次 routing 收敛已完成：普通负载均衡使用 `load-balanced`，客户端传入 key 的有界粘性使用
-`session-key`，真实 KV locality 与已知负载联合选路使用 `kv-aware`。纯 prefix hash 和独立
+本次 routing 收敛已完成：普通负载均衡使用 `load-balanced`，真实 KV locality 与已知负载联合选路使用
+`kv-aware`；客户端传入 key 的有界粘性 `session-key` 仅作为冻结兼容模式保留。纯 prefix hash 和独立
 Service 选路不再是可配置策略；Service 只保留为 discovery/策略失败时的最终 fallback。请求头、
 环境变量、指标、llm-d 参数、部署 overlay 和文档均已同步到这组三策略命名。
 
@@ -138,6 +139,98 @@ shadow 证据头和 JSONL 字段，`compare` 可汇总 learned/static paired err
 声明式 `r6i7-learned-shadow` overlay 部署 shadow + static 研究切片；实验前因一个旧 vLLM generation 的
 sequence gap 停止压测，随后按 PDB 逐个滚动重建 vLLM，两个 endpoint 已恢复 `kv_cache_status=ready`。正式门禁
 结果和是否允许 active 以 R6I-7 实验报告为准；R6I-6 的并发 promotion 失败仍是 active 的独立阻断条件。
+
+R6I-7 真实双轮结果已完成：每轮 160/160 成功、160/160 KV available、prompt token evidence 0 缺失/越界，
+每个 backend 每轮有 60–66 条可用 shadow 记录。剔除实际 3078 token、超出 static 3072 上界的档位后，
+learned MAE 两轮约比 static 低 10.4%，P95 absolute error 均不高于 static；但 would-select 一致率从
+第一轮 71.1% 降到第二轮 62.7%，未通过两轮稳定性门禁。R6I-7 只保留 shadow 研究能力，不允许 active；实验
+报告见 `docs/experiments/2026-08-16-r6i7-learned-shadow.md`。实验完成后已应用 token-cost + prediction off
+恢复 overlay，Gateway 1/1、vLLM 2/2、GPU node Ready，两个 KV instance 均为 ready/valid。
+
+R6I-8 已完成第一步 load-aware 主线：`load-balanced` 在完整 vLLM queue/running 观测有效时按 queue、
+running、local delta 和 local in-flight 进行确定性比较，观测不完整时退回本地事实；hard-overload 候选在
+存在替代项时先排除。KV-aware signal unavailable 的 `kv-aware-load-fallback-v1` 复用这份普通策略，
+不再因为 Render/KV signal 失败而无条件丢弃仍新鲜的 vLLM load。Little’s Law/QPS 观测和容量结论留待下一阶段。
+
+R6I-9 已补齐 Gateway 侧 Little’s Law 最小观测契约：`admitted_requests_total` 只统计通过 admission
+的请求，`inflight_requests` 表示当前请求路径占用，`requests_total{status}` 保留结束状态，
+`admission_rejections_total` 单独记录容量拒绝。当前只完成观测，不把静态 `MaxInflight` 宣称为容量结论；
+固定 arrival-rate 的 open-loop benchmark 留待下一阶段。
+
+R6I-10 已为 benchmark 增加可选 `arrival_rate_qps`：正数场景按目标间隔投递 jobs，零值保留原有
+closed-loop fixed-concurrency 行为。该值明确记录为 offered rate；客户端 worker 饱和时不把它冒充
+Gateway accepted QPS，真实 QPS 仍须由 Gateway admitted/completed counters 和时间窗口计算。
+
+R6I-11 已为 benchmark attempt、batch、scenario 和全局 report 补齐客户端完成窗口：记录起止时间、elapsed
+和 `completion_rate_qps`，并在 Markdown 中同时展示 offered arrival QPS 与 completed QPS。completed rate
+包含成功和失败的已结束请求，只描述 workload 侧完成事实；它不替代 Gateway `admitted_requests_total`，
+也不直接构成容量或 Little’s Law 结论。下一阶段若做真实容量实验，必须在同一稳定窗口 join admission
+counter、in-flight、完成 counter 与 vLLM queue/running。
+
+R6I-12 已为 `fishmesh-client bench` 增加可选 `--metrics-endpoint` 与采样间隔：读取 Gateway
+`admitted_requests_total`、全状态 `requests_total` 和 `inflight_requests`，在 report 计算 accepted/completed
+QPS、时间加权平均 in-flight 与 Little’s Law `W=L/lambda`。采集失败、counter reset 和窗口不足只标记
+Gateway metrics invalid，不中断 workload。该采集仍不读取容器/GPU runtime 指标，也不改变在线路由。
+
+R6I-13 修正 metrics window 生命周期：每个 scenario 在 warmup 后、正式 batch 前独立采样，结束后停止，scenario
+之间 pause 不进入 active elapsed；全局 accepted/completed delta 求和，平均 in-flight 按 active duration 加权。
+报告保留 warmup 计划数并标记 `warmup_excluded=true`，因此正式容量窗口不再被 warmup 或 scenario gap 污染。
+
+R6I-14 修正 KV-aware 请求路径的并发边界：Tokenize 与 KV instance reconcile 现在在 request-scoped context
+下并行；KV Lookup 因依赖真实 Token IDs 仍在两者完成后执行。调用方取消继续硬失败，Render/reconcile 的可降级
+故障继续复用 `kv-aware-load-fallback-v1`；最终 snapshot、decision 和 local reservation 没有放宽串行提交。
+
+R6I-15 完成容量阶梯取数闭环：Gateway metrics window 新增 admission rejection delta/rate，采样改为按正式
+batch 分段，因此 warmup、batch pause 和 scenario gap 不进入 active elapsed；多段的 accepted/completed/rejected
+rate 与时间加权 in-flight 使用同一窗口。新增 `configs/capacity-ladder.json`，覆盖 1/2/4/8/16/32 offered
+QPS；它是需替换 run nonce、vLLM generation 并配合 `--metrics-endpoint` 的模板，尚未形成真实 GPU 容量结论。
+
+R6I-16 固化后续容量与路由对照实验契约：新增动态 admission 阶梯、路由消融和长连接 drain 三份 workload
+模板，明确 A0/A1/A2 admission 对照、B0/B1/B2/B3 路由对照、正式窗口边界和必留证据。该阶段只准备实验，
+尚未启用动态控制，也没有形成新的真实 GPU 收益结论。
+
+R6I-17 完成可选的 Pod identity runtime observation：EndpointSlice/Pod identity 现在保留 Pod UID，Prometheus
+HTTP API runtime collector 仅接受同时包含 `$namespace` 和 `$pod` 的查询，按 backend 暴露 CPU、内存和可选
+GPU utilization/memory/temperature sample 及 freshness。该能力只作为观测证据，默认关闭，不改变 routing 或
+admission；没有 Pod 维度的节点级 GPU 指标保持 unavailable，尚未完成真实 DCGM/容器 exporter 验收。
+
+R6I-18 完成动态 admission 控制器和 shadow 证据：`MaxInflight` 保持不可突破的 hard limit，soft target 支持
+off/shadow/active；target 下调只限制新请求，不撤销已有 permit 或中断 SSE。控制器使用 Gateway 单调计数，
+对 stale/reset signal 保守冻结，并以滞回、步长和 cooldown 避免振荡。默认部署仍为 off，尚未切换 active 或
+形成真实 GPU 收益结论。
+
+R6I-19 新增 `deploy/experiments/admission-shadow` 与 `admission-active` 两个声明式实验 overlay，并固化
+长 SSE drain、stale signal 和 Kubernetes rollout 验收步骤。overlay 只用于受控实验，未执行真实 active rollout，
+因此当前没有声称动态并发已经改善 GPU/QPS 或已完成真实连接迁移验收。
+
+R6I-20 将已完成 Pod 归属且 fresh 的 runtime sample 接入 routing hard safety gate：CPU、内存、GPU 利用率、
+GPU 显存和温度阈值均可独立配置，默认关闭；缺失/过期/无归属 sample 不触发 gate，所有候选过载时仍 availability-first。
+当前没有启用默认阈值，也没有把 runtime 指标做成未经校准的 weighted score。
+
+R6I-21 完善实验报告闭环：benchmark report 现在按 scenario/batch 保存 Gateway metrics window，`fishmesh-client
+ compare` 可额外读取两侧 `report.json`，汇总 accepted/completed/rejected QPS、平均 in-flight 和 Little’s Law W，
+ 并与原有 request-level TTFT bootstrap CI 并列输出。该能力只完善实验证据，尚未执行新的真实 GPU 对照。
+
+R6I-22 完成容量、动态 admission 和 runtime 路由实验手册：固定 A0/A1/A2 与 B0/B1/B2/B3 的执行顺序，明确
+先 shadow 后 active、长 SSE drain、Pod identity/freshness 校验、Gateway report 与 requests JSONL 配对、
+Little’s Law/收益判定、停止条件和恢复基线步骤。当前所有新增代码、配置和 overlay 已通过本地门禁与
+Kustomize 渲染；本阶段没有执行新的 active rollout 或真实 GPU 压测，因此没有新增线上收益结论。
+
+R6I-23 已完成真实容量、Admission 与路由收益验收。A0 target=128 为 384/384 成功、拒绝 0；A1 target=32
+为 544/544 成功、accepted/completed 4.053 QPS；active 为 544/544 成功、accepted/completed 4.077 QPS，
+单轮 TTFT P95 比 A1 低 14.57%（bootstrap 95% CI `[-22.54%, -5.51%]`），但 QPS 只增加约 0.6%，且 shadow
+也出现尾延迟改善，故只记录为待重复验证的 tail signal。长连接对照显示 off/target=128 为 128/128 成功，
+active 为 112/128，16 个新请求因 target 从 32 下调到 16 被拒绝；已接纳流全部完成，未观察已有 SSE 被撤销。
+因此 active 当前参数不替换默认 off，Little’s Law 观测已可用于容量比较但不等于动态最优控制。
+
+R6I-23 的 B1/B2 路由消融均为 288/288 成功、拒绝 0；B2 三类场景均为 KV `available`，shared/mixed 有真实
+cached prefix，random 是 available 的零命中。短 profile TTFT P95 为 `555.31 → 588.57 ms`（`+5.99%`，
+CI `[-24.20%, +29.45%]`），不形成短上下文性能收益结论；KV-aware 继续保留 locality/correctness 价值。
+当前 Prometheus 仍只有 Gateway scrape，没有 vLLM Pod 维度 runtime sample，因此 B3 runtime hard-gate 收益
+暂不可判定。实验修复了 load-balanced token evidence 缺失、metrics sampler 取消误报、首点 completed counter
+缺失和不适配 steady-warm 的对照协议；原始产物保留在 `artifacts/bench/`。`session-key` 继续 frozen，
+不进入维护和收益矩阵。实验结束后已恢复 `r6i22-final/load-balanced`：Gateway tuning off/target 128，
+vLLM 2/2 Ready。
 
 README 与 README_CN 现以五分钟 Lite demo 为入口：确认 `load-balanced` 默认基线后临时安装
 `lite-kv-aware`，用不带 session key 的同一长 system prompt、不同 user message 请求读取 KV-aware 决策头，
@@ -387,13 +480,11 @@ VM 的影响更大：Kubernetes API 和 reconciliation 也会停止，应按完�
 
 ## 下一步待办
 
-1. 按 [`ADR-003`](../design/decisions/003-calibrated-ttft-routing.md) 和
-   [`R6I 多阶段计划`](../design/ttft-routing-development-plan.md) 先完成 load observation、HardOverload 与
-   calibrated-static TTFT 交付，不把未验证的 learned model 直接接入路由；
-2. 为正式实验加入实际 prompt token、cache salt/run nonce、cache generation、完整 provenance 和多轮统计，
-   先在当前 4096 上下文内完成 512/1024/2048/3072 token 阶梯；
-3. GPU 容量允许后再评估 4096/8192/12288 token，禁止把 12 KiB 字节报告改称 12K token；
-4. learned-shadow 只有在 R6I-7 MAE/P95 error/agreement 门禁通过且不违反 R6I-6 性能结论后，才另立 active 决策；
-5. Standard mode/llm-d 完整闭环继续后置，避免与 Lite TTFT 主线同时扩大；
-6. 在声称 NetworkPolicy 已生效前迁移到支持 policy enforcement 的 CNI；当前 Flannel 不能执行
-   声明式 NetworkPolicy。
+1. 补齐 `$namespace+$pod` 作用域的容器/GPU runtime exporter 与 Prometheus scrape，再重跑 B3 freshness、
+   hard-gate 和资源归因实验；
+2. 针对 active admission 增加短流/长流分层控制实验，至少两轮 paired compare，先解决 target 下调导致的长流
+   新请求拒绝边界，再讨论是否改变默认模式；
+3. KV-aware 继续按长上下文 mixed 矩阵重复验证，短 profile 只保留 correctness/locality 结论；
+4. learned-shadow 仍保持 shadow，只有在独立 agreement/误差与 R6I-6 性能门禁重新通过后，才另立 active 决策；
+5. Standard mode/llm-d 完整闭环继续后置；在声称 NetworkPolicy 已生效前迁移到支持 policy enforcement 的
+   CNI，当前 Flannel 不能执行声明式 NetworkPolicy。

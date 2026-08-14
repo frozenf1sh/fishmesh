@@ -33,6 +33,9 @@ patches:
       - op: add
         path: /spec/template/metadata/annotations/fishmesh.io~1prediction-model
         value: learned-ridge-v1
+      - op: add
+        path: /spec/template/metadata/annotations/fishmesh.io~1prediction-model-epoch
+        value: r6i7-run2
   - target:
       kind: Deployment
       name: qwen-vllm

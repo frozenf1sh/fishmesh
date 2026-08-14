@@ -43,3 +43,27 @@ func TestRoutingLoadsDoesNotTreatUnknownQueueAsOverloaded(t *testing.T) {
 		t.Fatalf("unknown queue triggered a hard gate: %+v", load)
 	}
 }
+
+func TestRoutingLoadsUsesFreshMappedRuntimeHardGate(t *testing.T) {
+	backends := []backend.Backend{{ID: "a"}, {ID: "b"}}
+	observations := map[backend.ID]observation.Backend{
+		"a": {Runtime: observation.Runtime{GPUUtilizationPercent: observation.Sample[float64]{Value: 95, Valid: true}}},
+		"b": {Runtime: observation.Runtime{GPUUtilizationPercent: observation.Sample[float64]{Value: 40, Valid: true}}},
+	}
+	loads := routingLoads(backends, observations, nil, Config{RuntimeGPUUtilizationHardLimitPct: 90})
+	if !loads["a"].RuntimeHardOverload || !loads["a"].HardOverload {
+		t.Fatalf("runtime threshold was not published: %+v", loads["a"])
+	}
+	if loads["b"].RuntimeHardOverload || loads["b"].HardOverload {
+		t.Fatalf("healthy runtime sample triggered a hard gate: %+v", loads["b"])
+	}
+}
+
+func TestRoutingLoadsIgnoresUnmappedRuntimeSample(t *testing.T) {
+	load := routingLoads([]backend.Backend{{ID: "a"}}, map[backend.ID]observation.Backend{
+		"a": {Runtime: observation.Runtime{GPUUtilizationPercent: observation.Sample[float64]{Value: 100, Valid: false}}},
+	}, nil, Config{RuntimeGPUUtilizationHardLimitPct: 90})["a"]
+	if load.RuntimeHardOverload || load.HardOverload {
+		t.Fatalf("unmapped runtime sample triggered a hard gate: %+v", load)
+	}
+}

@@ -14,9 +14,10 @@ import (
 )
 
 const (
-	// ModeLoadBalanced 按本 Gateway 视角的在途请求数做普通负载均衡。
+	// ModeLoadBalanced 优先使用完整 vLLM queue/running 观测，观测缺失时退回本 Gateway 在途请求数。
 	ModeLoadBalanced Mode = "load-balanced"
-	// ModeSessionKey 使用客户端传入的 session key 建立有界粘性，并允许压力或熔断时临时溢出。
+	// ModeSessionKey 是冻结的兼容模式：使用客户端传入的 session key 建立有界粘性，并允许压力或熔断时临时溢出。
+	// 新能力只应进入 load-balanced 或 kv-aware；除安全/构建修复外不再扩展该模式。
 	ModeSessionKey Mode = "session-key"
 	// ModeKVAware 联合真实 KV locality 与已知负载，选择等价成本最低的后端。
 	ModeKVAware Mode = "kv-aware"
@@ -24,7 +25,7 @@ const (
 	// Policy 常量带版本号：同一策略更换算法或语义时必须升版本，
 	// 让监控指标和历史数据能够区分不同时期的行为。
 	PolicyLoadBalancedV1        Policy = "load-balanced-v1"
-	PolicySessionKeyV1          Policy = "session-key-v1"
+	PolicySessionKeyV1          Policy = "session-key-v1"      // frozen compatibility policy
 	PolicyServiceFallbackV1     Policy = "service-fallback-v1" // 固定 fallback，不是可配置 routing mode
 	PolicyKVAwareV1             Policy = "kv-aware-v1"
 	PolicyKVAwareStaticV1       Policy = "kv-aware-ttft-static-v1"
@@ -188,11 +189,12 @@ type Snapshot struct {
 
 // Load 是 routing 解释的逐 backend 负载值；缺失观测必须显式标记，而不能伪装成零负载。
 type Load struct {
-	QueueDepth   int64 // 排队请求数（外部观测）
-	Running      int64 // 正在执行的请求数（外部观测）
-	LocalDelta   int64 // 尚未被外部 running 覆盖的本 Gateway 在途增量
-	Valid        bool  // 观测是否有效；false 表示未知，绝不能当作 0 参与比较
-	HardOverload bool  // 是否越过硬过载阈值；越过者在 KV-aware 策略中直接出局
+	QueueDepth          int64 // 排队请求数（外部观测）
+	Running             int64 // 正在执行的请求数（外部观测）
+	LocalDelta          int64 // 尚未被外部 running 覆盖的本 Gateway 在途增量
+	RuntimeHardOverload bool  // fresh、已归属 runtime sample 越过安全门
+	Valid               bool  // queue/running 观测是否有效；false 表示未知，绝不能当作 0 参与比较
+	HardOverload        bool  // 任一硬安全门越过；越过者在 KV-aware 策略中直接出局
 }
 
 const (

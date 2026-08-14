@@ -21,6 +21,7 @@ type Status string
 // GPURequested is the declared resource request, not live utilization.
 type Identity struct {
 	PodName      string
+	PodUID       string
 	NodeName     string
 	GPURequested float64
 	Ready        bool

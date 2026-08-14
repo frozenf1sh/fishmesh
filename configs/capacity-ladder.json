@@ -1,0 +1,21 @@
+{
+  "run_id": "capacity-ladder-template",
+  "max_tokens": 256,
+  "ignore_eos": true,
+  "request_timeout_ms": 180000,
+  "allow_high_concurrency": true,
+  "skip_prompt_token_evidence": true,
+  "treatment": "replace-at-run",
+  "workload_seed": 20260816,
+  "cache_mode": "cold",
+  "run_nonce": "replace-with-unique-run-nonce",
+  "cache_generation": "replace-with-vllm-pod-generation",
+  "scenarios": [
+    {"name": "arrival-1", "prefix_pattern": "same-prefix", "prefix_bytes": 12076, "prefix_groups": 1, "target_prompt_tokens": 2048, "prompt_token_tolerance": 16, "batches": 2, "batch_size": 32, "concurrency": 16, "arrival_rate_qps": 1},
+    {"name": "arrival-2", "prefix_pattern": "same-prefix", "prefix_bytes": 12076, "prefix_groups": 1, "target_prompt_tokens": 2048, "prompt_token_tolerance": 16, "batches": 2, "batch_size": 32, "concurrency": 16, "arrival_rate_qps": 2},
+    {"name": "arrival-4", "prefix_pattern": "same-prefix", "prefix_bytes": 12076, "prefix_groups": 1, "target_prompt_tokens": 2048, "prompt_token_tolerance": 16, "batches": 2, "batch_size": 32, "concurrency": 16, "arrival_rate_qps": 4},
+    {"name": "arrival-8", "prefix_pattern": "same-prefix", "prefix_bytes": 12076, "prefix_groups": 1, "target_prompt_tokens": 2048, "prompt_token_tolerance": 16, "batches": 2, "batch_size": 32, "concurrency": 16, "arrival_rate_qps": 8},
+    {"name": "arrival-16", "prefix_pattern": "same-prefix", "prefix_bytes": 12076, "prefix_groups": 1, "target_prompt_tokens": 2048, "prompt_token_tolerance": 16, "batches": 2, "batch_size": 32, "concurrency": 16, "arrival_rate_qps": 16},
+    {"name": "arrival-32", "prefix_pattern": "same-prefix", "prefix_bytes": 12076, "prefix_groups": 1, "target_prompt_tokens": 2048, "prompt_token_tolerance": 16, "batches": 2, "batch_size": 32, "concurrency": 16, "arrival_rate_qps": 32}
+  ]
+}

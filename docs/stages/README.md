@@ -54,5 +54,22 @@
 | 45 | R6I-5 缓存隔离与 Token 工作负载 | cache salt/run nonce、三种 cache 状态、实际 token 门禁与完整 provenance |
 | 46 | R6I-6 校准与 Token 阶梯 | 512–3072 token profile、并发阶梯、local-delta/原子 reservation 修正；static 未通过 active 门禁 |
 | 47 | R6I-7 Learned-shadow 实现与门禁 | 有界重拟合、低基数 shadow 证据、双轮真实实验门禁与可回滚 overlay |
+| 48 | 路由维护边界与 Load-aware 升级 | `session-key` 冻结为兼容模式，load-balanced/KV fallback 进入 load-aware 主线 |
+| 49 | Load-aware 普通均衡与 KV 降级 | 普通策略优先消费完整 vLLM queue/running，KV fallback 复用同一 load-aware 选择 |
+| 50 | Little’s Law 请求观测契约 | 区分 admitted、in-flight、completed/rejected，为 QPS 与并发计算提供低基数事实 |
+| 51 | Open-loop QPS 压测计划 | benchmark 支持可选 arrival rate，并明确 offered rate、worker 饱和与 Gateway accepted rate 的边界 |
+| 52 | 压测完成窗口与 Little’s Law 边界 | attempt/batch/scenario 记录实际完成窗口与 completed QPS，继续隔离 Gateway accepted rate |
+| 53 | Gateway 指标窗口与 Little’s Law 取数 | 可选采样 admitted/completed/in-flight，计算 accepted QPS、平均并发与 Little’s Law W |
+| 54 | Gateway 指标分段窗口 | 排除 warmup 与 scenario gap，按 active duration 聚合 Gateway accepted/completed/in-flight |
+| 55 | Tokenization 与 KV 并发边界 | Tokenize 与 KV reconcile 并行，KV Lookup 等待 Token IDs，保持显式降级和串行 reservation |
+| 56 | 容量阶梯与拒绝证据 | 增加 admission rejection rate、batch 分段窗口和 1/2/4/8/16/32 QPS open-loop 模板 |
+| 57 | 容量基线与对照实验契约 | 固化 admission/routing 对照轴、动态阶梯、路由消融和长连接 drain 实验模板 |
+| 58 | Pod 身份运行时指标观测 | 以 Pod name/UID 归属 CPU、内存和可选 GPU runtime sample，并暴露 freshness-aware 低基数指标 |
+| 59 | 动态 Admission 影子控制 | 分离 hard limit/soft target，提供 off/shadow/active、连接安全语义和控制器指标 |
+| 60 | 动态 Admission 实验部署与长连接安全 | 提供 shadow/active Kustomize overlay、SSE drain 和 stale signal 验收步骤 |
+| 61 | 运行时负载硬安全门接入路由 | 将 fresh、Pod-mapped runtime sample 作为可选 overload gate，保留缺失信号降级和 availability-first |
+| 62 | 容量报告与 A/B 收益汇总 | 把 Gateway 窗口下沉到 scenario/batch，并扩展 compare 汇总 accepted/completed/rejected 与 Little’s Law |
+| 63 | 容量、Admission 与 Runtime 实验手册 | 固化执行顺序、长连接安全、产物留存、收益判定和停止/回滚条件 |
+| 64 | 真实容量、Admission 与路由收益验收 | 完成真实 A0/A1/A2、B1/B2 与长连接对照；确认 active 背压边界、KV locality，runtime 观测仍缺 Pod 维度 |
 
 每个阶段完成后都会补充独立中文说明，并在文末明确下一阶段边界。

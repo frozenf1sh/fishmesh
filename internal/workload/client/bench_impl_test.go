@@ -38,11 +38,29 @@ func TestRunPlanWritesAttemptsAndSeparatesUnavailable(t *testing.T) {
 	if report.Completed != 3 || report.Succeeded != 2 || report.Failed != 1 {
 		t.Fatalf("report = %+v", report)
 	}
+	if report.ElapsedMS <= 0 || report.CompletionRateQPS <= 0 || report.Scenarios[0].ElapsedMS <= 0 || report.Scenarios[0].Batches[0].CompletionRateQPS <= 0 {
+		t.Fatalf("missing client completion window: %+v", report)
+	}
 	if report.Scenarios[0].CachedPrefixSamples != 2 || report.Scenarios[0].CachedPrefixSum != 0 {
 		t.Fatalf("scenario cache summary = %+v", report.Scenarios[0])
 	}
 	if records := strings.Count(output.String(), `"record_type"`); records != 5 {
 		t.Fatalf("JSONL records=%d, output=%s", records, output.String())
+	}
+}
+
+func TestWindowMetricsRejectsMissingOrNonPositiveWindow(t *testing.T) {
+	started := time.Unix(10, 0)
+	completed := started.Add(2 * time.Second)
+	elapsed, rate := windowMetrics(4, started, completed)
+	if elapsed != 2000 || rate != 2 {
+		t.Fatalf("window metrics = %.2f/%.2f", elapsed, rate)
+	}
+	if elapsed, rate = windowMetrics(4, completed, started); elapsed != 0 || rate != 0 {
+		t.Fatalf("reversed window metrics = %.2f/%.2f", elapsed, rate)
+	}
+	if elapsed, rate = windowMetrics(4, time.Time{}, completed); elapsed != 0 || rate != 0 {
+		t.Fatalf("missing window metrics = %.2f/%.2f", elapsed, rate)
 	}
 }
 
@@ -60,6 +78,14 @@ func TestBenchmarkPlanValidatesPatternsAndLoadDiscipline(t *testing.T) {
 	plan.AllowHighConcurrency = true
 	if err := plan.Validate(); err != nil {
 		t.Fatalf("explicit high concurrency opt-in rejected: %v", err)
+	}
+	plan.Scenarios[0].ArrivalRateQPS = 10
+	if err := plan.Validate(); err != nil {
+		t.Fatalf("positive arrival rate rejected: %v", err)
+	}
+	plan.Scenarios[0].ArrivalRateQPS = -1
+	if err := plan.Validate(); err == nil {
+		t.Fatal("negative arrival rate was accepted")
 	}
 }
 
@@ -197,5 +223,28 @@ func TestRunPlanReportsActualPromptTokenCompliance(t *testing.T) {
 	}
 	if report.PromptTokenMissing != 0 || report.PromptTokenViolations != 0 || report.Scenarios[0].ActualPromptTokenP50 != 1018 {
 		t.Fatalf("token report = %+v", report)
+	}
+}
+
+func TestSkipPromptTokenEvidenceKeepsMissingCountWithoutFailingRun(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = writer.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n"))
+	}))
+	defer upstream.Close()
+	service, err := New(Config{Endpoint: upstream.URL, Model: "qwen", RequestTimeout: time.Second}, Dependencies{HTTPClient: upstream.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := BenchmarkPlan{
+		RunID: "skip-token-evidence", MaxTokens: 8, RequestTimeoutMS: 1000, SkipPromptTokenEvidence: true,
+		Scenarios: []BenchmarkScenario{{Name: "capacity", Pattern: PrefixSame, PrefixBytes: 128, PrefixGroups: 1, Batches: 1, BatchSize: 1, Concurrency: 1, TargetPromptTokens: 1024, PromptTokenTolerance: 16}},
+	}
+	report, err := service.RunPlan(context.Background(), plan, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.PromptTokenMissing != 1 || report.Succeeded != 1 {
+		t.Fatalf("token evidence report = %+v", report)
 	}
 }

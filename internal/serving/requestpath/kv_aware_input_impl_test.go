@@ -35,6 +35,58 @@ func (t failingTokenizer) Tokenize(context.Context, tokenization.Input) (tokeniz
 	return tokenization.Result{}, t.err
 }
 
+type barrierTokenizer struct {
+	started chan<- struct{}
+	release <-chan struct{}
+}
+
+func (t barrierTokenizer) Tokenize(context.Context, tokenization.Input) (tokenization.Result, error) {
+	close(t.started)
+	<-t.release
+	return tokenization.Result{}, nil
+}
+
+func TestKVAwareTokenizationAndKVReconcileOverlap(t *testing.T) {
+	resolver := &mutableResolver{err: errors.New("discovery unavailable")}
+	tokenizerStarted := make(chan struct{})
+	reconcileStarted := make(chan struct{})
+	release := make(chan struct{})
+	path, err := New(Config{Service: backend.Backend{ID: "service", URL: "http://service:8000"}}, Dependencies{
+		Resolver: resolver, Strategy: newKVAwareStrategy(t), Circuits: newTestBreaker(t),
+		Tokenizer: barrierTokenizer{started: tokenizerStarted, release: release}, KVCache: &recordingKVCache{},
+		KVReconcile: func(context.Context, []backend.Backend) error {
+			close(reconcileStarted)
+			<-release
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer path.Close()
+	result := make(chan error, 1)
+	go func() {
+		_, selectErr := path.Select(context.Background(), Request{Route: string(tokenization.RouteChatCompletions), Body: []byte(`{"model":"qwen","messages":[]}`)})
+		result <- selectErr
+	}()
+	for index, started := range []<-chan struct{}{tokenizerStarted, reconcileStarted} {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatalf("parallel operation %d did not start", index)
+		}
+	}
+	close(release)
+	select {
+	case selectErr := <-result:
+		if selectErr != nil {
+			t.Fatalf("Select() error = %v", selectErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Select() did not finish after parallel operations were released")
+	}
+}
+
 func TestRoutingInputFromMatchesPreservesValidZeroAndUnknown(t *testing.T) {
 	input := routingInputFromMatches(16, map[backend.ID]kvcache.Match{
 		"a": {Backend: "a", Valid: true, MatchedTokens: 0},

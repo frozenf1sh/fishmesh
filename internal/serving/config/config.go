@@ -38,6 +38,7 @@ type Config struct {
 	Routing         routing.Config
 	Circuit         circuit.Config
 	Admission       admission.Config
+	AdmissionTuning admission.TuningConfig
 	Transport       transport.Config
 	RequestPath     requestpath.Config
 	Tokenization    tokenization.Config
@@ -65,6 +66,9 @@ func (c Config) Validate() error {
 	}
 	if err := c.Admission.Validate(); err != nil {
 		return fmt.Errorf("admission: %w", err)
+	}
+	if err := c.AdmissionTuning.Validate(c.Admission.MaxInflight); err != nil {
+		return fmt.Errorf("admission tuning: %w", err)
 	}
 	if err := c.Transport.Validate(); err != nil {
 		return fmt.Errorf("transport: %w", err)

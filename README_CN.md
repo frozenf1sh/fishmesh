@@ -65,9 +65,9 @@ Standard mode 面向共享 Gateway、多推理池和平台统一入口。FishMes
 - OpenAI-compatible HTTP/SSE 代理、取消传播、stream outcome 分类和 TTFT 指标；
 - EndpointSlice watch/list、Ready 过滤、周期 relist、freshness 和显式 Service fallback；
 - 带逐字段 valid/age 的 per-backend vLLM queue/running 观测；
-- 三种路由模式：普通在途负载均衡 `load-balanced`、客户端传入 key 的有界粘性 `session-key`，
-  以及结合真实 KV locality 与已知负载的 `kv-aware`（对应策略标识分别是 `load-balanced-v1`、
-  `session-key-v1`、`kv-aware-v1`）；
+- 普通负载感知均衡 `load-balanced` 和结合真实 KV locality 与已知负载的 `kv-aware`；
+  `session-key` 仅作为冻结的兼容模式保留（策略标识仍为 `load-balanced-v1`、`session-key-v1`、
+  `kv-aware-v1`）；
 - 非阻塞 admission、per-backend connection bounds、transport error EWMA circuit 和状态回收；
 - Prometheus 路由/发现/backend 指标与 `X-FishMesh-*` 请求 provenance；
 - 严格配置、探针、优雅关闭、最小 RBAC 和经过 race test 的请求生命周期；
@@ -100,7 +100,7 @@ FishMesh 不声称发明新调度算法。工程贡献是把真实 engine state�
 
 演示前提见 [`deploy/lite-kv-aware/README.md`](deploy/lite-kv-aware/README.md)：已有 K3s、模型 PV 和可导入
 的 Gateway 镜像。先确认普通 `load-balanced` 默认值，再临时启用 KV-aware overlay；有界
-`session-key` 可通过独立实验 overlay 验证。Standard mode / llm-d 集成本轮后置。
+历史 `session-key` 实验 overlay 仅用于兼容性验证。Standard mode / llm-d 集成本轮后置。
 
 验证仓库和 load-balanced 基线：
 
@@ -277,6 +277,13 @@ R6I token 校准进一步把任意固定权重替换为“仅在实测包络内�
 P95 为 132.64 ms，对照 token-cost 为 128.62 ms（+3.13%，bootstrap 95% CI 跨 0）。因此当前和默认
 estimator 继续使用 token-cost，static TTFT 只作为显式研究 overlay 保留。详见
 [R6I-6 校准报告](docs/experiments/2026-08-16-r6i6-token-ladder.md)。
+
+随后 R6I-7 在两轮独立、每轮 160 请求的真实集群实验中验证 learned-shadow。剔除实际 3078 token、确实
+超出 static profile 3072 上界的请求后，learned 在两轮的 MAE 约比 static 低 10.4%，absolute-error P95
+也没有更高；但 would-select 一致率从 71.1% 降到 62.7%，未达到要求的 70% 稳定性门槛。因此预测器只保留
+shadow 研究能力，集群已恢复为 `token-cost` 且关闭 prediction。详见
+[R6I-7 learned-shadow 报告](docs/experiments/2026-08-16-r6i7-learned-shadow.md) 和
+[R6I-7 原始压测产物](artifacts/bench/)。
 
 ## 交付优先级
 

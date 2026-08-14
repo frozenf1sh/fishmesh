@@ -92,7 +92,11 @@ func DefaultConfig() Config {
 			OpenDuration:    10 * time.Second,
 			Clock:           time.Now,
 		},
-		Admission: admission.Config{MaxInflight: 128},
+		Admission: admission.Config{MaxInflight: 128, InitialTarget: 128},
+		AdmissionTuning: admission.TuningConfig{
+			Mode: admission.TuningOff, MinTarget: 16, MaxTarget: 128, Step: 8,
+			Interval: 2 * time.Second, Cooldown: 5 * time.Second, LowWatermark: 0.25, HighWatermark: 0.8,
+		},
 		Transport: transport.Config{
 			KeepAlive:       false,
 			RequestTimeout:  90 * time.Second,

@@ -1,0 +1,35 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: kubellm
+resources:
+  - ../load-balanced
+patches:
+  - target:
+      kind: ConfigMap
+      name: fishmesh-gateway-config
+    patch: |-
+      - op: replace
+        path: /data/FISHMESH_ADMISSION_TUNING_MODE
+        value: shadow
+      - op: replace
+        path: /data/FISHMESH_ADMISSION_INITIAL_TARGET
+        value: "32"
+      - op: replace
+        path: /data/FISHMESH_ADMISSION_MIN_TARGET
+        value: "16"
+      - op: replace
+        path: /data/FISHMESH_ADMISSION_MAX_TARGET
+        value: "128"
+      - op: replace
+        path: /metadata/annotations/fishmesh.io~1config-version
+        value: r6i22-admission-shadow
+      - op: add
+        path: /metadata/annotations/fishmesh.io~1admission-tuning
+        value: shadow
+  - target:
+      kind: Deployment
+      name: fishmesh-gateway
+    patch: |-
+      - op: replace
+        path: /spec/template/metadata/annotations/fishmesh.io~1runtime-config-version
+        value: r6i22-admission-shadow

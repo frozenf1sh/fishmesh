@@ -1,0 +1,13 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: kubellm
+resources:
+  - ../kv-aware
+patches:
+  - target:
+      kind: Deployment
+      name: qwen-vllm
+    patch: |-
+      - op: add
+        path: /spec/template/metadata/annotations/fishmesh.io~1r6i22-replay-reset
+        value: r6i22-b2-replay-reset

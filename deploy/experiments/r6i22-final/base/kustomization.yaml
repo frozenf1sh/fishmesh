@@ -1,0 +1,32 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: kubellm
+resources:
+  - ../../../lite-kv-aware
+patches:
+  - target:
+      kind: ConfigMap
+      name: fishmesh-gateway-config
+    patch: |-
+      - op: replace
+        path: /metadata/annotations/fishmesh.io~1config-version
+        value: r6i22-final-base
+  - target:
+      kind: Deployment
+      name: fishmesh-gateway
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/image
+        value: fishmesh-gateway:r6i22-final-r1
+      - op: replace
+        path: /spec/template/metadata/annotations/fishmesh.io~1gateway-image-revision
+        value: r6i22-final-r1
+      - op: replace
+        path: /spec/template/metadata/annotations/fishmesh.io~1image-amd64-digest
+        value: sha256:2baa1a168b1a2951b43ae88b4c3ecf7cd170af730cf9e4d18f6bce24a322316d
+      - op: replace
+        path: /spec/template/metadata/annotations/fishmesh.io~1runtime-profile
+        value: r6i22-final
+      - op: replace
+        path: /spec/template/metadata/annotations/fishmesh.io~1runtime-config-version
+        value: r6i22-final-base

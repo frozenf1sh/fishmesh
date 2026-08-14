@@ -8,9 +8,10 @@ import (
 	"time"
 )
 
-func finishBenchmarkReport(writer *bufio.Writer, report BenchmarkReport, attempts []BenchmarkAttempt, runErr error) (BenchmarkReport, error) {
-	finalizeBenchmarkReport(&report, attempts)
+func finishBenchmarkReport(writer *bufio.Writer, report BenchmarkReport, attempts []BenchmarkAttempt, gatewayByScenarioBatch map[string]map[int]GatewayMetricsWindow, runErr error) (BenchmarkReport, error) {
 	report.CompletedAt = time.Now().UTC()
+	finalizeBenchmarkReport(&report, attempts)
+	applyGatewayMetricsToReport(&report, gatewayByScenarioBatch)
 	if err := writeJSONL(writer, report); err != nil {
 		return report, err
 	}
@@ -18,6 +19,32 @@ func finishBenchmarkReport(writer *bufio.Writer, report BenchmarkReport, attempt
 		return report, fmt.Errorf("flush benchmark JSONL: %w", err)
 	}
 	return report, runErr
+}
+
+func applyGatewayMetricsToReport(report *BenchmarkReport, gatewayByScenarioBatch map[string]map[int]GatewayMetricsWindow) {
+	for scenarioIndex := range report.Scenarios {
+		scenario := &report.Scenarios[scenarioIndex]
+		batchWindows := gatewayByScenarioBatch[scenario.Name]
+		if len(batchWindows) == 0 {
+			continue
+		}
+		windows := make([]GatewayMetricsWindow, 0, len(batchWindows))
+		for batchIndex := range scenario.Batches {
+			window, ok := batchWindows[batchIndex]
+			if !ok {
+				continue
+			}
+			window.WarmupExcluded = true
+			scenario.Batches[batchIndex].GatewayMetrics = &window
+			windows = append(windows, window)
+		}
+		if len(windows) == 0 {
+			continue
+		}
+		combined := combineGatewayMetricsWindows(windows)
+		combined.WarmupExcluded = true
+		scenario.GatewayMetrics = &combined
+	}
 }
 
 func finalizeBenchmarkReport(report *BenchmarkReport, attempts []BenchmarkAttempt) {
@@ -34,6 +61,7 @@ func finalizeBenchmarkReport(report *BenchmarkReport, attempts []BenchmarkAttemp
 		summary := summarizeAttempts(items)
 		scenarioReport := BenchmarkScenarioReport{
 			Name: scenario.Name, Pattern: scenario.Pattern, PrefixBytes: scenario.PrefixBytes, PrefixGroups: scenario.PrefixGroups,
+			ArrivalRateQPS:     scenario.ArrivalRateQPS,
 			TargetPromptTokens: scenario.TargetPromptTokens, PromptTokenTolerance: scenario.PromptTokenTolerance,
 			Requested: scenario.Batches * scenario.BatchSize, Batches: make([]BenchmarkBatchReport, 0, scenario.Batches),
 		}
@@ -63,22 +91,30 @@ func finalizeBenchmarkReport(report *BenchmarkReport, attempts []BenchmarkAttemp
 	report.DurationP95MS = percentile(global.durations, 95)
 	report.PromptTokenMissing = global.promptTokenMissing
 	report.PromptTokenViolations = global.promptTokenViolations
+	applyReportWindow(report, global)
 }
 
 type benchmarkMetrics struct {
-	completed, succeeded, failed int
-	ttfts, durations             []float64
-	kvStatuses, routeReasons     map[string]int
-	backends                     map[string]int
-	cachedSamples, cachedSum     int
-	promptTokens                 []int
-	promptTokenMissing           int
-	promptTokenViolations        int
+	completed, succeeded, failed       int
+	ttfts, durations                   []float64
+	kvStatuses, routeReasons           map[string]int
+	backends                           map[string]int
+	windowStartedAt, windowCompletedAt time.Time
+	cachedSamples, cachedSum           int
+	promptTokens                       []int
+	promptTokenMissing                 int
+	promptTokenViolations              int
 }
 
 func summarizeAttempts(attempts []BenchmarkAttempt) benchmarkMetrics {
 	metrics := benchmarkMetrics{kvStatuses: map[string]int{}, routeReasons: map[string]int{}, backends: map[string]int{}}
 	for _, attempt := range attempts {
+		if !attempt.StartedAt.IsZero() && (metrics.windowStartedAt.IsZero() || attempt.StartedAt.Before(metrics.windowStartedAt)) {
+			metrics.windowStartedAt = attempt.StartedAt
+		}
+		if !attempt.CompletedAt.IsZero() && (metrics.windowCompletedAt.IsZero() || attempt.CompletedAt.After(metrics.windowCompletedAt)) {
+			metrics.windowCompletedAt = attempt.CompletedAt
+		}
 		metrics.completed++
 		if attempt.Error == "" {
 			metrics.succeeded++
@@ -119,6 +155,7 @@ func summarizeAttempts(attempts []BenchmarkAttempt) benchmarkMetrics {
 }
 
 func applyBatchMetrics(report *BenchmarkBatchReport, metrics benchmarkMetrics) {
+	applyBatchWindow(report, metrics)
 	report.Completed, report.Succeeded, report.Failed = metrics.completed, metrics.succeeded, metrics.failed
 	report.TTFTP50MS, report.TTFTP95MS = percentile(metrics.ttfts, 50), percentile(metrics.ttfts, 95)
 	report.DurationP50MS, report.DurationP95MS = percentile(metrics.durations, 50), percentile(metrics.durations, 95)
@@ -127,6 +164,7 @@ func applyBatchMetrics(report *BenchmarkBatchReport, metrics benchmarkMetrics) {
 }
 
 func applyScenarioMetrics(report *BenchmarkScenarioReport, metrics benchmarkMetrics) {
+	applyScenarioWindow(report, metrics)
 	report.Completed, report.Succeeded, report.Failed = metrics.completed, metrics.succeeded, metrics.failed
 	report.TTFTP50MS, report.TTFTP95MS = percentile(metrics.ttfts, 50), percentile(metrics.ttfts, 95)
 	report.DurationP50MS, report.DurationP95MS = percentile(metrics.durations, 50), percentile(metrics.durations, 95)
@@ -140,6 +178,30 @@ func applyScenarioMetrics(report *BenchmarkScenarioReport, metrics benchmarkMetr
 	}
 	report.PromptTokenMissing = metrics.promptTokenMissing
 	report.PromptTokenViolations = metrics.promptTokenViolations
+}
+
+func applyBatchWindow(report *BenchmarkBatchReport, metrics benchmarkMetrics) {
+	report.WindowStartedAt = metrics.windowStartedAt
+	report.WindowCompletedAt = metrics.windowCompletedAt
+	report.ElapsedMS, report.CompletionRateQPS = windowMetrics(metrics.completed, metrics.windowStartedAt, metrics.windowCompletedAt)
+}
+
+func applyScenarioWindow(report *BenchmarkScenarioReport, metrics benchmarkMetrics) {
+	report.WindowStartedAt = metrics.windowStartedAt
+	report.WindowCompletedAt = metrics.windowCompletedAt
+	report.ElapsedMS, report.CompletionRateQPS = windowMetrics(metrics.completed, metrics.windowStartedAt, metrics.windowCompletedAt)
+}
+
+func applyReportWindow(report *BenchmarkReport, metrics benchmarkMetrics) {
+	report.ElapsedMS, report.CompletionRateQPS = windowMetrics(metrics.completed, metrics.windowStartedAt, metrics.windowCompletedAt)
+}
+
+func windowMetrics(completed int, startedAt, completedAt time.Time) (float64, float64) {
+	if completed <= 0 || startedAt.IsZero() || completedAt.IsZero() || !completedAt.After(startedAt) {
+		return 0, 0
+	}
+	elapsed := completedAt.Sub(startedAt)
+	return durationMS(elapsed), float64(completed) / elapsed.Seconds()
 }
 
 func plannedRequests(plan BenchmarkPlan) int {

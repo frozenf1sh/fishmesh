@@ -81,9 +81,11 @@ func (p *repeatedPaths) Set(value string) error {
 func runCompare(arguments []string, output, diagnostics io.Writer) error {
 	set := flag.NewFlagSet("compare", flag.ContinueOnError)
 	set.SetOutput(diagnostics)
-	var baseline, treatment repeatedPaths
+	var baseline, treatment, baselineReports, treatmentReports repeatedPaths
 	set.Var(&baseline, "baseline", "baseline requests.jsonl path; repeat for multiple runs")
 	set.Var(&treatment, "treatment", "treatment requests.jsonl path; repeat for multiple runs")
+	set.Var(&baselineReports, "baseline-report", "baseline report.json path; repeat for Gateway evidence")
+	set.Var(&treatmentReports, "treatment-report", "treatment report.json path; repeat for Gateway evidence")
 	bootstrap := set.Int("bootstrap", 2000, "bootstrap resamples for the P95 delta confidence interval")
 	seed := set.Int64("seed", 1, "deterministic bootstrap seed")
 	outputDir := set.String("output-dir", "", "comparison artifact directory")
@@ -93,6 +95,15 @@ func runCompare(arguments []string, output, diagnostics io.Writer) error {
 	report, err := client.CompareBenchmarkFiles(baseline, treatment, *bootstrap, *seed)
 	if err != nil {
 		return err
+	}
+	if len(baselineReports) != len(treatmentReports) {
+		return errors.New("--baseline-report and --treatment-report must be provided in matching groups")
+	}
+	if len(baselineReports) > 0 {
+		report.BaselineGateway, report.TreatmentGateway, err = client.CompareGatewayReportFiles(baselineReports, treatmentReports)
+		if err != nil {
+			return err
+		}
 	}
 	if *outputDir == "" {
 		*outputDir = filepath.Join("artifacts", "bench", "comparison-"+time.Now().UTC().Format(defaultHistoryTimestamp))
@@ -311,6 +322,8 @@ func runBenchmark(arguments []string, diagnostics io.Writer) error {
 	runNonce := set.String("run-nonce", "", "override the unique cache-isolation run nonce")
 	cacheGeneration := set.String("cache-generation", "", "override the vLLM cache generation identifier")
 	workloadSeed := set.Int64("workload-seed", 0, "override the deterministic workload seed")
+	metricsEndpoint := set.String("metrics-endpoint", "", "optional Gateway /metrics URL for accepted-rate and Little's Law evidence")
+	metricsInterval := set.Duration("metrics-interval", 250*time.Millisecond, "Gateway metrics sampling interval")
 	allowHigh := set.Bool("allow-high-concurrency", false, "acknowledge high concurrency declared by the plan")
 	if err := set.Parse(arguments); err != nil {
 		return err
@@ -362,6 +375,13 @@ func runBenchmark(arguments []string, diagnostics io.Writer) error {
 	if err != nil {
 		return err
 	}
+	var metricsReader client.GatewayMetricsReader
+	if strings.TrimSpace(*metricsEndpoint) != "" {
+		metricsReader, err = client.NewPrometheusGatewayMetricsReader(client.PrometheusGatewayMetricsConfig{Endpoint: *metricsEndpoint})
+		if err != nil {
+			return err
+		}
+	}
 	if *outputDir == "" {
 		*outputDir = filepath.Join("artifacts", "bench", plan.RunID)
 	}
@@ -380,7 +400,13 @@ func runBenchmark(arguments []string, diagnostics io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("open benchmark requests: %w", err)
 	}
-	report, runErr := service.RunPlan(context.Background(), plan, file)
+	var report client.BenchmarkReport
+	var runErr error
+	if metricsReader == nil {
+		report, runErr = service.RunPlan(context.Background(), plan, file)
+	} else {
+		report, runErr = service.RunPlanWithMetrics(context.Background(), plan, file, metricsReader, *metricsInterval)
+	}
 	closeErr := file.Close()
 	if runErr == nil && closeErr != nil {
 		runErr = fmt.Errorf("close benchmark requests: %w", closeErr)

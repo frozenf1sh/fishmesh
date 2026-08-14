@@ -35,7 +35,7 @@ func TestSessionKeyIsStable(t *testing.T) {
 	}
 }
 
-// TestLoadBalancedSelectsLeastInflight 验证普通负载均衡选中本地在途请求最少的后端。
+// TestLoadBalancedSelectsLeastInflight 验证缺少外部观测时普通负载均衡选中本地在途请求最少的后端。
 func TestLoadBalancedSelectsLeastInflight(t *testing.T) {
 	strategy := NewLoadBalanced()
 	decision, err := strategy.Select("same-prefix", Snapshot{
@@ -47,6 +47,74 @@ func TestLoadBalancedSelectsLeastInflight(t *testing.T) {
 	}
 	if decision.Backend.ID != "b" || decision.Reason != ReasonLoadBalanced {
 		t.Fatalf("decision = %+v, want backend b", decision)
+	}
+}
+
+// TestLoadBalancedPrefersFreshVLLMLoad 验证完整 vLLM queue/running 观测优先于本地计数。
+func TestLoadBalancedPrefersFreshVLLMLoad(t *testing.T) {
+	strategy := NewLoadBalanced()
+	decision, err := strategy.Select("same-prefix", Snapshot{
+		Backends: testBackends(), Inflight: map[backend.ID]int64{"a": 0, "b": 4},
+		Loads: map[backend.ID]Load{
+			"a": {QueueDepth: 2, Running: 0, Valid: true},
+			"b": {QueueDepth: 0, Running: 2, Valid: true},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Backend.ID != "b" {
+		t.Fatalf("decision = %+v, want queue-empty backend b", decision)
+	}
+}
+
+// TestLoadBalancedFallsBackToLocalInflightWhenObservedLoadIsIncomplete 验证部分观测不会伪装成零负载。
+func TestLoadBalancedFallsBackToLocalInflightWhenObservedLoadIsIncomplete(t *testing.T) {
+	strategy := NewLoadBalanced()
+	decision, err := strategy.Select("same-prefix", Snapshot{
+		Backends: testBackends(), Inflight: map[backend.ID]int64{"a": 3, "b": 1},
+		Loads: map[backend.ID]Load{
+			"a": {QueueDepth: 0, Running: 0, Valid: true},
+			"b": {Valid: false},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Backend.ID != "b" {
+		t.Fatalf("decision = %+v, want local-inflight fallback backend b", decision)
+	}
+}
+
+// TestLoadBalancedExcludesHardOverloadWhenAlternativesExist 验证安全门优先于普通负载比较。
+func TestLoadBalancedExcludesHardOverloadWhenAlternativesExist(t *testing.T) {
+	strategy := NewLoadBalanced()
+	decision, err := strategy.Select("same-prefix", Snapshot{
+		Backends: testBackends(), Inflight: map[backend.ID]int64{"a": 0, "b": 4},
+		Loads: map[backend.ID]Load{
+			"a": {HardOverload: true},
+			"b": {Valid: true},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Backend.ID != "b" {
+		t.Fatalf("decision = %+v, want non-overloaded backend b", decision)
+	}
+}
+
+func TestLoadBalancedExcludesRuntimeHardOverloadWhenAlternativesExist(t *testing.T) {
+	strategy := NewLoadBalanced()
+	decision, err := strategy.Select("runtime", Snapshot{
+		Backends: testBackends(), Inflight: map[backend.ID]int64{"a": 0, "b": 2},
+		Loads: map[backend.ID]Load{"a": {RuntimeHardOverload: true, HardOverload: true}, "b": {Valid: true}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Backend.ID != "b" {
+		t.Fatalf("decision = %+v, want runtime-healthy backend b", decision)
 	}
 }
 

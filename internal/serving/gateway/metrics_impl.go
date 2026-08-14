@@ -4,8 +4,10 @@ import (
 	"net/http"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/frozenf1sh/fishmesh/internal/serving/admission"
 	"github.com/frozenf1sh/fishmesh/internal/serving/backend"
 	"github.com/frozenf1sh/fishmesh/internal/serving/discovery"
 	"github.com/frozenf1sh/fishmesh/internal/serving/observation"
@@ -26,24 +28,38 @@ import (
 type Metrics struct {
 	registry                  *prometheus.Registry
 	inflight                  prometheus.Gauge         // 当前正在代理中的请求数（反映瞬时并发）
+	admittedRequests          prometheus.Counter       // 通过 admission 并进入请求路径的请求
 	requests                  *prometheus.CounterVec   // 完成的请求总数，按 method/status 分桶
 	requestSeconds            *prometheus.HistogramVec // 端到端请求耗时，按 method/status 分桶
 	ttftSeconds               prometheus.Histogram     // 首 token 延迟（TTFT），项目的核心测量指标
 	upstreamErrors            prometheus.Counter       // 上游传输层失败次数（区别于业务层 4xx/5xx）
 	streamErrors              prometheus.Counter       // response headers 之后的 upstream stream 读取失败
 	admissionRejections       prometheus.Counter       // Gateway 达到并发硬上限后拒绝的请求
-	circuitOpen               *prometheus.GaugeVec     // endpoint transport circuit 当前是否打开
-	circuitOpens              *prometheus.CounterVec   // endpoint transport circuit 打开次数
-	routingDecisions          *prometheus.CounterVec   // 路由模式和有限 backend ID 维度
-	routingReasons            *prometheus.CounterVec   // 固定枚举 reason，不使用请求 key 作为 label
-	sessionKeySpillovers      *prometheus.CounterVec   // session-key 发生溢出的次数，按触发原因分桶
-	routeFallbacks            prometheus.Counter       // 路由策略失败后的 Service fallback
+	admissionTarget           prometheus.Gauge
+	admissionHardLimit        prometheus.Gauge
+	admissionSuggestedTarget  prometheus.Gauge
+	admissionTuningActions    prometheus.Counter
+	admissionTuningSignal     prometheus.Gauge
+	admissionTuningLastChange prometheus.Gauge
+	admissionTuningMode       *prometheus.GaugeVec
+	admissionTuningReason     *prometheus.GaugeVec
+	circuitOpen               *prometheus.GaugeVec   // endpoint transport circuit 当前是否打开
+	circuitOpens              *prometheus.CounterVec // endpoint transport circuit 打开次数
+	routingDecisions          *prometheus.CounterVec // 路由模式和有限 backend ID 维度
+	routingReasons            *prometheus.CounterVec // 固定枚举 reason，不使用请求 key 作为 label
+	sessionKeySpillovers      *prometheus.CounterVec // session-key 发生溢出的次数，按触发原因分桶
+	routeFallbacks            prometheus.Counter     // 路由策略失败后的 Service fallback
 	observationStatus         *prometheus.GaugeVec
 	observationFreshness      *prometheus.GaugeVec
 	observationQueue          *prometheus.GaugeVec
 	observationRunning        *prometheus.GaugeVec
 	observationIdentity       *prometheus.GaugeVec
 	observationGPU            *prometheus.GaugeVec
+	observationCPU            *prometheus.GaugeVec
+	observationMemory         *prometheus.GaugeVec
+	observationGPUUtilization *prometheus.GaugeVec
+	observationGPUMemory      *prometheus.GaugeVec
+	observationGPUTemperature *prometheus.GaugeVec
 	discoveryStatus           *prometheus.GaugeVec
 	discoveryFreshness        prometheus.Gauge
 	discoveryReady            prometheus.Gauge
@@ -69,6 +85,13 @@ type Metrics struct {
 	observationMu             sync.Mutex
 	observationIDs            map[string]struct{}
 	identityLabels            map[string][2]string
+	admittedTotal             atomic.Uint64
+	completedTotal            atomic.Uint64
+	rejectedTotal             atomic.Uint64
+	inflightTotal             atomic.Int64
+	admissionTuningMu         sync.Mutex
+	lastTuningMode            string
+	lastTuningReason          string
 }
 
 // NewMetrics 创建 standalone Gateway 自己的隔离 Prometheus registry。
@@ -94,7 +117,7 @@ func NewMetrics() *Metrics {
 	return m
 }
 
-// initializeRequestMetrics 初始化请求数量、请求耗时、TTFT、上游错误和准入拒绝指标。
+// initializeRequestMetrics 初始化准入、请求数量、请求耗时、TTFT、上游错误和准入拒绝指标。
 //
 // 请求总数和请求耗时使用 method/status 两个有限维度；TTFT 使用固定 bucket，不把
 // model、prompt 或 routing key 引入标签。上游错误和 headers 后 stream 错误分开，
@@ -102,6 +125,9 @@ func NewMetrics() *Metrics {
 func (m *Metrics) initializeRequestMetrics() {
 	m.inflight = prometheus.NewGauge(prometheus.GaugeOpts{
 		Namespace: metricNamespace, Subsystem: metricSubsystem, Name: metricInflightRequests, Help: "Requests currently proxied by the gateway.",
+	})
+	m.admittedRequests = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: metricNamespace, Subsystem: metricSubsystem, Name: metricAdmittedRequestsTotal, Help: "Requests admitted after the gateway capacity check.",
 	})
 	m.requests = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricNamespace, Subsystem: metricSubsystem, Name: metricRequestsTotal, Help: "Completed gateway requests.",
@@ -124,7 +150,15 @@ func (m *Metrics) initializeRequestMetrics() {
 	m.admissionRejections = prometheus.NewCounter(prometheus.CounterOpts{
 		Namespace: metricNamespace, Subsystem: metricSubsystem, Name: metricAdmissionRejectionsTotal, Help: "Requests rejected because the gateway reached its in-flight limit.",
 	})
-	m.registry.MustRegister(m.inflight, m.requests, m.requestSeconds, m.ttftSeconds, m.upstreamErrors, m.streamErrors, m.admissionRejections)
+	m.admissionTarget = prometheus.NewGauge(prometheus.GaugeOpts{Namespace: metricNamespace, Subsystem: metricSubsystem, Name: metricAdmissionTarget, Help: "Current soft admission target; active requests are never revoked."})
+	m.admissionHardLimit = prometheus.NewGauge(prometheus.GaugeOpts{Namespace: metricNamespace, Subsystem: metricSubsystem, Name: metricAdmissionHardLimit, Help: "Immutable process admission hard limit."})
+	m.admissionSuggestedTarget = prometheus.NewGauge(prometheus.GaugeOpts{Namespace: metricNamespace, Subsystem: metricSubsystem, Name: metricAdmissionSuggestedTarget, Help: "Latest admission target suggested by the controller."})
+	m.admissionTuningActions = prometheus.NewCounter(prometheus.CounterOpts{Namespace: metricNamespace, Subsystem: metricSubsystem, Name: metricAdmissionTuningActionsTotal, Help: "Admission target changes applied by the active controller."})
+	m.admissionTuningSignal = prometheus.NewGauge(prometheus.GaugeOpts{Namespace: metricNamespace, Subsystem: metricSubsystem, Name: metricAdmissionTuningSignalValid, Help: "Whether the latest admission tuning signal is valid."})
+	m.admissionTuningLastChange = prometheus.NewGauge(prometheus.GaugeOpts{Namespace: metricNamespace, Subsystem: metricSubsystem, Name: metricAdmissionTuningLastChange, Help: "Unix timestamp of the latest admission target change."})
+	m.admissionTuningMode = prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: metricNamespace, Subsystem: metricSubsystem, Name: metricAdmissionTuningMode, Help: "Current admission tuning mode (one active mode has value 1)."}, []string{labelTuningMode})
+	m.admissionTuningReason = prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: metricNamespace, Subsystem: metricSubsystem, Name: metricAdmissionTuningReason, Help: "Latest admission tuning decision reason (one active reason has value 1)."}, []string{labelTuningReason})
+	m.registry.MustRegister(m.inflight, m.admittedRequests, m.requests, m.requestSeconds, m.ttftSeconds, m.upstreamErrors, m.streamErrors, m.admissionRejections, m.admissionTarget, m.admissionHardLimit, m.admissionSuggestedTarget, m.admissionTuningActions, m.admissionTuningSignal, m.admissionTuningLastChange, m.admissionTuningMode, m.admissionTuningReason)
 }
 
 // initializeRoutingMetrics 初始化路由决策、溢出、fallback、circuit 和预测影子指标。
@@ -200,7 +234,22 @@ func (m *Metrics) initializeObservationMetrics() {
 	m.observationGPU = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: metricNamespace, Subsystem: metricSubsystem, Name: metricBackendGPURequested, Help: "Declared GPU resources requested by the backend Pod.",
 	}, []string{labelBackendID})
-	m.registry.MustRegister(m.observationStatus, m.observationFreshness, m.observationQueue, m.observationRunning, m.observationIdentity, m.observationGPU)
+	m.observationCPU = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: metricNamespace, Subsystem: metricSubsystem, Name: metricBackendCPUUsageCores, Help: "Pod CPU usage attributed to the backend.",
+	}, []string{labelBackendID})
+	m.observationMemory = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: metricNamespace, Subsystem: metricSubsystem, Name: metricBackendMemoryUsageBytes, Help: "Pod memory usage attributed to the backend.",
+	}, []string{labelBackendID})
+	m.observationGPUUtilization = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: metricNamespace, Subsystem: metricSubsystem, Name: metricBackendGPUUtilizationPercent, Help: "GPU utilization attributed to the backend Pod.",
+	}, []string{labelBackendID})
+	m.observationGPUMemory = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: metricNamespace, Subsystem: metricSubsystem, Name: metricBackendGPUMemoryUsedBytes, Help: "GPU memory usage attributed to the backend Pod.",
+	}, []string{labelBackendID})
+	m.observationGPUTemperature = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: metricNamespace, Subsystem: metricSubsystem, Name: metricBackendGPUTemperatureCelsius, Help: "GPU temperature attributed to the backend Pod.",
+	}, []string{labelBackendID})
+	m.registry.MustRegister(m.observationStatus, m.observationFreshness, m.observationQueue, m.observationRunning, m.observationIdentity, m.observationGPU, m.observationCPU, m.observationMemory, m.observationGPUUtilization, m.observationGPUMemory, m.observationGPUTemperature)
 }
 
 // initializeDiscoveryMetrics 初始化 EndpointSlice membership 的状态、freshness 和 Ready 数量。
@@ -302,9 +351,54 @@ func (m *Metrics) updateBackendObservations(states map[backend.ID]observation.Ba
 		}
 		m.observationIdentity.WithLabelValues(backendID, labels[0], labels[1]).Set(1)
 		m.observationGPU.WithLabelValues(backendID).Set(state.Identity.GPURequested)
+		setRuntimeGauge(m.observationCPU, backendID, state.Runtime.CPUUsageCores)
+		setRuntimeGauge(m.observationMemory, backendID, state.Runtime.MemoryUsageBytes)
+		setRuntimeGauge(m.observationGPUUtilization, backendID, state.Runtime.GPUUtilizationPercent)
+		setRuntimeGauge(m.observationGPUMemory, backendID, state.Runtime.GPUMemoryUsedBytes)
+		setRuntimeGauge(m.observationGPUTemperature, backendID, state.Runtime.GPUTemperatureCelsius)
 		m.identityLabels[backendID] = labels
 		m.observationIDs[backendID] = struct{}{}
 	}
+}
+
+// AdmissionSignal supplies monotonic process facts to the admission tuner.
+func (m *Metrics) AdmissionSignal() admission.Signal {
+	return admission.Signal{
+		ObservedAt: time.Now(), Inflight: int(m.inflightTotal.Load()), AcceptedTotal: m.admittedTotal.Load(),
+		CompletedTotal: m.completedTotal.Load(), RejectedTotal: m.rejectedTotal.Load(),
+	}
+}
+
+// ObserveAdmissionTuning projects controller state to low-cardinality gauges.
+func (m *Metrics) ObserveAdmissionTuning(decision admission.Decision) {
+	m.admissionTarget.Set(float64(decision.AppliedTarget))
+	m.admissionHardLimit.Set(float64(decision.HardLimit))
+	m.admissionSuggestedTarget.Set(float64(decision.SuggestedTarget))
+	if decision.Valid {
+		m.admissionTuningSignal.Set(1)
+	} else {
+		m.admissionTuningSignal.Set(0)
+	}
+	if decision.Changed {
+		m.admissionTuningActions.Inc()
+		m.admissionTuningLastChange.Set(float64(decision.ObservedAt.UnixNano()) / float64(time.Second))
+	}
+	m.admissionTuningMu.Lock()
+	defer m.admissionTuningMu.Unlock()
+	if m.lastTuningMode != string(decision.Mode) {
+		if m.lastTuningMode != "" {
+			m.admissionTuningMode.DeleteLabelValues(m.lastTuningMode)
+		}
+		m.lastTuningMode = string(decision.Mode)
+	}
+	m.admissionTuningMode.WithLabelValues(m.lastTuningMode).Set(1)
+	if m.lastTuningReason != decision.Reason {
+		if m.lastTuningReason != "" {
+			m.admissionTuningReason.DeleteLabelValues(m.lastTuningReason)
+		}
+		m.lastTuningReason = decision.Reason
+	}
+	m.admissionTuningReason.WithLabelValues(m.lastTuningReason).Set(1)
 }
 
 // deleteObservation 删除某个 backend 的所有 observation 和 identity label。
@@ -320,11 +414,24 @@ func (m *Metrics) deleteObservation(id string) {
 	m.observationQueue.DeleteLabelValues(id)
 	m.observationRunning.DeleteLabelValues(id)
 	m.observationGPU.DeleteLabelValues(id)
+	m.observationCPU.DeleteLabelValues(id)
+	m.observationMemory.DeleteLabelValues(id)
+	m.observationGPUUtilization.DeleteLabelValues(id)
+	m.observationGPUMemory.DeleteLabelValues(id)
+	m.observationGPUTemperature.DeleteLabelValues(id)
 	if labels, ok := m.identityLabels[id]; ok {
 		m.observationIdentity.DeleteLabelValues(id, labels[0], labels[1])
 		delete(m.identityLabels, id)
 	}
 	delete(m.observationIDs, id)
+}
+
+func setRuntimeGauge(gauge *prometheus.GaugeVec, backendID string, sample observation.Sample[float64]) {
+	if sample.Valid {
+		gauge.WithLabelValues(backendID).Set(sample.Value)
+		return
+	}
+	gauge.DeleteLabelValues(backendID)
 }
 
 // updateKVCache 将 requestpath 的不可变 KV 状态投影到 Prometheus，并回收已移除 backend。
@@ -589,6 +696,14 @@ func (m *Metrics) observeRequest(method string, status int, duration time.Durati
 	statusLabel := strconv.Itoa(status)
 	m.requests.WithLabelValues(method, statusLabel).Inc()
 	m.requestSeconds.WithLabelValues(method, statusLabel).Observe(duration.Seconds())
+	m.completedTotal.Add(1)
+}
+
+// observeAdmissionAccepted 记录通过非阻塞 admission 的请求。
+// 它与 requests_total 分开：前者是 Little’s Law 的 accepted arrival 计数，后者是已结束请求计数。
+func (m *Metrics) observeAdmissionAccepted() {
+	m.admittedRequests.Inc()
+	m.admittedTotal.Add(1)
 }
 
 // handler 返回已经绑定到本地 registry 的 Prometheus HTTP handler。

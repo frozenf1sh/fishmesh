@@ -100,6 +100,7 @@ func (p *kubernetesEnricher) Enrich(ctx context.Context, backends []backend.Back
 			continue
 		}
 		identity.NodeName = item.Spec.NodeName
+		identity.PodUID = item.Metadata.UID
 		identity.GPURequested = gpuRequested(item.Spec.Containers)
 		identity.Ready = item.Ready()
 		identity.Status = StatusOK
@@ -158,6 +159,7 @@ type podList struct {
 type pod struct {
 	Metadata struct {
 		Name string `json:"name"`
+		UID  string `json:"uid"`
 	} `json:"metadata"`
 	Spec struct {
 		NodeName   string      `json:"nodeName"`

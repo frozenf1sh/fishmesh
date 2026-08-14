@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"math"
 	"math/rand"
 	"os"
 	"slices"
@@ -53,20 +54,21 @@ type BenchmarkProvenance struct {
 // BenchmarkPlan describes one deterministic final pressure-test run.
 // Prompt text is generated locally from this plan and is never written to the report.
 type BenchmarkPlan struct {
-	RunID                string              `json:"run_id,omitempty"`
-	MaxTokens            int                 `json:"max_tokens"`
-	IgnoreEOS            bool                `json:"ignore_eos,omitempty"`
-	RequestTimeoutMS     int                 `json:"request_timeout_ms"`
-	AllowHighConcurrency bool                `json:"allow_high_concurrency"`
-	Formal               bool                `json:"formal,omitempty"`
-	Treatment            string              `json:"treatment,omitempty"`
-	WorkloadSeed         int64               `json:"workload_seed,omitempty"`
-	ExecutionOrder       []string            `json:"execution_order,omitempty"`
-	CacheMode            CacheMode           `json:"cache_mode,omitempty"`
-	RunNonce             string              `json:"run_nonce,omitempty"`
-	CacheGeneration      string              `json:"cache_generation,omitempty"`
-	Provenance           BenchmarkProvenance `json:"provenance,omitempty"`
-	Scenarios            []BenchmarkScenario `json:"scenarios"`
+	RunID                   string              `json:"run_id,omitempty"`
+	MaxTokens               int                 `json:"max_tokens"`
+	IgnoreEOS               bool                `json:"ignore_eos,omitempty"`
+	RequestTimeoutMS        int                 `json:"request_timeout_ms"`
+	AllowHighConcurrency    bool                `json:"allow_high_concurrency"`
+	Formal                  bool                `json:"formal,omitempty"`
+	SkipPromptTokenEvidence bool                `json:"skip_prompt_token_evidence,omitempty"`
+	Treatment               string              `json:"treatment,omitempty"`
+	WorkloadSeed            int64               `json:"workload_seed,omitempty"`
+	ExecutionOrder          []string            `json:"execution_order,omitempty"`
+	CacheMode               CacheMode           `json:"cache_mode,omitempty"`
+	RunNonce                string              `json:"run_nonce,omitempty"`
+	CacheGeneration         string              `json:"cache_generation,omitempty"`
+	Provenance              BenchmarkProvenance `json:"provenance,omitempty"`
+	Scenarios               []BenchmarkScenario `json:"scenarios"`
 }
 
 // BenchmarkScenario is one point in the length/prefix/quantity matrix.
@@ -79,6 +81,7 @@ type BenchmarkScenario struct {
 	Batches              int           `json:"batches"`
 	BatchSize            int           `json:"batch_size"`
 	Concurrency          int           `json:"concurrency"`
+	ArrivalRateQPS       float64       `json:"arrival_rate_qps,omitempty"`
 	MixedHotRatio        int           `json:"mixed_hot_ratio,omitempty"`
 	MixedUniqueRatio     int           `json:"mixed_unique_ratio,omitempty"`
 	BatchPauseMS         int           `json:"batch_pause_ms,omitempty"`
@@ -104,6 +107,8 @@ type BenchmarkAttempt struct {
 	CacheMode            CacheMode       `json:"cache_mode,omitempty"`
 	CacheScope           string          `json:"cache_scope,omitempty"`
 	CacheGeneration      string          `json:"cache_generation,omitempty"`
+	StartedAt            time.Time       `json:"started_at"`
+	CompletedAt          time.Time       `json:"completed_at"`
 	StatusCode           int             `json:"status_code"`
 	Headers              DecisionHeaders `json:"headers"`
 	TTFTMS               float64         `json:"ttft_ms,omitempty"`
@@ -114,19 +119,24 @@ type BenchmarkAttempt struct {
 
 // BenchmarkBatchReport summarizes one sequential batch.
 type BenchmarkBatchReport struct {
-	Batch               int            `json:"batch"`
-	Requested           int            `json:"requested"`
-	Completed           int            `json:"completed"`
-	Succeeded           int            `json:"succeeded"`
-	Failed              int            `json:"failed"`
-	TTFTP50MS           float64        `json:"ttft_p50_ms"`
-	TTFTP95MS           float64        `json:"ttft_p95_ms"`
-	DurationP50MS       float64        `json:"duration_p50_ms"`
-	DurationP95MS       float64        `json:"duration_p95_ms"`
-	KVStatuses          map[string]int `json:"kv_statuses"`
-	RouteReasons        map[string]int `json:"route_reasons"`
-	CachedPrefixSamples int            `json:"cached_prefix_samples"`
-	CachedPrefixSum     int            `json:"cached_prefix_sum"`
+	Batch               int                   `json:"batch"`
+	WindowStartedAt     time.Time             `json:"window_started_at,omitempty"`
+	WindowCompletedAt   time.Time             `json:"window_completed_at,omitempty"`
+	ElapsedMS           float64               `json:"elapsed_ms,omitempty"`
+	CompletionRateQPS   float64               `json:"completion_rate_qps,omitempty"`
+	Requested           int                   `json:"requested"`
+	Completed           int                   `json:"completed"`
+	Succeeded           int                   `json:"succeeded"`
+	Failed              int                   `json:"failed"`
+	TTFTP50MS           float64               `json:"ttft_p50_ms"`
+	TTFTP95MS           float64               `json:"ttft_p95_ms"`
+	DurationP50MS       float64               `json:"duration_p50_ms"`
+	DurationP95MS       float64               `json:"duration_p95_ms"`
+	KVStatuses          map[string]int        `json:"kv_statuses"`
+	RouteReasons        map[string]int        `json:"route_reasons"`
+	CachedPrefixSamples int                   `json:"cached_prefix_samples"`
+	CachedPrefixSum     int                   `json:"cached_prefix_sum"`
+	GatewayMetrics      *GatewayMetricsWindow `json:"gateway_metrics,omitempty"`
 }
 
 // BenchmarkScenarioReport summarizes one length/prefix/quantity point and its batches.
@@ -135,6 +145,11 @@ type BenchmarkScenarioReport struct {
 	Pattern               PrefixPattern          `json:"prefix_pattern"`
 	PrefixBytes           int                    `json:"prefix_bytes"`
 	PrefixGroups          int                    `json:"prefix_groups"`
+	ArrivalRateQPS        float64                `json:"arrival_rate_qps,omitempty"`
+	WindowStartedAt       time.Time              `json:"window_started_at,omitempty"`
+	WindowCompletedAt     time.Time              `json:"window_completed_at,omitempty"`
+	ElapsedMS             float64                `json:"elapsed_ms,omitempty"`
+	CompletionRateQPS     float64                `json:"completion_rate_qps,omitempty"`
 	TargetPromptTokens    int                    `json:"target_prompt_tokens,omitempty"`
 	PromptTokenTolerance  int                    `json:"prompt_token_tolerance,omitempty"`
 	ActualPromptTokenMin  int                    `json:"actual_prompt_token_min,omitempty"`
@@ -157,6 +172,7 @@ type BenchmarkScenarioReport struct {
 	CachedPrefixSamples   int                    `json:"cached_prefix_samples"`
 	CachedPrefixSum       int                    `json:"cached_prefix_sum"`
 	Batches               []BenchmarkBatchReport `json:"batches"`
+	GatewayMetrics        *GatewayMetricsWindow  `json:"gateway_metrics,omitempty"`
 }
 
 // BenchmarkReport is the machine-readable report generated after every plan run.
@@ -165,6 +181,8 @@ type BenchmarkReport struct {
 	RunID                 string                    `json:"run_id"`
 	StartedAt             time.Time                 `json:"started_at"`
 	CompletedAt           time.Time                 `json:"completed_at"`
+	ElapsedMS             float64                   `json:"elapsed_ms,omitempty"`
+	CompletionRateQPS     float64                   `json:"completion_rate_qps,omitempty"`
 	Plan                  BenchmarkPlan             `json:"plan"`
 	Requested             int                       `json:"requested"`
 	Completed             int                       `json:"completed"`
@@ -176,6 +194,7 @@ type BenchmarkReport struct {
 	DurationP95MS         float64                   `json:"duration_p95_ms"`
 	PromptTokenMissing    int                       `json:"prompt_token_missing,omitempty"`
 	PromptTokenViolations int                       `json:"prompt_token_violations,omitempty"`
+	GatewayMetrics        *GatewayMetricsWindow     `json:"gateway_metrics,omitempty"`
 	Scenarios             []BenchmarkScenarioReport `json:"scenarios"`
 }
 
@@ -267,6 +286,9 @@ func (p BenchmarkPlan) Validate() error {
 		return fmt.Errorf("unsupported cache mode %q", p.CacheMode)
 	}
 	if p.Formal {
+		if p.SkipPromptTokenEvidence {
+			return fmt.Errorf("formal benchmark must not skip prompt token evidence")
+		}
 		if p.CacheMode == "" {
 			return fmt.Errorf("formal benchmark requires an explicit cache mode")
 		}
@@ -329,8 +351,8 @@ func (s BenchmarkScenario) validate(allowHighConcurrency bool, cacheMode CacheMo
 	if s.Pattern == PrefixMixed && (s.MixedHotRatio < 0 || s.MixedUniqueRatio < 0 || s.MixedHotRatio+s.MixedUniqueRatio > 100) {
 		return fmt.Errorf("mixed prefix ratios must be non-negative and sum to at most 100")
 	}
-	if s.BatchPauseMS < 0 {
-		return fmt.Errorf("batch pause must not be negative")
+	if s.BatchPauseMS < 0 || math.IsNaN(s.ArrivalRateQPS) || math.IsInf(s.ArrivalRateQPS, 0) || s.ArrivalRateQPS < 0 {
+		return fmt.Errorf("batch pause and arrival rate must not be negative or non-finite")
 	}
 	if s.WarmupRequests < 0 || s.WarmupRequests > maximumWarmupRequests {
 		return fmt.Errorf("warmup requests must be between 0 and %d", maximumWarmupRequests)
@@ -352,9 +374,20 @@ func (s BenchmarkScenario) validate(allowHighConcurrency bool, cacheMode CacheMo
 func (r BenchmarkReport) Markdown() string {
 	var output strings.Builder
 	fmt.Fprintf(&output, "# FishMesh benchmark report\n\n- Run: `%s`\n- Cache mode/generation: `%s` / `%s`\n- Workload seed: `%d`\n- Requests: %d (success %d, failed %d)\n- TTFT P50/P95: %.2f / %.2f ms\n- Duration P50/P95: %.2f / %.2f ms\n- Prompt-token missing/violations: %d / %d\n\n", r.RunID, r.Plan.CacheMode, r.Plan.CacheGeneration, r.Plan.WorkloadSeed, r.Requested, r.Succeeded, r.Failed, r.TTFTP50MS, r.TTFTP95MS, r.DurationP50MS, r.DurationP95MS, r.PromptTokenMissing, r.PromptTokenViolations)
-	output.WriteString("| Scenario | Pattern | Target tokens | Actual P50/P95 | Prefix bytes | Requests | Success | TTFT P50 | TTFT P95 | Cached samples | Cached tokens |\n|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
+	if r.GatewayMetrics != nil {
+		if r.GatewayMetrics.Valid {
+			fmt.Fprintf(&output, "- Gateway metrics: admitted %.3f QPS, completed %.3f QPS, admission rejects %.3f QPS, average in-flight %.3f, Little's Law W %.2f ms, warmup requests planned/excluded %d\n", r.GatewayMetrics.AcceptedRateQPS, r.GatewayMetrics.CompletedRateQPS, r.GatewayMetrics.RejectionRateQPS, r.GatewayMetrics.AverageInflight, r.GatewayMetrics.LittleLawWaitMS, r.GatewayMetrics.WarmupRequests)
+		} else {
+			fmt.Fprintf(&output, "- Gateway metrics: unavailable (%s)\n", r.GatewayMetrics.Error)
+		}
+	}
+	output.WriteString("\n")
+	output.WriteString("| Scenario | Pattern | Arrival QPS | Target tokens | Actual P50/P95 | Prefix bytes | Requests | Success | TTFT P50 | TTFT P95 | Cached samples | Cached tokens |\n|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
 	for _, scenario := range r.Scenarios {
-		fmt.Fprintf(&output, "| %s | %s | %d | %d/%d | %d | %d | %d | %.2f | %.2f | %d | %d |\n", scenario.Name, scenario.Pattern, scenario.TargetPromptTokens, scenario.ActualPromptTokenP50, scenario.ActualPromptTokenP95, scenario.PrefixBytes, scenario.Requested, scenario.Succeeded, scenario.TTFTP50MS, scenario.TTFTP95MS, scenario.CachedPrefixSamples, scenario.CachedPrefixSum)
+		fmt.Fprintf(&output, "| %s | %s | %.3f | %d | %d/%d | %d | %d | %d | %.2f | %.2f | %d | %d |\n", scenario.Name, scenario.Pattern, scenario.ArrivalRateQPS, scenario.TargetPromptTokens, scenario.ActualPromptTokenP50, scenario.ActualPromptTokenP95, scenario.PrefixBytes, scenario.Requested, scenario.Succeeded, scenario.TTFTP50MS, scenario.TTFTP95MS, scenario.CachedPrefixSamples, scenario.CachedPrefixSum)
+		if scenario.GatewayMetrics != nil && scenario.GatewayMetrics.Valid {
+			fmt.Fprintf(&output, "  - Gateway %s: accepted %.3f QPS, completed %.3f QPS, rejected %.3f QPS, average in-flight %.3f, Little's Law W %.2f ms\n", scenario.Name, scenario.GatewayMetrics.AcceptedRateQPS, scenario.GatewayMetrics.CompletedRateQPS, scenario.GatewayMetrics.RejectionRateQPS, scenario.GatewayMetrics.AverageInflight, scenario.GatewayMetrics.LittleLawWaitMS)
+		}
 	}
 	output.WriteString("\nUnavailable KV status is reported separately from an available zero-token cache miss. Prompt text and API credentials are not included.\n")
 	return output.String()

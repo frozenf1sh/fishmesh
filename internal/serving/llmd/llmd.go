@@ -1,4 +1,4 @@
-// Package llmd 负责把 llm-d 调度扩展点翻译为 FishMesh routing 输入，并提供 session-key 插件。
+// Package llmd 负责把 llm-d 调度扩展点翻译为 FishMesh routing 输入，并保留冻结的 session-key 兼容插件。
 package llmd
 
 import (

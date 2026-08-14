@@ -1,6 +1,7 @@
 # FishMesh R6I：可校准 TTFT 路由与可信实验多阶段开发方案
 
-> 状态：R6I-0–R6I-6 已完成；static 通过低负载精度校验，但未通过并发 promotion gate，当前保持
+> 状态：R6I-0–R6I-7 已完成；static 通过低负载精度校验但未通过并发 promotion gate，learned-shadow
+> 在第二个独立 run 的 would-select 一致率未达门槛，当前保持
 > `token-cost`。设计决策见
 > [`ADR-003`](decisions/003-calibrated-ttft-routing.md)。本计划优先交付安全、可解释的 Lite 调度器，
 > 再用隔离实验校准和证明，不把在线学习或大规模组件提前放进主请求路径。
@@ -37,6 +38,11 @@ GPU 不稳定不会阻止纯代码阶段，但禁止用 simulator 伪造真实�
 截至 2026-08-16，R6I-6 已完成：低负载 static estimator MAE 为 2.34–5.44 ms；2048-token 并发阶梯
 MAE 上升到 27.57 ms，整体 TTFT P95 相对 token-cost 为 +3.13%，置信区间跨 0。static 不进入默认/active，
 完整证据见 [`2026-08-16-r6i6-token-ladder.md`](../experiments/2026-08-16-r6i6-token-ladder.md)。
+
+R6I-7 已完成两轮真实 learned-shadow：在 static 有效的 512/1024/2048 档，learned MAE 约低 10.4%，
+但 would-select 一致率由 71.1% 降到 62.7%，未满足两轮均至少 70% 的稳定性门槛；3072 档实际 3078 token
+超出 static profile 上界，按设计回退 token-cost，不纳入公平精度比较。完整证据见
+[`2026-08-16-r6i7-learned-shadow.md`](../experiments/2026-08-16-r6i7-learned-shadow.md)。
 
 ## 3. R6I-0：决策与契约
 

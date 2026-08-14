@@ -67,9 +67,9 @@ The deployed baseline already provides:
 - OpenAI-compatible HTTP/SSE proxying, cancellation propagation, stream outcome classification and TTFT metrics;
 - EndpointSlice watch/list, Ready filtering, periodic relist, freshness and explicit Service fallback;
 - per-backend vLLM queue/running observations with per-field validity and age;
-- three routing modes: `load-balanced` for ordinary in-flight balancing, `session-key` for a client-supplied
-  session key with bounded stickiness, and `kv-aware` for real KV locality plus known load (their policy
-  identifiers are `load-balanced-v1`, `session-key-v1`, and `kv-aware-v1`);
+- `load-balanced` for ordinary load-aware balancing and `kv-aware` for real KV locality plus known load;
+  `session-key` remains only as a frozen compatibility mode (policy identifiers are
+  `load-balanced-v1`, `session-key-v1`, and `kv-aware-v1`);
 - non-blocking admission, per-backend connection bounds, transport-error EWMA circuits and state garbage collection;
 - Prometheus routing/discovery/backend metrics and `X-FishMesh-*` request provenance;
 - strict configuration, probes, graceful shutdown, least-privilege RBAC and race-tested request lifecycle;
@@ -103,8 +103,8 @@ operable path from real engine state to a lightweight streaming data plane, plus
 
 This demo assumes the Lite prerequisites in [`deploy/lite-kv-aware/README.md`](deploy/lite-kv-aware/README.md): a K3s
 cluster, the model PV and an importable Gateway image. It first proves the ordinary `load-balanced` default, then
-temporarily enables the explicit KV-aware overlay. The optional `session-key` mode is shown by the session-key
-experiment overlay. Standard mode / llm-d integration is intentionally deferred.
+temporarily enables the explicit KV-aware overlay. The historical `session-key` experiment overlay remains only
+for compatibility checks. Standard mode / llm-d integration is intentionally deferred.
 
 Verify the repository and the load-balanced baseline:
 
@@ -292,6 +292,14 @@ but its 2048-token concurrency ladder did not pass the promotion gate: TTFT P95 
 token-cost (+3.13%, bootstrap 95% CI crossing zero). FishMesh therefore keeps token-cost as the active/default
 estimator and retains static TTFT as an explicit research overlay. See the
 [R6I-6 calibration report](docs/experiments/2026-08-16-r6i6-token-ladder.md).
+
+R6I-7 then validated the learned-shadow predictor on two independent 160-request runs. After excluding the
+3072-target requests whose actual 3078 tokens were correctly outside the static profile envelope, learned MAE was
+about 10.4% lower than static in both runs and its absolute-error P95 was not higher; however, would-select
+agreement fell from 71.1% to 62.7%, below the required 70% stability gate. The predictor remains shadow-only,
+and the cluster was restored to `token-cost` with prediction disabled. See the
+[R6I-7 learned-shadow report](docs/experiments/2026-08-16-r6i7-learned-shadow.md) and the raw
+[R6I-7 benchmark artifacts](artifacts/bench/).
 
 ## Delivery priorities
 

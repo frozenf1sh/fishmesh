@@ -119,7 +119,7 @@ cmd/fishmesh-epp/            # integrated 组合根（R5C 已完成）
 | `discovery` | membership snapshot、resource version、freshness | `Resolver.Snapshot/Status/Close` | 负载、路由、fallback |
 | `identity` | Pod/Node/声明资源映射结果 | `Provider.Resolve` | 实时 GPU score、调度 |
 | `observation` | `Sample[T]`、backend signals、采集 freshness | `Reader.Snapshot/Close`、collector contract | endpoint eligibility、综合评分 |
-| `routing` | mode、reason、session-key registry | `Strategy.Select`、有状态策略 reconcile | Kubernetes、HTTP、circuit、fallback |
+| `routing` | mode、reason、冻结的 session-key registry | `Strategy.Select`、兼容策略 reconcile | Kubernetes、HTTP、circuit、fallback |
 | `circuit` | outcome EWMA、open-until、sample count | `Record/State/Reconcile` | HTTP 状态解释、选择策略 |
 | `admission` | 进程内 permit 数量 | `TryAcquire`，返回幂等 permit | 排队、tenant rate limit |
 | `transport` | 每 backend HTTP client/connection pool | `Client/Remove/Close` | backend 选择、retry 策略 |

@@ -25,6 +25,16 @@ type benchmarkJob struct {
 
 // RunPlan executes sequential batches and writes metadata, every attempt, and the final report as JSONL.
 func (c *Client) RunPlan(ctx context.Context, plan BenchmarkPlan, output io.Writer) (BenchmarkReport, error) {
+	return c.runPlan(ctx, plan, output, nil, 0)
+}
+
+// RunPlanWithMetrics executes a benchmark and optionally samples Gateway metrics during the run.
+// Metrics collection is evidence-only: a reader failure is recorded in the report and does not abort the workload.
+func (c *Client) RunPlanWithMetrics(ctx context.Context, plan BenchmarkPlan, output io.Writer, reader GatewayMetricsReader, interval time.Duration) (BenchmarkReport, error) {
+	return c.runPlan(ctx, plan, output, reader, interval)
+}
+
+func (c *Client) runPlan(ctx context.Context, plan BenchmarkPlan, output io.Writer, reader GatewayMetricsReader, metricsInterval time.Duration) (BenchmarkReport, error) {
 	var err error
 	plan, err = PrepareBenchmarkPlan(plan)
 	if err != nil {
@@ -43,49 +53,84 @@ func (c *Client) RunPlan(ctx context.Context, plan BenchmarkPlan, output io.Writ
 	if err := writeJSONL(writer, benchmarkMetadata{RecordType: "metadata", RunID: plan.RunID, Plan: plan}); err != nil {
 		return report, err
 	}
-
+	var metricsRun *gatewayMetricsRun
+	metricsWindows := make([]GatewayMetricsWindow, 0, len(plan.Scenarios))
+	metricsByScenarioBatch := make(map[string]map[int]GatewayMetricsWindow)
 	attempts := make([]BenchmarkAttempt, 0, plannedRequests(plan))
+	activeScenario, activeBatch := "", -1
+	stopMetrics := func() {
+		if metricsRun == nil {
+			return
+		}
+		window := metricsRun.stop(ctx)
+		metricsWindows = append(metricsWindows, window)
+		if activeScenario != "" {
+			if metricsByScenarioBatch[activeScenario] == nil {
+				metricsByScenarioBatch[activeScenario] = make(map[int]GatewayMetricsWindow)
+			}
+			metricsByScenarioBatch[activeScenario][activeBatch] = window
+		}
+		metricsRun = nil
+	}
+	finish := func(runErr error) (BenchmarkReport, error) {
+		stopMetrics()
+		if reader != nil {
+			window := combineGatewayMetricsWindows(metricsWindows)
+			window.WarmupRequests = benchmarkWarmupRequests(plan)
+			window.WarmupExcluded = true
+			report.GatewayMetrics = &window
+		}
+		return finishBenchmarkReport(writer, report, attempts, metricsByScenarioBatch, runErr)
+	}
 	for _, scenarioName := range plan.ExecutionOrder {
 		scenario := benchmarkScenarioByName(plan.Scenarios, scenarioName)
 		warmupBackends := make(map[string]string)
 		for warmup := 0; warmup < scenario.WarmupRequests; warmup++ {
 			attempt := c.runBenchmarkRequest(ctx, plan, scenario, -1, warmup, "warmup")
 			if err := writeJSONL(writer, attempt); err != nil {
-				return report, err
+				return finish(err)
 			}
 			if attempt.Error != "" {
-				return finishBenchmarkReport(writer, report, attempts, fmt.Errorf("scenario %q warmup %d failed: %s", scenario.Name, warmup, attempt.Error))
+				return finish(fmt.Errorf("scenario %q warmup %d failed: %s", scenario.Name, warmup, attempt.Error))
 			}
 			if plan.CacheMode == CacheControlledWarm {
 				if attempt.Headers.BackendID == "" {
-					return finishBenchmarkReport(writer, report, attempts, fmt.Errorf("scenario %q warmup %d lacks backend provenance", scenario.Name, warmup))
+					return finish(fmt.Errorf("scenario %q warmup %d lacks backend provenance", scenario.Name, warmup))
 				}
 				if previous := warmupBackends[attempt.PrefixGroup]; previous != "" && previous != attempt.Headers.BackendID {
-					return finishBenchmarkReport(writer, report, attempts, fmt.Errorf("scenario %q prefix group %q warmed on multiple backends", scenario.Name, attempt.PrefixGroup))
+					return finish(fmt.Errorf("scenario %q prefix group %q warmed on multiple backends", scenario.Name, attempt.PrefixGroup))
 				}
 				warmupBackends[attempt.PrefixGroup] = attempt.Headers.BackendID
 			}
 		}
 		for batch := 0; batch < scenario.Batches; batch++ {
+			activeScenario, activeBatch = scenario.Name, batch
+			if reader != nil {
+				metricsRun = beginGatewayMetricsRun(ctx, reader, metricsInterval)
+			}
 			batchAttempts := c.runBenchmarkBatch(ctx, plan, scenario, batch)
 			for _, attempt := range batchAttempts {
 				if err := writeJSONL(writer, attempt); err != nil {
-					return report, err
+					return finish(err)
 				}
 				attempts = append(attempts, attempt)
 			}
+			stopMetrics()
 			if batch+1 < scenario.Batches {
 				if err := waitBetweenBatches(ctx, scenario); err != nil {
-					return finishBenchmarkReport(writer, report, attempts, err)
+					return finish(err)
 				}
 			}
 		}
 	}
-	return finishBenchmarkReport(writer, report, attempts, benchmarkTokenEvidenceError(attempts))
+	if plan.SkipPromptTokenEvidence {
+		return finish(nil)
+	}
+	return finish(benchmarkTokenEvidenceError(attempts))
 }
 
 func (c *Client) runBenchmarkBatch(ctx context.Context, plan BenchmarkPlan, scenario BenchmarkScenario, batch int) []BenchmarkAttempt {
-	jobs := make(chan benchmarkJob)
+	jobs := make(chan benchmarkJob, scenario.BatchSize)
 	attempts := make(chan BenchmarkAttempt, scenario.BatchSize)
 	workers := scenario.Concurrency
 	if workers > scenario.BatchSize {
@@ -104,10 +149,28 @@ func (c *Client) runBenchmarkBatch(ctx context.Context, plan BenchmarkPlan, scen
 	}
 
 	go func() {
+		defer close(jobs)
+		var next time.Time
+		var period time.Duration
+		if scenario.ArrivalRateQPS > 0 {
+			next = time.Now()
+			period = time.Duration(float64(time.Second) / scenario.ArrivalRateQPS)
+		}
 		for request := 0; request < scenario.BatchSize; request++ {
+			if scenario.ArrivalRateQPS > 0 && request > 0 {
+				next = next.Add(period)
+				timer := time.NewTimer(time.Until(next))
+				select {
+				case <-ctx.Done():
+					if !timer.Stop() {
+						<-timer.C
+					}
+					return
+				case <-timer.C:
+				}
+			}
 			jobs <- benchmarkJob{Batch: batch, Request: batch*scenario.BatchSize + request}
 		}
-		close(jobs)
 	}()
 	wait.Wait()
 	close(attempts)
@@ -123,13 +186,16 @@ func (c *Client) runBenchmarkBatch(ctx context.Context, plan BenchmarkPlan, scen
 func (c *Client) runBenchmarkRequest(ctx context.Context, plan BenchmarkPlan, scenario BenchmarkScenario, batch, request int, recordType string) BenchmarkAttempt {
 	messages, group := benchmarkMessagesForScenario(scenario, request, scenario.Batches*scenario.BatchSize)
 	cacheSalt, cacheScope := benchmarkCacheSalt(plan, scenario, batch, request, group)
+	startedAt := time.Now().UTC()
 	result, err := c.Send(ctx, Request{Messages: messages, MaxTokens: plan.MaxTokens, CacheSalt: cacheSalt, IgnoreEOS: plan.IgnoreEOS})
+	completedAt := time.Now().UTC()
 	record := BenchmarkAttempt{
 		RecordType: recordType, RunID: plan.RunID, Scenario: scenario.Name, Pattern: scenario.Pattern,
 		Batch: batch, Request: request, PrefixBytes: scenario.PrefixBytes, PromptBytes: promptBytes(messages),
 		TargetPromptTokens: scenario.TargetPromptTokens, PromptTokenTolerance: scenario.PromptTokenTolerance,
 		PrefixGroup: group, CacheMode: plan.CacheMode,
-		CacheScope: cacheScope, CacheGeneration: plan.CacheGeneration, StatusCode: result.StatusCode, Headers: result.Headers,
+		CacheScope: cacheScope, CacheGeneration: plan.CacheGeneration, StartedAt: startedAt, CompletedAt: completedAt,
+		StatusCode: result.StatusCode, Headers: result.Headers,
 		TTFTMS: durationMS(result.TTFT), DurationMS: durationMS(result.Duration), CachedSample: result.HasCachedPrefixSample,
 	}
 	if result.Headers.PromptTokens > 0 && scenario.TargetPromptTokens > 0 {

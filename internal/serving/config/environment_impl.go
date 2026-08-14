@@ -22,22 +22,26 @@ import (
 )
 
 type environmentValues struct {
-	endpointRefresh, endpointMaxAge                   time.Duration
-	observationInterval, observationMaxAge            time.Duration
-	observationRequestTimeout                         time.Duration
-	requestTimeout, shutdownTimeout                   time.Duration
-	maxRequestBody                                    int64
-	sessionKeyTTL, circuitOpenDuration                time.Duration
-	keepAlive                                         bool
-	sessionKeyMaxEntries, maxInflight, maxConnections int
-	circuitMinimumRequests                            int
-	sessionKeyInflightDelta                           int64
-	kvAwareQueueTokenPenalty                          int64
-	kvAwareRunningTokenPenalty                        int64
-	kvAwareInflightTokenPenalty                       int64
-	kvAwareHardQueueDepth                             int64
-	kvAwareHardLocalInflight                          int64
-	sessionKeyQueueDelta, circuitAlpha, circuitError  float64
+	endpointRefresh, endpointMaxAge                                                     time.Duration
+	observationInterval, observationMaxAge                                              time.Duration
+	observationRequestTimeout                                                           time.Duration
+	requestTimeout, shutdownTimeout                                                     time.Duration
+	admissionTuningInterval, admissionTuningCooldown                                    time.Duration
+	maxRequestBody                                                                      int64
+	sessionKeyTTL, circuitOpenDuration                                                  time.Duration
+	keepAlive                                                                           bool
+	sessionKeyMaxEntries, maxInflight, maxConnections                                   int
+	admissionInitialTarget, admissionMinTarget, admissionMaxTarget, admissionTargetStep int
+	circuitMinimumRequests                                                              int
+	sessionKeyInflightDelta                                                             int64
+	kvAwareQueueTokenPenalty                                                            int64
+	kvAwareRunningTokenPenalty                                                          int64
+	kvAwareInflightTokenPenalty                                                         int64
+	kvAwareHardQueueDepth                                                               int64
+	kvAwareHardLocalInflight                                                            int64
+	runtimeCPUHardLimit, runtimeMemoryHardLimit                                         float64
+	runtimeGPUUtilizationLimit, runtimeGPUMemoryHardLimit, runtimeGPUTemperatureLimit   float64
+	sessionKeyQueueDelta, circuitAlpha, circuitError                                    float64
 }
 
 // LoadEnvironment 读取全部 FISHMESH_* 配置并返回按 domain 拆分的结果。
@@ -105,6 +109,24 @@ func loadEnvironmentValues(defaults Config) (environmentValues, error) {
 			return assignInt(envMaxInflightRequests, defaults.Admission.MaxInflight, true, &values.maxInflight)
 		},
 		func() error {
+			return assignInt(envAdmissionInitialTarget, defaults.Admission.InitialTarget, true, &values.admissionInitialTarget)
+		},
+		func() error {
+			return assignInt(envAdmissionMinTarget, defaults.AdmissionTuning.MinTarget, true, &values.admissionMinTarget)
+		},
+		func() error {
+			return assignInt(envAdmissionMaxTarget, defaults.AdmissionTuning.MaxTarget, true, &values.admissionMaxTarget)
+		},
+		func() error {
+			return assignInt(envAdmissionTargetStep, defaults.AdmissionTuning.Step, true, &values.admissionTargetStep)
+		},
+		func() error {
+			return assignDuration(envAdmissionTuningInterval, defaults.AdmissionTuning.Interval, &values.admissionTuningInterval)
+		},
+		func() error {
+			return assignDuration(envAdmissionTuningCooldown, defaults.AdmissionTuning.Cooldown, &values.admissionTuningCooldown)
+		},
+		func() error {
 			return assignInt(envMaxConnsPerHost, defaults.Transport.MaxConnsPerHost, true, &values.maxConnections)
 		},
 		func() error {
@@ -132,6 +154,21 @@ func loadEnvironmentValues(defaults Config) (environmentValues, error) {
 			return assignNonNegativeInt64(envKVAwareHardLocalInflight, defaults.RequestPath.HardLocalInflight, &values.kvAwareHardLocalInflight)
 		},
 		func() error {
+			return assignFloat(envRuntimeCPUHardLimit, defaults.RequestPath.RuntimeCPUHardLimitCores, &values.runtimeCPUHardLimit)
+		},
+		func() error {
+			return assignFloat(envRuntimeMemoryHardLimit, defaults.RequestPath.RuntimeMemoryHardLimitBytes, &values.runtimeMemoryHardLimit)
+		},
+		func() error {
+			return assignFloat(envRuntimeGPUUtilizationLimit, defaults.RequestPath.RuntimeGPUUtilizationHardLimitPct, &values.runtimeGPUUtilizationLimit)
+		},
+		func() error {
+			return assignFloat(envRuntimeGPUMemoryHardLimit, defaults.RequestPath.RuntimeGPUMemoryHardLimitBytes, &values.runtimeGPUMemoryHardLimit)
+		},
+		func() error {
+			return assignFloat(envRuntimeGPUTemperatureLimit, defaults.RequestPath.RuntimeGPUTemperatureHardLimitC, &values.runtimeGPUTemperatureLimit)
+		},
+		func() error {
 			return assignFloat(envCircuitEWMAAlpha, defaults.Circuit.EWMAAlpha, &values.circuitAlpha)
 		},
 		func() error {
@@ -151,6 +188,15 @@ func loadEnvironmentValues(defaults Config) (environmentValues, error) {
 	}
 	if values.observationRequestTimeout <= 0 {
 		return environmentValues{}, fmt.Errorf("%s must be positive", envObservationRequestTimeout)
+	}
+	if values.runtimeCPUHardLimit < 0 || values.runtimeMemoryHardLimit < 0 || values.runtimeGPUUtilizationLimit < 0 || values.runtimeGPUMemoryHardLimit < 0 || values.runtimeGPUTemperatureLimit < 0 {
+		return environmentValues{}, fmt.Errorf("runtime hard limits must not be negative")
+	}
+	if strings.TrimSpace(os.Getenv(envAdmissionInitialTarget)) == "" {
+		values.admissionInitialTarget = values.maxInflight
+	}
+	if strings.TrimSpace(os.Getenv(envAdmissionMaxTarget)) == "" {
+		values.admissionMaxTarget = values.maxInflight
 	}
 	return values, nil
 }
@@ -188,7 +234,19 @@ func (v environmentValues) buildConfig(defaults Config) (Config, error) {
 		Identity:        identity.Config{Namespace: namespace, BaseURL: apiURL, TokenFile: tokenFile, CAFile: caFile},
 		ObservationMode: observation.Mode(valueOrDefault(envObservationMode, string(defaults.ObservationMode))),
 		Observation:     observation.Config{Interval: v.observationInterval, MaxAge: v.observationMaxAge, RequestTimeout: v.observationRequestTimeout, Clock: defaults.Observation.Clock},
-		Prometheus:      defaults.Prometheus,
+		Prometheus: observation.PrometheusConfig{
+			MetricsPath: defaults.Prometheus.MetricsPath,
+			Clock:       defaults.Prometheus.Clock,
+			Runtime: observation.RuntimePrometheusConfig{
+				Endpoint:            valueOrDefault(envRuntimePrometheusURL, defaults.Prometheus.Runtime.Endpoint),
+				Namespace:           namespace,
+				CPUQuery:            valueOrDefault(envRuntimeCPUQuery, defaults.Prometheus.Runtime.CPUQuery),
+				MemoryQuery:         valueOrDefault(envRuntimeMemoryQuery, defaults.Prometheus.Runtime.MemoryQuery),
+				GPUUtilizationQuery: valueOrDefault(envRuntimeGPUUtilizationQuery, defaults.Prometheus.Runtime.GPUUtilizationQuery),
+				GPUMemoryQuery:      valueOrDefault(envRuntimeGPUMemoryQuery, defaults.Prometheus.Runtime.GPUMemoryQuery),
+				GPUTemperatureQuery: valueOrDefault(envRuntimeGPUTemperatureQuery, defaults.Prometheus.Runtime.GPUTemperatureQuery),
+			},
+		},
 		Routing: routing.Config{Mode: routingMode, Service: service, SessionKey: routing.SessionKeyConfig{
 			TTL: v.sessionKeyTTL, MaxEntries: v.sessionKeyMaxEntries, InflightDelta: v.sessionKeyInflightDelta, QueueDepthDelta: v.sessionKeyQueueDelta, Clock: defaults.Routing.SessionKey.Clock,
 		}, KVAware: routing.KVAwareConfig{
@@ -196,11 +254,20 @@ func (v environmentValues) buildConfig(defaults Config) (Config, error) {
 			QueueTokenPenalty: v.kvAwareQueueTokenPenalty, RunningTokenPenalty: v.kvAwareRunningTokenPenalty, InflightTokenPenalty: v.kvAwareInflightTokenPenalty,
 		}},
 		Circuit:   circuit.Config{EWMAAlpha: v.circuitAlpha, ErrorThreshold: v.circuitError, MinimumRequests: v.circuitMinimumRequests, OpenDuration: v.circuitOpenDuration, Clock: defaults.Circuit.Clock},
-		Admission: admission.Config{MaxInflight: v.maxInflight},
+		Admission: admission.Config{MaxInflight: v.maxInflight, InitialTarget: v.admissionInitialTarget},
+		AdmissionTuning: admission.TuningConfig{
+			Mode:      admission.TuningMode(valueOrDefault(envAdmissionTuningMode, string(defaults.AdmissionTuning.Mode))),
+			MinTarget: v.admissionMinTarget, MaxTarget: v.admissionMaxTarget, Step: v.admissionTargetStep,
+			Interval: v.admissionTuningInterval, Cooldown: v.admissionTuningCooldown,
+			LowWatermark: defaults.AdmissionTuning.LowWatermark, HighWatermark: defaults.AdmissionTuning.HighWatermark,
+		},
 		Transport: transport.Config{KeepAlive: v.keepAlive, RequestTimeout: v.requestTimeout, MaxConnsPerHost: v.maxConnections, IdleConnTimeout: defaults.Transport.IdleConnTimeout},
 		RequestPath: requestpath.Config{
 			Service: service, RequireFreshDiscovery: discoveryMode == discovery.ModeEndpointSlice, DiscoveryMaxAge: v.endpointMaxAge,
 			ReconcileInterval: reconcileInterval, HardQueueDepth: v.kvAwareHardQueueDepth, HardLocalInflight: v.kvAwareHardLocalInflight,
+			RuntimeCPUHardLimitCores: v.runtimeCPUHardLimit, RuntimeMemoryHardLimitBytes: v.runtimeMemoryHardLimit,
+			RuntimeGPUUtilizationHardLimitPct: v.runtimeGPUUtilizationLimit, RuntimeGPUMemoryHardLimitBytes: v.runtimeGPUMemoryHardLimit,
+			RuntimeGPUTemperatureHardLimitC: v.runtimeGPUTemperatureLimit,
 		},
 		Tokenization: tokenization.Config{BaseURL: valueOrDefault(envKVAwareRenderURL, defaults.Tokenization.BaseURL), Model: valueOrDefault(envKVAwareModel, defaults.Tokenization.Model), Timeout: defaults.Tokenization.Timeout, MaxRequestBytes: defaults.Tokenization.MaxRequestBytes, MaxResponseBytes: defaults.Tokenization.MaxResponseBytes, MaxTotalTokens: defaults.Tokenization.MaxTotalTokens},
 		KVCache:      defaults.KVCache,
