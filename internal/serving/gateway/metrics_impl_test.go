@@ -84,6 +84,24 @@ func TestMetricsObserveKVEventAndAvailableCachedPrefixWithoutUnknownZero(t *test
 	}
 }
 
+func TestMetricsSeparatesShortContextBypassFromKVDegradation(t *testing.T) {
+	metrics := NewMetrics()
+	metrics.observeSelection(routing.ModeKVAware, requestpath.Lease{
+		Decision: routing.Decision{Backend: backend.Backend{ID: "backend-a"}, Reason: routing.ReasonKVAwareShortContextFallback, Policy: routing.PolicyKVAwareShortContextFallbackV1},
+		State:    requestpath.State{KV: requestpath.KVShortContextBypassed},
+	})
+
+	response := httptest.NewRecorder()
+	metrics.handler().ServeHTTP(response, httptest.NewRequest("GET", "/metrics", nil))
+	output := response.Body.String()
+	if !strings.Contains(output, `fishmesh_gateway_kv_aware_bypasses_total{reason="kv-aware-short-context-fallback"} 1`) {
+		t.Fatalf("short-context bypass metric missing:\n%s", output)
+	}
+	if strings.Contains(output, `fishmesh_gateway_kv_aware_degradations_total{status="short-context-bypassed"}`) {
+		t.Fatalf("short-context bypass was reported as degradation:\n%s", output)
+	}
+}
+
 func TestMetricsProjectPredictionShadowWithoutRequestLabels(t *testing.T) {
 	metrics := NewMetrics()
 	lease := requestpath.Lease{
@@ -162,6 +180,28 @@ func TestMetricsSeparatesAdmittedRequestsFromCapacityRejections(t *testing.T) {
 	for _, want := range []string{
 		`fishmesh_gateway_admitted_requests_total 1`,
 		`fishmesh_gateway_admission_rejections_total 1`,
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("metric %q missing:\n%s", want, output)
+		}
+	}
+}
+
+func TestMetricsExposeAdmissionRejectionClasses(t *testing.T) {
+	metrics := NewMetrics()
+	metrics.admissionRejections.Inc()
+	metrics.admissionSoftRejections.Inc()
+	metrics.softRejectedTotal.Add(1)
+	metrics.admissionRejections.Inc()
+	metrics.admissionHardRejections.Inc()
+	metrics.hardRejectedTotal.Add(1)
+
+	response := httptest.NewRecorder()
+	metrics.handler().ServeHTTP(response, httptest.NewRequest("GET", "/metrics", nil))
+	output := response.Body.String()
+	for _, want := range []string{
+		`fishmesh_gateway_admission_soft_rejections_total 1`,
+		`fishmesh_gateway_admission_hard_rejections_total 1`,
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("metric %q missing:\n%s", want, output)

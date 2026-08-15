@@ -32,15 +32,30 @@ func New(config Config) (TargetController, error) {
 func (c *controller) TryAcquire() (Permit, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if len(c.permits) >= cap(c.permits) {
+		return nil, capacityError{reason: ErrHardLimit}
+	}
 	if len(c.permits) >= c.target {
-		return nil, ErrCapacity
+		return nil, capacityError{reason: ErrSoftTarget}
 	}
 	select {
 	case c.permits <- struct{}{}:
 		return &permit{controller: c}, nil
 	default:
-		return nil, ErrCapacity
+		return nil, capacityError{reason: ErrHardLimit}
 	}
+}
+
+type capacityError struct {
+	reason error
+}
+
+func (e capacityError) Error() string {
+	return e.reason.Error() + ": " + ErrCapacity.Error()
+}
+
+func (e capacityError) Is(target error) bool {
+	return target == ErrCapacity || target == e.reason
 }
 
 func (c *controller) Inflight() int {

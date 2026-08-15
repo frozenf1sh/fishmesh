@@ -37,6 +37,15 @@ A2-active 不得直接作为首轮实验。先用相同 workload 完成 A2-shado
 B3 只启用已经在目标集群验证过身份和 freshness 的阈值；不把节点级 GPU 指标直接绑定到 Pod，也不把
 不同量纲拼成未经校准的 weighted score。
 
+### Routing 的短上下文旁路
+
+KV-aware 的短上下文优化使用独立实验 overlay：
+`deploy/experiments/r6i22-final/kv-aware-short-bypass`。它默认以 `2048` prompt tokens 作为候选阈值；
+真正发布前应按 512/1024/2048/3072 做 threshold sweep。Gateway 先执行精确 tokenization，再在阈值内跳过
+per-request KV lookup，改用 load-aware 普通选择；这不是 KV failure，响应应记录
+`X-FishMesh-KV-Status: short-context-bypassed`、短上下文 fallback reason/policy 和
+`kv_aware_bypasses_total`。阈值为 0 时关闭，KV unknown/stale 仍按原有显式 degradation 处理。
+
 ## 2. 准入检查与安全边界
 
 先确认 kubeconfig 和 namespace，再确认不在执行别的 rollout 或压测：

@@ -91,7 +91,7 @@ func (s *service) Select(ctx context.Context, request Request) (Lease, error) {
 	}
 
 	// 4. 先由纯策略选择，再为最终 backend 登记可幂等 lease。
-	decision := s.selectDecision(request.RoutingKey, snapshot, state.Discovery)
+	decision := s.selectDecision(request.RoutingKey, snapshot, state.Discovery, kvStatus)
 	if kvStatus == KVAvailable {
 		state.CachedPrefixTokens = kvInput.Matches[decision.Backend.ID].MatchedTokens
 		state.Estimate = selectedEstimateEvidence(snapshot, state.Observations, kvInput, decision.Backend.ID)
@@ -261,6 +261,14 @@ func (s *service) buildKVAwareInput(ctx context.Context, input tokenization.Inpu
 		}
 		return routing.KVAwareInput{}, KVLookupFailed, nil
 	}
+	promptTokens := profileResult.profile.TotalTokens()
+	if s.config.ShortPromptTokens > 0 && promptTokens <= s.config.ShortPromptTokens {
+		// Tokenization still runs because the exact token count is the safe threshold
+		// input. KV reconcile remains concurrent so Pod membership and replay state do
+		// not become stale, but the request skips the per-request KV lookup and uses
+		// the same load-aware fallback as an unavailable KV signal.
+		return routing.KVAwareInput{PromptTokens: promptTokens}, KVShortContextBypassed, nil
+	}
 
 	query := kvcache.Query{Model: profileResult.profile.Model(), CacheSalt: profileResult.profile.CacheSalt(), Backends: backendIDs(candidates)}
 	for _, prompt := range profileResult.profile.Prompts() {
@@ -280,15 +288,20 @@ func (s *service) buildKVAwareInput(ctx context.Context, input tokenization.Inpu
 	return kvInput, KVAvailable, nil
 }
 
-func (s *service) selectDecision(routingKey string, snapshot routing.Snapshot, status discovery.ResolverStatus) routing.Decision {
+func (s *service) selectDecision(routingKey string, snapshot routing.Snapshot, status discovery.ResolverStatus, kvStatus KVStatus) routing.Decision {
 	if !s.directRoutingEligible(status) {
 		return s.fallback(routing.ReasonDiscoveryFallback)
 	}
 	if len(routing.EligibleBackends(snapshot)) == 0 {
 		return s.fallback(routing.ReasonCircuitFallback)
 	}
-	if s.strategy.Name() == routing.ModeKVAware && !snapshot.KVAware.UsableFor(routing.EligibleBackends(snapshot)) {
-		return s.kvAwareLoadFallback(routingKey, snapshot)
+	if s.strategy.Name() == routing.ModeKVAware {
+		if kvStatus == KVShortContextBypassed {
+			return s.kvAwareLoadFallback(routingKey, snapshot, routing.ReasonKVAwareShortContextFallback, routing.PolicyKVAwareShortContextFallbackV1)
+		}
+		if !snapshot.KVAware.UsableFor(routing.EligibleBackends(snapshot)) {
+			return s.kvAwareLoadFallback(routingKey, snapshot, routing.ReasonKVAwareSignalUnavailable, routing.PolicyKVAwareLoadFallbackV1)
+		}
 	}
 	decision, err := s.strategy.Select(routingKey, snapshot)
 	if err != nil || decision.Backend.ID == "" {
@@ -300,15 +313,15 @@ func (s *service) selectDecision(routingKey string, snapshot routing.Snapshot, s
 	return decision
 }
 
-func (s *service) kvAwareLoadFallback(routingKey string, snapshot routing.Snapshot) routing.Decision {
+func (s *service) kvAwareLoadFallback(routingKey string, snapshot routing.Snapshot, reason routing.Reason, policy routing.Policy) routing.Decision {
 	// KV signal 只决定是否能使用 locality；fallback 仍消费同一份 load-aware 普通策略，
 	// 因而 Render/KV index 暂时不可用时不会丢弃仍然新鲜的 vLLM queue/running 事实。
 	decision, err := routing.NewLoadBalanced().Select(routingKey, snapshot)
 	if err != nil || decision.Backend.ID == "" {
 		return s.fallback(routing.ReasonStrategyFallback)
 	}
-	decision.Reason = routing.ReasonKVAwareSignalUnavailable
-	decision.Policy = routing.PolicyKVAwareLoadFallbackV1
+	decision.Reason = reason
+	decision.Policy = policy
 	return decision
 }
 

@@ -17,13 +17,13 @@ patches:
     patch: |-
       - op: replace
         path: /spec/template/spec/containers/0/image
-        value: fishmesh-gateway:r6i22-final-r1
+        value: fishmesh-gateway:r6i24-admission-kv-bypass-r1
       - op: replace
         path: /spec/template/metadata/annotations/fishmesh.io~1gateway-image-revision
-        value: r6i22-final-r1
+        value: r6i24-admission-kv-bypass-r1
       - op: replace
         path: /spec/template/metadata/annotations/fishmesh.io~1image-amd64-digest
-        value: sha256:2baa1a168b1a2951b43ae88b4c3ecf7cd170af730cf9e4d18f6bce24a322316d
+        value: sha256:903c10b37dbc359946bff8dc592d3d6c96841e7f86afd4e35b607fda25c05553
       - op: replace
         path: /spec/template/metadata/annotations/fishmesh.io~1runtime-profile
         value: r6i22-final

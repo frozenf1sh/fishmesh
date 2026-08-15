@@ -24,12 +24,13 @@ const (
 
 	// Policy 常量带版本号：同一策略更换算法或语义时必须升版本，
 	// 让监控指标和历史数据能够区分不同时期的行为。
-	PolicyLoadBalancedV1        Policy = "load-balanced-v1"
-	PolicySessionKeyV1          Policy = "session-key-v1"      // frozen compatibility policy
-	PolicyServiceFallbackV1     Policy = "service-fallback-v1" // 固定 fallback，不是可配置 routing mode
-	PolicyKVAwareV1             Policy = "kv-aware-v1"
-	PolicyKVAwareStaticV1       Policy = "kv-aware-ttft-static-v1"
-	PolicyKVAwareLoadFallbackV1 Policy = "kv-aware-load-fallback-v1"
+	PolicyLoadBalancedV1                Policy = "load-balanced-v1"
+	PolicySessionKeyV1                  Policy = "session-key-v1"      // frozen compatibility policy
+	PolicyServiceFallbackV1             Policy = "service-fallback-v1" // 固定 fallback，不是可配置 routing mode
+	PolicyKVAwareV1                     Policy = "kv-aware-v1"
+	PolicyKVAwareStaticV1               Policy = "kv-aware-ttft-static-v1"
+	PolicyKVAwareLoadFallbackV1         Policy = "kv-aware-load-fallback-v1"
+	PolicyKVAwareShortContextFallbackV1 Policy = "kv-aware-short-context-load-fallback-v1"
 
 	// Reason 是决策的可解释标签，由 requestpath 投影到观测与调试输出。
 
@@ -59,6 +60,7 @@ const (
 	ReasonKVAwareStaticFallback       Reason = "kv-aware-static-fallback"        // static estimate 不完整，回到 token cost
 	ReasonKVAwareSignalUnavailable    Reason = "kv-aware-signal-unavailable"     // KV/负载信号缺失，KV-aware 无法成立
 	ReasonKVAwareHardOverloadFallback Reason = "kv-aware-hard-overload-fallback" // 所有健康后端硬过载，保可用性优先
+	ReasonKVAwareShortContextFallback Reason = "kv-aware-short-context-fallback" // 短 prompt 主动跳过 KV locality，避免 lookup 开销
 )
 
 // Mode 标识一种已配置的端点选择策略。

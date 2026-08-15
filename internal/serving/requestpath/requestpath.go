@@ -43,11 +43,12 @@ type Request struct {
 type KVStatus string
 
 const (
-	KVNotRequested       KVStatus = "not-requested"
-	KVAvailable          KVStatus = "available"
-	KVTokenizationFailed KVStatus = "tokenization-failed"
-	KVLookupFailed       KVStatus = "lookup-failed"
-	KVMatchUnavailable   KVStatus = "match-unavailable"
+	KVNotRequested         KVStatus = "not-requested"
+	KVAvailable            KVStatus = "available"
+	KVTokenizationFailed   KVStatus = "tokenization-failed"
+	KVLookupFailed         KVStatus = "lookup-failed"
+	KVMatchUnavailable     KVStatus = "match-unavailable"
+	KVShortContextBypassed KVStatus = "short-context-bypassed"
 )
 
 // KVCacheState 是 delivery 可以安全观测的逐 backend KV index 快照。
@@ -120,6 +121,7 @@ type Config struct {
 	// candidates. Zero disables the corresponding gate.
 	HardQueueDepth                    int64
 	HardLocalInflight                 int64
+	ShortPromptTokens                 int
 	RuntimeCPUHardLimitCores          float64
 	RuntimeMemoryHardLimitBytes       float64
 	RuntimeGPUUtilizationHardLimitPct float64
@@ -157,6 +159,9 @@ func (c Config) Validate() error {
 	}
 	if c.HardQueueDepth < 0 || c.HardLocalInflight < 0 {
 		return fmt.Errorf("requestpath hard overload thresholds must not be negative")
+	}
+	if c.ShortPromptTokens < 0 {
+		return fmt.Errorf("requestpath short prompt token threshold must not be negative")
 	}
 	if c.RuntimeCPUHardLimitCores < 0 || c.RuntimeMemoryHardLimitBytes < 0 || c.RuntimeGPUUtilizationHardLimitPct < 0 || c.RuntimeGPUMemoryHardLimitBytes < 0 || c.RuntimeGPUTemperatureHardLimitC < 0 {
 		return fmt.Errorf("requestpath runtime hard overload thresholds must not be negative")

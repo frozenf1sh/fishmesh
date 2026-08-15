@@ -73,14 +73,14 @@ func (t *tuner) step(signal Signal, now time.Time) {
 		SuggestedTarget: t.targeter.Target(), AppliedTarget: t.targeter.Target(), HardLimit: t.targeter.MaxInflight(), Inflight: signal.Inflight,
 		Valid: true, Reason: "hold",
 	}
-	if signal.ObservedAt.IsZero() || signal.Inflight < 0 || (now.Sub(signal.ObservedAt) > 2*t.config.Interval) {
+	if signal.ObservedAt.IsZero() || signal.Inflight < 0 || signal.SoftRejectedTotal > signal.RejectedTotal || signal.HardRejectedTotal > signal.RejectedTotal || signal.SoftRejectedTotal+signal.HardRejectedTotal > signal.RejectedTotal || (now.Sub(signal.ObservedAt) > 2*t.config.Interval) {
 		decision.Valid = false
 		decision.Reason = "signal-stale-or-invalid"
 		t.publishLocked(decision)
 		return
 	}
 	if t.hasSample {
-		if signal.ObservedAt.Before(t.previous.ObservedAt) || signal.AcceptedTotal < t.previous.AcceptedTotal || signal.CompletedTotal < t.previous.CompletedTotal || signal.RejectedTotal < t.previous.RejectedTotal {
+		if signal.ObservedAt.Before(t.previous.ObservedAt) || signal.AcceptedTotal < t.previous.AcceptedTotal || signal.CompletedTotal < t.previous.CompletedTotal || signal.RejectedTotal < t.previous.RejectedTotal || signal.SoftRejectedTotal < t.previous.SoftRejectedTotal || signal.HardRejectedTotal < t.previous.HardRejectedTotal {
 			decision.Valid = false
 			decision.Reason = "signal-counter-reset"
 			t.publishLocked(decision)
@@ -89,15 +89,27 @@ func (t *tuner) step(signal Signal, now time.Time) {
 		decision.AcceptedDelta = signal.AcceptedTotal - t.previous.AcceptedTotal
 		decision.CompletedDelta = signal.CompletedTotal - t.previous.CompletedTotal
 		decision.RejectedDelta = signal.RejectedTotal - t.previous.RejectedTotal
+		decision.SoftRejectedDelta = signal.SoftRejectedTotal - t.previous.SoftRejectedTotal
+		decision.HardRejectedDelta = signal.HardRejectedTotal - t.previous.HardRejectedTotal
 	}
 	t.previous, t.hasSample = signal, true
 	current := decision.PreviousTarget
 	ratio := float64(signal.Inflight) / float64(current)
 	suggested := current
 	switch {
-	case decision.RejectedDelta > 0 || ratio >= t.config.HighWatermark:
+	case decision.HardRejectedDelta > 0:
 		suggested = maxInt(t.config.MinTarget, current-t.config.Step)
 		decision.Reason = "overloaded"
+	case decision.SoftRejectedDelta > 0:
+		// Soft rejection is the controller's own target boundary. Treating it as
+		// backend overload would create a positive feedback loop that keeps
+		// lowering the target during long-lived streams.
+		decision.Reason = "soft-target-pressure"
+	case ratio >= t.config.HighWatermark:
+		// A high in-flight ratio without a hard rejection means the process is
+		// busy, not that the backend has crossed the immutable capacity limit.
+		// Hold the target so long-lived requests can drain without a target cliff.
+		decision.Reason = "saturated"
 	case decision.AcceptedDelta > 0 && ratio <= t.config.LowWatermark:
 		suggested = minInt(t.config.MaxTarget, current+t.config.Step)
 		decision.Reason = "underutilized"

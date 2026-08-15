@@ -34,7 +34,9 @@ type Metrics struct {
 	ttftSeconds               prometheus.Histogram     // 首 token 延迟（TTFT），项目的核心测量指标
 	upstreamErrors            prometheus.Counter       // 上游传输层失败次数（区别于业务层 4xx/5xx）
 	streamErrors              prometheus.Counter       // response headers 之后的 upstream stream 读取失败
-	admissionRejections       prometheus.Counter       // Gateway 达到并发硬上限后拒绝的请求
+	admissionRejections       prometheus.Counter       // Gateway 因 soft target 或 hard limit 拒绝的请求总数
+	admissionSoftRejections   prometheus.Counter       // 当前 soft target 拒绝的请求
+	admissionHardRejections   prometheus.Counter       // 不可突破的 hard limit 拒绝的请求
 	admissionTarget           prometheus.Gauge
 	admissionHardLimit        prometheus.Gauge
 	admissionSuggestedTarget  prometheus.Gauge
@@ -72,6 +74,7 @@ type Metrics struct {
 	kvEventPublishToApply     *prometheus.HistogramVec
 	kvAwareRequests           *prometheus.CounterVec
 	kvAwareDegradations       *prometheus.CounterVec
+	kvAwareBypasses           *prometheus.CounterVec
 	kvAwareCachedPrefix       prometheus.Histogram
 	predictionShadows         *prometheus.CounterVec
 	predictionErrors          prometheus.Histogram
@@ -88,6 +91,8 @@ type Metrics struct {
 	admittedTotal             atomic.Uint64
 	completedTotal            atomic.Uint64
 	rejectedTotal             atomic.Uint64
+	softRejectedTotal         atomic.Uint64
+	hardRejectedTotal         atomic.Uint64
 	inflightTotal             atomic.Int64
 	admissionTuningMu         sync.Mutex
 	lastTuningMode            string
@@ -148,8 +153,10 @@ func (m *Metrics) initializeRequestMetrics() {
 		Namespace: metricNamespace, Subsystem: metricSubsystem, Name: metricUpstreamStreamErrorsTotal, Help: "Upstream response-body failures after headers were received.",
 	})
 	m.admissionRejections = prometheus.NewCounter(prometheus.CounterOpts{
-		Namespace: metricNamespace, Subsystem: metricSubsystem, Name: metricAdmissionRejectionsTotal, Help: "Requests rejected because the gateway reached its in-flight limit.",
+		Namespace: metricNamespace, Subsystem: metricSubsystem, Name: metricAdmissionRejectionsTotal, Help: "Requests rejected by the gateway admission boundary.",
 	})
+	m.admissionSoftRejections = prometheus.NewCounter(prometheus.CounterOpts{Namespace: metricNamespace, Subsystem: metricSubsystem, Name: metricAdmissionSoftRejectionsTotal, Help: "Requests rejected because the gateway soft admission target was reached."})
+	m.admissionHardRejections = prometheus.NewCounter(prometheus.CounterOpts{Namespace: metricNamespace, Subsystem: metricSubsystem, Name: metricAdmissionHardRejectionsTotal, Help: "Requests rejected because the immutable gateway admission hard limit was reached."})
 	m.admissionTarget = prometheus.NewGauge(prometheus.GaugeOpts{Namespace: metricNamespace, Subsystem: metricSubsystem, Name: metricAdmissionTarget, Help: "Current soft admission target; active requests are never revoked."})
 	m.admissionHardLimit = prometheus.NewGauge(prometheus.GaugeOpts{Namespace: metricNamespace, Subsystem: metricSubsystem, Name: metricAdmissionHardLimit, Help: "Immutable process admission hard limit."})
 	m.admissionSuggestedTarget = prometheus.NewGauge(prometheus.GaugeOpts{Namespace: metricNamespace, Subsystem: metricSubsystem, Name: metricAdmissionSuggestedTarget, Help: "Latest admission target suggested by the controller."})
@@ -158,7 +165,7 @@ func (m *Metrics) initializeRequestMetrics() {
 	m.admissionTuningLastChange = prometheus.NewGauge(prometheus.GaugeOpts{Namespace: metricNamespace, Subsystem: metricSubsystem, Name: metricAdmissionTuningLastChange, Help: "Unix timestamp of the latest admission target change."})
 	m.admissionTuningMode = prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: metricNamespace, Subsystem: metricSubsystem, Name: metricAdmissionTuningMode, Help: "Current admission tuning mode (one active mode has value 1)."}, []string{labelTuningMode})
 	m.admissionTuningReason = prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: metricNamespace, Subsystem: metricSubsystem, Name: metricAdmissionTuningReason, Help: "Latest admission tuning decision reason (one active reason has value 1)."}, []string{labelTuningReason})
-	m.registry.MustRegister(m.inflight, m.admittedRequests, m.requests, m.requestSeconds, m.ttftSeconds, m.upstreamErrors, m.streamErrors, m.admissionRejections, m.admissionTarget, m.admissionHardLimit, m.admissionSuggestedTarget, m.admissionTuningActions, m.admissionTuningSignal, m.admissionTuningLastChange, m.admissionTuningMode, m.admissionTuningReason)
+	m.registry.MustRegister(m.inflight, m.admittedRequests, m.requests, m.requestSeconds, m.ttftSeconds, m.upstreamErrors, m.streamErrors, m.admissionRejections, m.admissionSoftRejections, m.admissionHardRejections, m.admissionTarget, m.admissionHardLimit, m.admissionSuggestedTarget, m.admissionTuningActions, m.admissionTuningSignal, m.admissionTuningLastChange, m.admissionTuningMode, m.admissionTuningReason)
 }
 
 // initializeRoutingMetrics 初始化路由决策、溢出、fallback、circuit 和预测影子指标。
@@ -304,11 +311,14 @@ func (m *Metrics) initializeKVCacheMetrics() {
 	m.kvAwareDegradations = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricNamespace, Subsystem: metricSubsystem, Name: metricKVAwareDegradationsTotal, Help: "KV routing selections that explicitly degraded to load-balanced routing.",
 	}, []string{labelKVStatus})
+	m.kvAwareBypasses = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: metricNamespace, Subsystem: metricSubsystem, Name: metricKVAwareBypassesTotal, Help: "KV routing requests intentionally bypassed for a bounded reason.",
+	}, []string{labelReason})
 	m.kvAwareCachedPrefix = prometheus.NewHistogram(prometheus.HistogramOpts{
 		Namespace: metricNamespace, Subsystem: metricSubsystem, Name: metricKVAwareCachedPrefixTokens,
 		Help: "Cached prefix tokens on an KV-aware selection with available KV signal; zero is a real cache miss, not unavailable state.", Buckets: kvAwareCachedPrefixTokenBuckets(),
 	})
-	m.registry.MustRegister(m.kvCacheValid, m.kvCacheFreshness, m.kvCacheLastSequence, m.kvCacheAppliedBatches, m.kvCacheReplayBatches, m.kvCacheStatus, m.kvEventPublishToApply, m.kvAwareRequests, m.kvAwareDegradations, m.kvAwareCachedPrefix)
+	m.registry.MustRegister(m.kvCacheValid, m.kvCacheFreshness, m.kvCacheLastSequence, m.kvCacheAppliedBatches, m.kvCacheReplayBatches, m.kvCacheStatus, m.kvEventPublishToApply, m.kvAwareRequests, m.kvAwareDegradations, m.kvAwareBypasses, m.kvAwareCachedPrefix)
 }
 
 // updateBackendObservations 只使用 backend ID 等有界标签，不写入请求 routing key。
@@ -366,6 +376,7 @@ func (m *Metrics) AdmissionSignal() admission.Signal {
 	return admission.Signal{
 		ObservedAt: time.Now(), Inflight: int(m.inflightTotal.Load()), AcceptedTotal: m.admittedTotal.Load(),
 		CompletedTotal: m.completedTotal.Load(), RejectedTotal: m.rejectedTotal.Load(),
+		SoftRejectedTotal: m.softRejectedTotal.Load(), HardRejectedTotal: m.hardRejectedTotal.Load(),
 	}
 }
 
@@ -591,7 +602,9 @@ func (m *Metrics) observeSelection(mode routing.Mode, lease requestpath.Lease) {
 		if lease.State.KV == requestpath.KVAvailable {
 			m.kvAwareCachedPrefix.Observe(float64(lease.State.CachedPrefixTokens))
 		}
-		if lease.State.KV != requestpath.KVAvailable && lease.State.KV != requestpath.KVNotRequested {
+		if lease.State.KV == requestpath.KVShortContextBypassed {
+			m.kvAwareBypasses.WithLabelValues(string(lease.Decision.Reason)).Inc()
+		} else if lease.State.KV != requestpath.KVAvailable && lease.State.KV != requestpath.KVNotRequested {
 			m.kvAwareDegradations.WithLabelValues(string(lease.State.KV)).Inc()
 		}
 	}

@@ -104,8 +104,9 @@ func DefaultConfig() Config {
 			IdleConnTimeout: 90 * time.Second,
 		},
 		RequestPath: requestpath.Config{
-			Service:         service,
-			DiscoveryMaxAge: 90 * time.Second,
+			Service:           service,
+			DiscoveryMaxAge:   90 * time.Second,
+			ShortPromptTokens: 0,
 			// Disabled by default for compatibility. KV-aware deployment profiles
 			// must choose explicit thresholds for their tested capacity.
 			HardQueueDepth:    0,

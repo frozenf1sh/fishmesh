@@ -71,5 +71,6 @@
 | 62 | 容量报告与 A/B 收益汇总 | 把 Gateway 窗口下沉到 scenario/batch，并扩展 compare 汇总 accepted/completed/rejected 与 Little’s Law |
 | 63 | 容量、Admission 与 Runtime 实验手册 | 固化执行顺序、长连接安全、产物留存、收益判定和停止/回滚条件 |
 | 64 | 真实容量、Admission 与路由收益验收 | 完成真实 A0/A1/A2、B1/B2 与长连接对照；确认 active 背压边界、KV locality，runtime 观测仍缺 Pod 维度 |
+| 65 | Admission 反馈修正与 KV 短上下文旁路 | 拆分 soft/hard rejection，阻断控制器自反馈降级；增加可观测的短上下文 KV lookup bypass |
 
 每个阶段完成后都会补充独立中文说明，并在文末明确下一阶段边界。

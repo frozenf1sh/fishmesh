@@ -9,6 +9,8 @@ import (
 
 var ErrCapacity = errors.New("admission capacity reached")
 var ErrTarget = errors.New("admission target is outside hard limit")
+var ErrSoftTarget = errors.New("admission soft target reached")
+var ErrHardLimit = errors.New("admission hard limit reached")
 
 // Config 设置进程允许同时进入推理请求路径的最大请求数。
 type Config struct {
@@ -98,28 +100,32 @@ func (c TuningConfig) Validate(hardLimit int) error {
 // Signal is a process-local, monotonic admission observation. It deliberately
 // does not include a Prometheus dependency or runtime GPU data.
 type Signal struct {
-	ObservedAt     time.Time
-	Inflight       int
-	AcceptedTotal  uint64
-	CompletedTotal uint64
-	RejectedTotal  uint64
+	ObservedAt        time.Time
+	Inflight          int
+	AcceptedTotal     uint64
+	CompletedTotal    uint64
+	RejectedTotal     uint64
+	SoftRejectedTotal uint64
+	HardRejectedTotal uint64
 }
 
 // Decision is low-cardinality controller evidence suitable for metrics/logs.
 type Decision struct {
-	Mode            TuningMode
-	ObservedAt      time.Time
-	PreviousTarget  int
-	SuggestedTarget int
-	AppliedTarget   int
-	HardLimit       int
-	Inflight        int
-	AcceptedDelta   uint64
-	CompletedDelta  uint64
-	RejectedDelta   uint64
-	Valid           bool
-	Changed         bool
-	Reason          string
+	Mode              TuningMode
+	ObservedAt        time.Time
+	PreviousTarget    int
+	SuggestedTarget   int
+	AppliedTarget     int
+	HardLimit         int
+	Inflight          int
+	AcceptedDelta     uint64
+	CompletedDelta    uint64
+	RejectedDelta     uint64
+	SoftRejectedDelta uint64
+	HardRejectedDelta uint64
+	Valid             bool
+	Changed           bool
+	Reason            string
 }
 
 // SignalSource and DecisionObserver are the real substitution boundary between

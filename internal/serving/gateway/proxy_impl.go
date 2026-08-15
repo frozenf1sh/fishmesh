@@ -271,6 +271,13 @@ func (s *Server) rejectAdmission(writer http.ResponseWriter, requestID string, e
 		status = http.StatusTooManyRequests
 		s.metrics.admissionRejections.Inc()
 		s.metrics.rejectedTotal.Add(1)
+		if errors.Is(err, admission.ErrSoftTarget) {
+			s.metrics.admissionSoftRejections.Inc()
+			s.metrics.softRejectedTotal.Add(1)
+		} else if errors.Is(err, admission.ErrHardLimit) {
+			s.metrics.admissionHardRejections.Inc()
+			s.metrics.hardRejectedTotal.Add(1)
+		}
 		writer.Header().Set(headerRetryAfter, retryAfterSeconds)
 		writer.Header().Set(headerRouteReason, string(routing.ReasonAdmissionCapacity))
 	}

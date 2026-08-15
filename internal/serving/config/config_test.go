@@ -104,6 +104,7 @@ func TestLoadEnvironmentMapsKVAwareCostDomains(t *testing.T) {
 	t.Setenv(envObservationRequestTimeout, "350ms")
 	t.Setenv(envKVAwareHardQueueDepth, "12")
 	t.Setenv(envKVAwareHardLocalInflight, "24")
+	t.Setenv(envKVAwareShortPromptTokens, "2048")
 	config, err := LoadEnvironment()
 	if err != nil {
 		t.Fatal(err)
@@ -112,8 +113,15 @@ func TestLoadEnvironmentMapsKVAwareCostDomains(t *testing.T) {
 	if kvAware.QueueTokenPenalty != 320 || kvAware.RunningTokenPenalty != 80 || kvAware.InflightTokenPenalty != 40 {
 		t.Fatalf("unexpected KV-aware cost config: %+v", kvAware)
 	}
-	if config.Observation.RequestTimeout != 350*time.Millisecond || config.RequestPath.HardQueueDepth != 12 || config.RequestPath.HardLocalInflight != 24 {
+	if config.Observation.RequestTimeout != 350*time.Millisecond || config.RequestPath.HardQueueDepth != 12 || config.RequestPath.HardLocalInflight != 24 || config.RequestPath.ShortPromptTokens != 2048 {
 		t.Fatalf("unexpected observation/hard-overload config: %+v / %+v", config.Observation, config.RequestPath)
+	}
+}
+
+func TestLoadEnvironmentRejectsNegativeShortPromptThreshold(t *testing.T) {
+	t.Setenv(envKVAwareShortPromptTokens, "-1")
+	if _, err := LoadEnvironment(); err == nil || !strings.Contains(err.Error(), envKVAwareShortPromptTokens) {
+		t.Fatalf("negative short prompt threshold was accepted: %v", err)
 	}
 }
 

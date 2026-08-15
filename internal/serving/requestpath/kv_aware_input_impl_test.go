@@ -139,6 +139,39 @@ func TestKVAwarePathBuildsKVQueryFromReadonlyTokenIDsAndDegradesUnknown(t *testi
 	}
 }
 
+func TestKVAwareShortContextBypassesKVLookup(t *testing.T) {
+	renderer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_, _ = writer.Write([]byte(`{"model":"qwen","token_ids":[11,12,13],"cache_salt":"tenant-a"}`))
+	}))
+	defer renderer.Close()
+	tokenizer, err := tokenization.NewVLLMRenderer(testTokenizationConfig(renderer.URL, "qwen"), tokenization.Dependencies{HTTPClient: renderer.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache := &recordingKVCache{}
+	resolver := &mutableResolver{backends: []backend.Backend{{ID: "a", URL: "http://a:8000"}, {ID: "b", URL: "http://b:8000"}}}
+	path, err := New(Config{Service: backend.Backend{ID: "service", URL: "http://service:8000"}, ShortPromptTokens: 3}, Dependencies{
+		Resolver: resolver, Strategy: newKVAwareStrategy(t), Circuits: newTestBreaker(t), Tokenizer: tokenizer, KVCache: cache,
+		KVReconcile: func(context.Context, []backend.Backend) error { return nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer path.Close()
+
+	lease, err := path.Select(context.Background(), Request{Route: string(tokenization.RouteChatCompletions), Body: []byte(`{"model":"qwen","messages":[]}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.Complete(OutcomeClientCanceled)
+	if lease.State.KV != KVShortContextBypassed || lease.Decision.Reason != routing.ReasonKVAwareShortContextFallback || lease.Decision.Policy != routing.PolicyKVAwareShortContextFallbackV1 {
+		t.Fatalf("short-context decision/state = %+v / %q", lease.Decision, lease.State.KV)
+	}
+	if cache.query.Model != "" || len(cache.query.TokenGroups) != 0 {
+		t.Fatalf("short context performed KV lookup: %+v", cache.query)
+	}
+}
+
 func TestKVAwarePathPreservesCanceledTokenization(t *testing.T) {
 	resolver := &mutableResolver{backends: []backend.Backend{{ID: "a", URL: "http://a:8000"}}}
 	path, err := New(Config{Service: backend.Backend{ID: "service", URL: "http://service:8000"}}, Dependencies{

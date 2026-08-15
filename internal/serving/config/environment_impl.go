@@ -37,6 +37,7 @@ type environmentValues struct {
 	kvAwareQueueTokenPenalty                                                            int64
 	kvAwareRunningTokenPenalty                                                          int64
 	kvAwareInflightTokenPenalty                                                         int64
+	kvAwareShortPromptTokens                                                            int
 	kvAwareHardQueueDepth                                                               int64
 	kvAwareHardLocalInflight                                                            int64
 	runtimeCPUHardLimit, runtimeMemoryHardLimit                                         float64
@@ -146,6 +147,9 @@ func loadEnvironmentValues(defaults Config) (environmentValues, error) {
 		},
 		func() error {
 			return assignNonNegativeInt64(envKVAwareInflightTokenPenalty, defaults.Routing.KVAware.InflightTokenPenalty, &values.kvAwareInflightTokenPenalty)
+		},
+		func() error {
+			return assignNonNegativeInt(envKVAwareShortPromptTokens, defaults.RequestPath.ShortPromptTokens, &values.kvAwareShortPromptTokens)
 		},
 		func() error {
 			return assignNonNegativeInt64(envKVAwareHardQueueDepth, defaults.RequestPath.HardQueueDepth, &values.kvAwareHardQueueDepth)
@@ -265,6 +269,7 @@ func (v environmentValues) buildConfig(defaults Config) (Config, error) {
 		RequestPath: requestpath.Config{
 			Service: service, RequireFreshDiscovery: discoveryMode == discovery.ModeEndpointSlice, DiscoveryMaxAge: v.endpointMaxAge,
 			ReconcileInterval: reconcileInterval, HardQueueDepth: v.kvAwareHardQueueDepth, HardLocalInflight: v.kvAwareHardLocalInflight,
+			ShortPromptTokens:        v.kvAwareShortPromptTokens,
 			RuntimeCPUHardLimitCores: v.runtimeCPUHardLimit, RuntimeMemoryHardLimitBytes: v.runtimeMemoryHardLimit,
 			RuntimeGPUUtilizationHardLimitPct: v.runtimeGPUUtilizationLimit, RuntimeGPUMemoryHardLimitBytes: v.runtimeGPUMemoryHardLimit,
 			RuntimeGPUTemperatureHardLimitC: v.runtimeGPUTemperatureLimit,
@@ -360,6 +365,16 @@ func assignInt64(key string, fallback int64, destination *int64) error {
 		return fmt.Errorf("%s must be an integer: %q: %w", key, value, err)
 	}
 	*destination = parsed
+	return nil
+}
+
+func assignNonNegativeInt(key string, fallback int, destination *int) error {
+	if err := assignInt(key, fallback, false, destination); err != nil {
+		return err
+	}
+	if *destination < 0 {
+		return fmt.Errorf("%s must not be negative: %d", key, *destination)
+	}
 	return nil
 }
 
