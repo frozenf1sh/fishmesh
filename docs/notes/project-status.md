@@ -237,13 +237,16 @@ limit rejection；控制器只因 hard rejection 下调 target，soft rejection 
 避免长 SSE 自己触发持续降级。Gateway 保留总拒绝计数，并新增 soft/hard rejection counters。KV-aware 新增
 可选 `FISHMESH_KV_AWARE_SHORT_PROMPT_TOKENS`；精确 tokenization 后，阈值内请求跳过 per-request KV lookup，
 使用 load-aware fallback，并以 `short-context-bypassed`、独立 reason/policy 和 bypass counter 观测，不把主动
-旁路误记为 KV failure。默认阈值仍为 0；`r6i22-final/kv-aware-short-bypass` 以 2048 token 作为待实测候选。
-本阶段已通过 Serving 定向测试和 overlay 渲染，尚未滚动真实集群；后续需完成 active 修正版长/短流 paired
-compare 及 512/1024/2048/3072 threshold sweep。随后已完成真实 smoke：短上下文 overlay 返回
+旁路误记为 KV failure。默认阈值仍为 0；`2048` 只是初始候选。阶段 66 已完成真实集群的
+512/1024/2048/3072 threshold sweep，以及 threshold 0/576 各两轮 paired repeat：640/640 请求成功、拒绝 0；
+整体 pooled TTFT P95 为 `940.87 → 839.14 ms`（`-10.81%`），但 CI `[-26.61%, +22.40%]` 跨 0。按场景只有
+512 档出现稳定方向收益，1024/2048/3072 不支持统一旁路。当前 RTX 4060/Qwen2.5-0.5B/vLLM 0.23.0 profile
+的候选固定阈值为 `576`，使用 `kv-aware-short-bypass-576` overlay；不写入全局默认，仍以 threshold 0 作为默认。
+随后已完成真实 smoke：短上下文 overlay 返回
 `short-context-bypassed` 且 bypass counter 增加、degradation counter 未增加；修正版 active 长连接
 `r6i24-drain-active-r1` 为 128/128 成功、soft/hard rejection 均为 0，最终 target=64。实验完成后已恢复
-`load-balanced / initial target=128 / tuning=off`，vLLM 2/2 Ready 且重启数为 0。当前剩余工作是阈值阶梯的
-真实收益比较，不把单次 smoke 当成短上下文性能结论。
+`load-balanced / initial target=128 / tuning=off`，vLLM 2/2 Ready 且重启数为 0。当前只剩同一 profile 上更多
+threshold 576 独立 paired rounds 与 promotion gate；不把当前候选外推到其他模型、GPU 或 vLLM profile。
 
 README 与 README_CN 现以五分钟 Lite demo 为入口：确认 `load-balanced` 默认基线后临时安装
 `lite-kv-aware`，用不带 session key 的同一长 system prompt、不同 user message 请求读取 KV-aware 决策头，
@@ -497,8 +500,8 @@ VM 的影响更大：Kubernetes API 和 reconciliation 也会停止，应按完�
    hard-gate 和资源归因实验；
 2. 针对修正后的 active admission 增加短流/长流分层控制实验，至少两轮 paired compare，确认 soft rejection
    不再触发自反馈降级，再讨论是否改变默认模式；
-3. 执行 KV-aware 512/1024/2048/3072 threshold sweep，比较 bypass 与 KV-aware 的 lookup 开销、TTFT、
-   accepted/completed QPS 和 cache locality；
+3. 在同一 profile 上补足 threshold 576 的独立 paired rounds，满足 promotion gate 后再讨论是否进入默认 KV-aware
+   overlay；model/hardware/vLLM/profile 变化时必须重新校准，不能外推 576；
 4. KV-aware 继续按长上下文 mixed 矩阵重复验证，短 profile 只保留 correctness/locality 结论；
 5. learned-shadow 仍保持 shadow，只有在独立 agreement/误差与 R6I-6 性能门禁重新通过后，才另立 active 决策；
 6. Standard mode/llm-d 完整闭环继续后置；在声称 NetworkPolicy 已生效前迁移到支持 policy enforcement 的

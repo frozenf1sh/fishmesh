@@ -2,22 +2,25 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: kubellm
 resources:
-  - ../base
+  - ../kv-aware
 patches:
   - target:
       kind: ConfigMap
       name: fishmesh-gateway-config
     patch: |-
+      - op: add
+        path: /data/FISHMESH_KV_AWARE_SHORT_PROMPT_TOKENS
+        value: "1024"
       - op: replace
         path: /metadata/annotations/fishmesh.io~1config-version
-        value: r6i22-kv-aware
+        value: r6i24-kv-short-bypass-1024
   - target:
       kind: Deployment
       name: fishmesh-gateway
     patch: |-
       - op: replace
         path: /spec/template/metadata/annotations/fishmesh.io~1runtime-config-version
-        value: r6i22-kv-aware
+        value: r6i24-kv-short-bypass-1024
   - target:
       kind: Deployment
       name: qwen-vllm

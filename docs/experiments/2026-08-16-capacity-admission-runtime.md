@@ -40,11 +40,15 @@ B3 只启用已经在目标集群验证过身份和 freshness 的阈值；不把
 ### Routing 的短上下文旁路
 
 KV-aware 的短上下文优化使用独立实验 overlay：
-`deploy/experiments/r6i22-final/kv-aware-short-bypass`。它默认以 `2048` prompt tokens 作为候选阈值；
-真正发布前应按 512/1024/2048/3072 做 threshold sweep。Gateway 先执行精确 tokenization，再在阈值内跳过
+`deploy/experiments/r6i22-final/kv-aware-short-bypass`。初始 `2048` 只是候选值，不能直接作为默认；阶段 66
+已完成 512/1024/2048/3072 threshold sweep 与 threshold 576 双轮 repeat。Gateway 先执行精确 tokenization，再在阈值内跳过
 per-request KV lookup，改用 load-aware 普通选择；这不是 KV failure，响应应记录
 `X-FishMesh-KV-Status: short-context-bypassed`、短上下文 fallback reason/policy 和
 `kv_aware_bypasses_total`。阈值为 0 时关闭，KV unknown/stale 仍按原有显式 degradation 处理。
+
+当前决策是按 model + hardware + vLLM profile 实验确定并在运行期固定；本参考 profile 的候选为 `576`，只覆盖
+512-token 极短请求，默认仍关闭。完整结果见
+[`2026-08-16-r6i24-kv-short-threshold.md`](2026-08-16-r6i24-kv-short-threshold.md)。
 
 ## 2. 准入检查与安全边界
 

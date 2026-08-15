@@ -1,0 +1,18 @@
+{
+  "run_id": "r6i24-kv-short-threshold-template",
+  "max_tokens": 32,
+  "request_timeout_ms": 180000,
+  "allow_high_concurrency": true,
+  "skip_prompt_token_evidence": true,
+  "treatment": "replace-at-run",
+  "workload_seed": 20260816,
+  "cache_mode": "steady-warm",
+  "run_nonce": "replace-with-unique-run-nonce",
+  "cache_generation": "replace-with-vllm-pod-generation",
+  "scenarios": [
+    {"name": "threshold-512", "prefix_pattern": "same-prefix", "prefix_bytes": 2866, "prefix_groups": 2, "target_prompt_tokens": 512, "prompt_token_tolerance": 16, "batches": 2, "batch_size": 20, "concurrency": 8, "batch_pause_ms": 1000},
+    {"name": "threshold-1024", "prefix_pattern": "different-prefix", "prefix_bytes": 5932, "prefix_groups": 4, "target_prompt_tokens": 1024, "prompt_token_tolerance": 16, "batches": 2, "batch_size": 20, "concurrency": 8, "batch_pause_ms": 1000},
+    {"name": "threshold-2048", "prefix_pattern": "mixed-prefix", "prefix_bytes": 12076, "prefix_groups": 4, "mixed_hot_ratio": 50, "mixed_unique_ratio": 25, "target_prompt_tokens": 2048, "prompt_token_tolerance": 16, "batches": 2, "batch_size": 20, "concurrency": 8, "batch_pause_ms": 1000},
+    {"name": "threshold-3072", "prefix_pattern": "different-prefix", "prefix_bytes": 18220, "prefix_groups": 4, "target_prompt_tokens": 3072, "prompt_token_tolerance": 16, "batches": 2, "batch_size": 20, "concurrency": 8, "batch_pause_ms": 1000}
+  ]
+}
