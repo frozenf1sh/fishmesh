@@ -5,7 +5,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"hash/fnv"
 	"io"
+	"math/rand"
 	"sort"
 	"strings"
 	"sync"
@@ -86,7 +88,7 @@ func (c *Client) runPlan(ctx context.Context, plan BenchmarkPlan, output io.Writ
 		scenario := benchmarkScenarioByName(plan.Scenarios, scenarioName)
 		warmupBackends := make(map[string]string)
 		for warmup := 0; warmup < scenario.WarmupRequests; warmup++ {
-			attempt := c.runBenchmarkRequest(ctx, plan, scenario, -1, warmup, "warmup")
+			attempt := c.runBenchmarkRequest(ctx, plan, scenario, -1, warmup, warmup, "warmup")
 			if err := writeJSONL(writer, attempt); err != nil {
 				return finish(err)
 			}
@@ -136,6 +138,7 @@ func (c *Client) runBenchmarkBatch(ctx context.Context, plan BenchmarkPlan, scen
 	if workers > scenario.BatchSize {
 		workers = scenario.BatchSize
 	}
+	inputOrder := benchmarkRequestOrder(plan, scenario)
 
 	var wait sync.WaitGroup
 	wait.Add(workers)
@@ -143,7 +146,7 @@ func (c *Client) runBenchmarkBatch(ctx context.Context, plan BenchmarkPlan, scen
 		go func() {
 			defer wait.Done()
 			for job := range jobs {
-				attempts <- c.runBenchmarkRequest(ctx, plan, scenario, job.Batch, job.Request, "request")
+				attempts <- c.runBenchmarkRequest(ctx, plan, scenario, job.Batch, job.Request, inputOrder[job.Request], "request")
 			}
 		}()
 	}
@@ -183,15 +186,15 @@ func (c *Client) runBenchmarkBatch(ctx context.Context, plan BenchmarkPlan, scen
 	return result
 }
 
-func (c *Client) runBenchmarkRequest(ctx context.Context, plan BenchmarkPlan, scenario BenchmarkScenario, batch, request int, recordType string) BenchmarkAttempt {
-	messages, group := benchmarkMessagesForScenario(scenario, request, scenario.Batches*scenario.BatchSize)
-	cacheSalt, cacheScope := benchmarkCacheSalt(plan, scenario, batch, request, group)
+func (c *Client) runBenchmarkRequest(ctx context.Context, plan BenchmarkPlan, scenario BenchmarkScenario, batch, request, inputSequence int, recordType string) BenchmarkAttempt {
+	messages, group := benchmarkMessagesForScenario(scenario, inputSequence, scenario.Batches*scenario.BatchSize)
+	cacheSalt, cacheScope := benchmarkCacheSalt(plan, scenario, batch, inputSequence, group)
 	startedAt := time.Now().UTC()
 	result, err := c.Send(ctx, Request{Messages: messages, MaxTokens: plan.MaxTokens, CacheSalt: cacheSalt, IgnoreEOS: plan.IgnoreEOS})
 	completedAt := time.Now().UTC()
 	record := BenchmarkAttempt{
 		RecordType: recordType, RunID: plan.RunID, Scenario: scenario.Name, Pattern: scenario.Pattern,
-		Batch: batch, Request: request, PrefixBytes: scenario.PrefixBytes, PromptBytes: promptBytes(messages),
+		Batch: batch, Request: request, InputSequence: inputSequence, PrefixBytes: scenario.PrefixBytes, PromptBytes: promptBytes(messages),
 		TargetPromptTokens: scenario.TargetPromptTokens, PromptTokenTolerance: scenario.PromptTokenTolerance,
 		PrefixGroup: group, CacheMode: plan.CacheMode,
 		CacheScope: cacheScope, CacheGeneration: plan.CacheGeneration, StartedAt: startedAt, CompletedAt: completedAt,
@@ -205,6 +208,29 @@ func (c *Client) runBenchmarkRequest(ctx context.Context, plan BenchmarkPlan, sc
 		record.Error = err.Error()
 	}
 	return record
+}
+
+// benchmarkRequestOrder returns the logical input sequence for one scenario.
+//
+// Request is the send position, while InputSequence identifies the generated
+// prefix/suffix sample. Keeping the two separate lets both arms receive the
+// same shuffled input stream without writing prompt content to artifacts.
+func benchmarkRequestOrder(plan BenchmarkPlan, scenario BenchmarkScenario) []int {
+	total := scenario.Batches * scenario.BatchSize
+	order := make([]int, total)
+	for index := range order {
+		order[index] = index
+	}
+	if !plan.RandomizeRequestOrder || plan.WorkloadSeed == 0 || total < 2 {
+		return order
+	}
+	hasher := fnv.New64a()
+	_, _ = hasher.Write([]byte(scenario.Name))
+	seed := int64(hasher.Sum64()) ^ plan.WorkloadSeed
+	rand.New(rand.NewSource(seed)).Shuffle(len(order), func(i, j int) {
+		order[i], order[j] = order[j], order[i]
+	})
+	return order
 }
 
 func benchmarkScenarioByName(scenarios []BenchmarkScenario, name string) BenchmarkScenario {

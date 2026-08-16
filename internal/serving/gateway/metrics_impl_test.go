@@ -84,6 +84,24 @@ func TestMetricsObserveKVEventAndAvailableCachedPrefixWithoutUnknownZero(t *test
 	}
 }
 
+func TestMetricsObserveKVResetAndEventConsistencyError(t *testing.T) {
+	metrics := NewMetrics()
+	metrics.ObserveKVSequenceReset("backend-a", false)
+	metrics.ObserveKVEventError("backend-a", "engine-request-key-mismatch")
+
+	response := httptest.NewRecorder()
+	metrics.handler().ServeHTTP(response, httptest.NewRequest("GET", "/metrics", nil))
+	output := response.Body.String()
+	for _, want := range []string{
+		`fishmesh_gateway_kv_cache_sequence_resets_total{backend_id="backend-a",source="live"} 1`,
+		`fishmesh_gateway_kv_event_errors_total{backend_id="backend-a",reason="engine-request-key-mismatch"} 1`,
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("metric %q missing:\n%s", want, output)
+		}
+	}
+}
+
 func TestMetricsSeparatesShortContextBypassFromKVDegradation(t *testing.T) {
 	metrics := NewMetrics()
 	metrics.observeSelection(routing.ModeKVAware, requestpath.Lease{

@@ -1,0 +1,35 @@
+{
+  "run_id": "r6i26-long-context-memory-template",
+  "max_tokens": 32,
+  "ignore_eos": true,
+  "request_timeout_ms": 180000,
+  "allow_high_concurrency": false,
+  "skip_prompt_token_evidence": true,
+  "treatment": "replace-at-run",
+  "workload_seed": 20260816,
+  "execution_order": [
+    "long-shared-2048",
+    "long-mixed-2048",
+    "long-random-2048",
+    "xlong-shared-3072",
+    "xlong-mixed-3072",
+    "xlong-random-3072",
+    "maxlong-shared-3584",
+    "maxlong-mixed-3584",
+    "maxlong-random-3584"
+  ],
+  "cache_mode": "steady-warm",
+  "run_nonce": "replace-with-unique-run-nonce",
+  "cache_generation": "replace-with-vllm-pod-generation",
+  "scenarios": [
+    {"name": "long-shared-2048", "prefix_pattern": "same-prefix", "prefix_bytes": 12076, "prefix_groups": 1, "target_prompt_tokens": 2048, "prompt_token_tolerance": 16, "batches": 2, "batch_size": 16, "concurrency": 4, "arrival_rate_qps": 2, "batch_pause_ms": 1000},
+    {"name": "long-mixed-2048", "prefix_pattern": "mixed-prefix", "prefix_bytes": 12076, "prefix_groups": 4, "mixed_hot_ratio": 60, "mixed_unique_ratio": 20, "target_prompt_tokens": 2048, "prompt_token_tolerance": 16, "batches": 2, "batch_size": 16, "concurrency": 4, "arrival_rate_qps": 4, "batch_pause_ms": 1000},
+    {"name": "long-random-2048", "prefix_pattern": "different-prefix", "prefix_bytes": 12076, "prefix_groups": 4, "target_prompt_tokens": 2048, "prompt_token_tolerance": 16, "batches": 2, "batch_size": 16, "concurrency": 4, "arrival_rate_qps": 2, "batch_pause_ms": 1000},
+    {"name": "xlong-shared-3072", "prefix_pattern": "same-prefix", "prefix_bytes": 18220, "prefix_groups": 1, "target_prompt_tokens": 3072, "prompt_token_tolerance": 16, "batches": 2, "batch_size": 16, "concurrency": 4, "arrival_rate_qps": 2, "batch_pause_ms": 1000},
+    {"name": "xlong-mixed-3072", "prefix_pattern": "mixed-prefix", "prefix_bytes": 18220, "prefix_groups": 4, "mixed_hot_ratio": 60, "mixed_unique_ratio": 20, "target_prompt_tokens": 3072, "prompt_token_tolerance": 16, "batches": 2, "batch_size": 16, "concurrency": 4, "arrival_rate_qps": 4, "batch_pause_ms": 1000},
+    {"name": "xlong-random-3072", "prefix_pattern": "different-prefix", "prefix_bytes": 18220, "prefix_groups": 4, "target_prompt_tokens": 3072, "prompt_token_tolerance": 16, "batches": 2, "batch_size": 16, "concurrency": 4, "arrival_rate_qps": 2, "batch_pause_ms": 1000},
+    {"name": "maxlong-shared-3584", "prefix_pattern": "same-prefix", "prefix_bytes": 21256, "prefix_groups": 1, "target_prompt_tokens": 3584, "prompt_token_tolerance": 16, "batches": 2, "batch_size": 16, "concurrency": 4, "arrival_rate_qps": 1, "batch_pause_ms": 1000},
+    {"name": "maxlong-mixed-3584", "prefix_pattern": "mixed-prefix", "prefix_bytes": 21256, "prefix_groups": 4, "mixed_hot_ratio": 60, "mixed_unique_ratio": 20, "target_prompt_tokens": 3584, "prompt_token_tolerance": 16, "batches": 2, "batch_size": 16, "concurrency": 4, "arrival_rate_qps": 2, "batch_pause_ms": 1000},
+    {"name": "maxlong-random-3584", "prefix_pattern": "different-prefix", "prefix_bytes": 21256, "prefix_groups": 4, "target_prompt_tokens": 3584, "prompt_token_tolerance": 16, "batches": 2, "batch_size": 16, "concurrency": 4, "arrival_rate_qps": 1, "batch_pause_ms": 1000}
+  ]
+}

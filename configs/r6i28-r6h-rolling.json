@@ -1,0 +1,30 @@
+{
+  "run_id": "r6i28-r6h-rolling-template",
+  "max_tokens": 32,
+  "ignore_eos": true,
+  "request_timeout_ms": 180000,
+  "allow_high_concurrency": true,
+  "skip_prompt_token_evidence": true,
+  "randomize_request_order": false,
+  "treatment": "replace-at-run",
+  "workload_seed": 20260819,
+  "execution_order": [
+    "same-4k",
+    "same-12k",
+    "different-4k",
+    "different-12k",
+    "mixed-4k",
+    "mixed-12k"
+  ],
+  "cache_mode": "steady-warm",
+  "run_nonce": "replace-with-unique-run-nonce",
+  "cache_generation": "replace-with-vllm-pod-generation",
+  "scenarios": [
+    {"name": "same-4k", "prefix_pattern": "same-prefix", "prefix_bytes": 4096, "prefix_groups": 2, "batches": 2, "batch_size": 24, "concurrency": 8},
+    {"name": "same-12k", "prefix_pattern": "same-prefix", "prefix_bytes": 12288, "prefix_groups": 1, "batches": 2, "batch_size": 24, "concurrency": 8},
+    {"name": "different-4k", "prefix_pattern": "different-prefix", "prefix_bytes": 4096, "prefix_groups": 1, "batches": 2, "batch_size": 24, "concurrency": 8},
+    {"name": "different-12k", "prefix_pattern": "different-prefix", "prefix_bytes": 12288, "prefix_groups": 1, "batches": 2, "batch_size": 24, "concurrency": 8},
+    {"name": "mixed-4k", "prefix_pattern": "mixed-prefix", "prefix_bytes": 4096, "prefix_groups": 4, "batches": 2, "batch_size": 50, "concurrency": 16, "mixed_hot_ratio": 60, "mixed_unique_ratio": 20},
+    {"name": "mixed-12k", "prefix_pattern": "mixed-prefix", "prefix_bytes": 12288, "prefix_groups": 4, "batches": 2, "batch_size": 50, "concurrency": 16, "mixed_hot_ratio": 60, "mixed_unique_ratio": 20}
+  ]
+}

@@ -101,17 +101,15 @@ func (s *vllmStore) Lookup(
 	matched := make(map[backend.ID]int, len(instances))
 	totalBlocks := 0
 	for _, tokens := range query.TokenGroups {
-		keys, err := s.requestKeys(tokens, query.Model, query.CacheSalt)
+		fullBlocks := len(tokens) / s.blockSize
+		keys, keyToPods, err := s.lookupRequestKeysUntilMiss(ctx, tokens, query.Model, query.CacheSalt, podIDs)
 		if err != nil {
 			return nil, 0, err
 		}
 		if len(keys) == 0 {
+			// 保持零命中语义，同时避免把空 key 集合交给 scorer；totalBlocks 仍保留完整请求规模。
+			totalBlocks += fullBlocks
 			continue
-		}
-
-		keyToPods, err := s.index.Lookup(ctx, keys, sets.New(podIDs...))
-		if err != nil {
-			return nil, 0, fmt.Errorf("lookup KV block keys: %w", err)
 		}
 		scores, err := s.scorer.Score(ctx, keys, keyToPods)
 		if err != nil {
@@ -124,9 +122,55 @@ func (s *vllmStore) Lookup(
 			}
 			matched[backendID] += int(math.Round(score))
 		}
-		totalBlocks += len(keys)
+		// totalBlocks 仍代表请求的完整 block 数；keys 只包含 miss 之前的连续命中前缀。
+		totalBlocks += fullBlocks
 	}
 	return matched, totalBlocks, nil
+}
+
+// lookupRequestKeysUntilMiss 沿 canonical hash 链逐 block 生成并查询。
+// 后续 block 的 parent 是前一个 request key；一旦当前 key 没有 Pod locality，链式语义保证
+// 后续 key 不可能形成更长的完整前缀，因此不再做无效 hash。cache salt 仍按原协议只污染首块。
+func (s *vllmStore) lookupRequestKeysUntilMiss(
+	ctx context.Context,
+	tokens []uint32,
+	model string,
+	cacheSalt string,
+	podIDs []string,
+) ([]kvblock.BlockHash, map[kvblock.BlockHash][]kvblock.PodEntry, error) {
+	fullBlocks := len(tokens) / s.blockSize
+	features := foldCacheSalt(nil, cacheSalt, fullBlocks)
+	keys := make([]kvblock.BlockHash, 0, fullBlocks)
+	keyToPods := make(map[kvblock.BlockHash][]kvblock.PodEntry, fullBlocks)
+	parentKey := kvblock.EmptyBlockHash
+	allowedPods := sets.New(podIDs...)
+	for blockIndex := 0; blockIndex < fullBlocks; blockIndex++ {
+		start := blockIndex * s.blockSize
+		blockFeatures := []*kvblock.BlockExtraFeatures(nil)
+		if features != nil {
+			blockFeatures = features[blockIndex : blockIndex+1]
+		}
+		blockKeys, err := s.tokenProcessor.TokensToKVBlockKeys(parentKey, tokens[start:start+s.blockSize], model, blockFeatures)
+		if err != nil {
+			return nil, nil, fmt.Errorf("compute request KV block key %d: %w", blockIndex, err)
+		}
+		if len(blockKeys) != 1 {
+			return nil, nil, fmt.Errorf("compute request KV block %d returned %d keys", blockIndex, len(blockKeys))
+		}
+		key := blockKeys[0]
+		found, err := s.index.Lookup(ctx, []kvblock.BlockHash{key}, allowedPods)
+		if err != nil {
+			return nil, nil, fmt.Errorf("lookup KV block key %d: %w", blockIndex, err)
+		}
+		pods, exists := found[key]
+		if !exists || len(pods) == 0 {
+			break
+		}
+		keys = append(keys, key)
+		keyToPods[key] = pods
+		parentKey = key
+	}
+	return keys, keyToPods, nil
 }
 
 func (s *vllmStore) Apply(ctx context.Context, instance Instance, event Event) (applyResult, error) {
@@ -223,6 +267,15 @@ func (s *vllmStore) applyStored(ctx context.Context, podID, model string, event 
 	engineKeys := make([]kvblock.BlockHash, len(event.BlockHashes))
 	for index, hash := range event.BlockHashes {
 		engineKeys[index] = kvblock.BlockHash(hash)
+	}
+	for index, engineKey := range engineKeys {
+		knownRequestKey, lookupErr := s.index.GetRequestKey(ctx, engineKey)
+		if lookupErr == nil && knownRequestKey != requestKeys[index] {
+			return newEventFault(
+				ReasonEngineRequestKeyMismatch,
+				fmt.Errorf("engine key %d maps to request key %d, computed request key is %d", engineKey, knownRequestKey, requestKeys[index]),
+			)
+		}
 	}
 	entry := kvblock.PodEntry{PodIdentifier: podID, DeviceTier: deviceTier}
 	if err := s.index.Add(ctx, engineKeys, requestKeys, []kvblock.PodEntry{entry}); err != nil {

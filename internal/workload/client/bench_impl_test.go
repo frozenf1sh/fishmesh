@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -153,6 +154,30 @@ func TestPrepareBenchmarkPlanRecordsDeterministicSeededOrder(t *testing.T) {
 	}
 	if strings.Join(first.ExecutionOrder, ",") != strings.Join(second.ExecutionOrder, ",") || len(first.ExecutionOrder) != 3 {
 		t.Fatalf("execution orders = %v / %v", first.ExecutionOrder, second.ExecutionOrder)
+	}
+}
+
+func TestBenchmarkRequestOrderIsDeterministicAndSeeded(t *testing.T) {
+	plan := BenchmarkPlan{WorkloadSeed: 42, RandomizeRequestOrder: true}
+	scenario := BenchmarkScenario{Name: "long", Batches: 2, BatchSize: 8}
+	first := benchmarkRequestOrder(plan, scenario)
+	second := benchmarkRequestOrder(plan, scenario)
+	if fmt.Sprint(first) != fmt.Sprint(second) {
+		t.Fatalf("request order is not deterministic: %v / %v", first, second)
+	}
+	if fmt.Sprint(first) == "[0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15]" {
+		t.Fatalf("request order was not shuffled: %v", first)
+	}
+	other := benchmarkRequestOrder(BenchmarkPlan{WorkloadSeed: 43, RandomizeRequestOrder: true}, scenario)
+	if fmt.Sprint(first) == fmt.Sprint(other) {
+		t.Fatalf("different seeds reused request order: %v / %v", first, other)
+	}
+	seen := map[int]bool{}
+	for _, value := range first {
+		seen[value] = true
+	}
+	if len(seen) != 16 {
+		t.Fatalf("request order lost inputs: %v", first)
 	}
 }
 

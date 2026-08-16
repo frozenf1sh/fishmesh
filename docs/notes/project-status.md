@@ -494,7 +494,37 @@ VM 的影响更大：Kubernetes API 和 reconciliation 也会停止，应按完�
   GPU SM/memory-controller 峰值 100%，显存 7262/8188 MiB，温度峰值 65°C。报告位于
   `artifacts/bench/long-context-mixed-comparison-r6h-r2/`；下一步按并发 1/4/8/16 做阶梯测试。
 
+R6I-26 长上下文低并发与索引内存实验已完成：2048/3072/3584 tokens × shared/mixed/random 共 9 场景，客户端并发 4，两侧各 2 轮、各 576 请求，1152/1152 成功。纯 LB/KV-aware pooled TTFT P95 为 `173.74 -> 183.65 ms`（`+5.71%`，CI `[+1.14%, +8.36%]`）；3072 shared 的分层 P95 约下降 25.05%，但 3584 shared 上升 43.96%，不形成整体 promotion。KV 576/576 available、cached-prefix samples 576/576、degradation/short-bypass/rejection 均为 0。新增 benchmark RSS/Go heap start/peak/end/delta 观测：KV 峰值相对 LB 平均高约 26.82 MiB RSS、23.65 MiB Go heap；上游 LRU 未提供 hash-only exact bytes，因此该数据是 KV-aware 运行时额外内存的近似上界。报告见 `docs/experiments/2026-08-16-r6i26-long-context-memory.md`，结束后恢复 `load-balanced + admission off` 基线。
+
+R6I-27 KV 状态一致性修补已完成：同一 Pod UID/IP 内检测到接近零的 sequence 回绕时清理 Pod index、重置
+sequence 建档并清空 replay freshness，新的 replay END 前保持 `sequence-reset` invalid；新增
+`kv_cache_sequence_resets_total`。stored event 对已有 engine→request 映射增加一致性校验，不一致以
+`engine-request-key-mismatch` 失败并由 `kv_event_errors_total` 计数；查询 hash 链改为逐 block 查询，首个
+miss 即停止。新增 kvcache/Gateway contract tests，已通过 `go test ./internal/serving/...` 与
+`git diff --check`。本阶段未增加长期零 replay 启发式告警。
+
+R6I-27 双层滚动重启与随机输入长上下文复验已完成：每个正式 arm 都滚动重启 vLLM 与 Gateway；vLLM
+严格使用 `maxSurge=0/maxUnavailable=1`，Gateway 使用唯一 runtime annotation 清空本地 KV hash/index、
+subscriber 和 admission state。3072/3584 × shared/mixed/random 共 6 场景，客户端并发 4，两个 seed
+反向交替 arm 顺序，四个 arm 共 384/384 成功。纯 LB/KV pooled TTFT P95 为 `189.81/191.35 ms`，变化
+`+0.81%`，bootstrap CI `[-15.45%, +38.22%]`；3072 shared P95 降低 39.20%，3584 shared 上升 49.30%，
+仍不能形成低并发整体 promotion。KV `192/192` available、cached-prefix samples `192/192`，rejection
+为 0；LB 的 `not-requested` 不当作 cache miss。完整报告见 `docs/experiments/2026-08-16-r6i27-long-context-rolling.md`，
+实验后恢复 load-balanced/admission-off 基线。
+
+R6I-28/R6I-29 高负载滚动重启复验已完成：复用旧 R6H 的 same/different/mixed × 4/12 KiB 矩阵，每个
+formal arm 392 请求，并对 vLLM/Gateway 同时执行滚动重启。R6I-28 保持 active admission，LB/KV pooled
+TTFT P95 `642.48 -> 707.13 ms`（`+10.06%`，CI `[-1.29%, +21.32%]`）；R6I-29b 关闭 admission 且不启用
+cache-salt，P95 `658.99 -> 709.66 ms`（`+7.69%`，CI `[-0.82%, +16.61%]`）。两组共 3136/3136 成功，
+KV 784/784 available，rejection 为 0。active/off 方向一致，admission 不是旧 R6H mixed 长尾收益消失的
+主因；same-prefix 长场景仍受益，但旧 R6H 的 mixed P95 大幅下降没有在当前 `r6i24` 镜像、双层 reset
+条件下复现。旧 R6H 使用 `r6i1` 镜像且 A/B 期间不重启，因此仍需 old/current image × warm/reset 2×2
+消融才能完成因果归因。报告见 `docs/experiments/2026-08-16-r6i28-r6h-rolling.md`，结束后恢复
+load-balanced/admission-off 基线。
+
 ## 下一步待办
+
+- R6I-25 大规模性能实验已完成：正式路由矩阵为纯 load-balanced 与 `kv-aware + load-balanced fallback` 各 2 轮、各 768 请求，动态 admission 专项各 544 请求；全部请求成功。整体 pooled TTFT P95 为 `962.17 -> 1057.30 ms`（`+9.89%`，CI `[-13.43%, +28.39%]`，跨 0），Little’s Law W 为 `1812.01 -> 1615.09 ms`；收益集中在 long shared/mixed/xlong 场景，512-token short bypass 有约 4–5% P95 代价。KV 两轮合计 `960 available + 576 short-context-bypassed`，degradation/rejection 均为 0。active admission 两侧均从 target 32 逐步到 128、12 次 action；无 hard rejection，recovery 未发生下调，说明当前控制器仍是 hard-reject decrease、low-watermark increase、high-watermark hold。Gateway observation 稳态均为 `ok`；Pod/GPU runtime metrics 仍缺失，hard gate 未评估。正式报告见 `docs/experiments/2026-08-16-r6i25-large-scale-kv-vs-lb.md`，实验结束已恢复 `load-balanced + admission off` 基线。
 
 1. 补齐 `$namespace+$pod` 作用域的容器/GPU runtime exporter 与 Prometheus scrape，再重跑 B3 freshness、
    hard-gate 和资源归因实验；

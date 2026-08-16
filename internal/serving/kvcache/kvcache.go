@@ -22,10 +22,12 @@ const (
 	ReasonReplayNotConfirmed       Reason = "replay-not-confirmed"
 	ReasonReplayHeartbeatStale     Reason = "replay-heartbeat-stale"
 	ReasonSequenceGap              Reason = "sequence-gap-awaiting-replay"
+	ReasonSequenceReset            Reason = "sequence-reset"
 	ReasonUnrecoverableSequenceGap Reason = "unrecoverable-sequence-gap"
 	ReasonEventTooLarge            Reason = "event-too-large"
 	ReasonEventDecodeFailed        Reason = "event-decode-failed"
 	ReasonEventApplyFailed         Reason = "event-apply-failed"
+	ReasonEngineRequestKeyMismatch Reason = "engine-request-key-mismatch"
 	ReasonUnsupportedEvent         Reason = "unsupported-event"
 	ReasonReplayCapacityExceeded   Reason = "replay-capacity-exceeded"
 	ReasonLifecycleChanging        Reason = "lifecycle-changing"
@@ -115,10 +117,36 @@ type EventObservation struct {
 	PublishToApply time.Duration
 }
 
+// SequenceResetObservation 描述检测到同一 Pod 实例的 vLLM sequence 回绕。
+// PreviousSequence 和 Sequence 只用于低基数诊断，不携带请求或 token 身份。
+type SequenceResetObservation struct {
+	Backend          backend.ID
+	PreviousSequence uint64
+	Sequence         uint64
+	Replayed         bool
+}
+
+// EventErrorObservation 描述一次同步 apply 失败，供 metrics 将隐性数据一致性错误计数。
+type EventErrorObservation struct {
+	Backend  backend.ID
+	Reason   Reason
+	Replayed bool
+}
+
 // EventObserver 是 kvcache 在成功 apply 后通知 delivery/metrics 边界的最小替换接口。
 // 回调在事件 owner 的同步路径之外执行；实现不得阻塞、重入 index 或改变 routing 决策。
 type EventObserver interface {
 	ObserveKVEvent(EventObservation)
+}
+
+// SequenceResetObserver 是可选的 sequence 回绕观测边界，避免扩大已有成功 apply 契约。
+type SequenceResetObserver interface {
+	ObserveSequenceReset(SequenceResetObservation)
+}
+
+// EventErrorObserver 是可选的事件失败观测边界，供 Gateway 暴露一致性错误指标。
+type EventErrorObserver interface {
+	ObserveKVEventError(EventErrorObservation)
 }
 
 // EventSource 隔离 ZMQ transport，并以同步回调提供自然背压。

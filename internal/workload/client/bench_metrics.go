@@ -22,30 +22,41 @@ const (
 	metricCompletedRequests       = "fishmesh_gateway_requests_total"
 	metricAdmissionRejections     = "fishmesh_gateway_admission_rejections_total"
 	metricInflightRequests        = "fishmesh_gateway_inflight_requests"
+	metricResidentMemory          = "process_resident_memory_bytes"
+	metricHeapAlloc               = "go_memstats_heap_alloc_bytes"
 )
 
 // GatewayMetricsWindow is an optional, low-cardinality snapshot of the Gateway
 // counters observed during one benchmark run. It is deliberately separate from
 // the client completion rate: only this window can support Gateway Little's Law.
 type GatewayMetricsWindow struct {
-	Valid              bool      `json:"valid"`
-	Error              string    `json:"error,omitempty"`
-	StartAt            time.Time `json:"start_at,omitempty"`
-	EndAt              time.Time `json:"end_at,omitempty"`
-	ElapsedMS          float64   `json:"elapsed_ms,omitempty"`
-	Samples            int       `json:"samples,omitempty"`
-	WarmupRequests     int       `json:"warmup_requests,omitempty"`
-	Segments           int       `json:"segments,omitempty"`
-	WarmupExcluded     bool      `json:"warmup_excluded"`
-	AdmittedDelta      float64   `json:"admitted_delta,omitempty"`
-	CompletedDelta     float64   `json:"completed_delta,omitempty"`
-	RejectionsDelta    float64   `json:"admission_rejections_delta,omitempty"`
-	AcceptedRateQPS    float64   `json:"accepted_rate_qps,omitempty"`
-	CompletedRateQPS   float64   `json:"completed_rate_qps,omitempty"`
-	RejectionRateQPS   float64   `json:"admission_rejection_rate_qps,omitempty"`
-	AverageInflight    float64   `json:"average_inflight,omitempty"`
-	LittleLawWaitMS    float64   `json:"little_law_wait_ms,omitempty"`
-	LittleLawWaitValid bool      `json:"little_law_wait_valid"`
+	Valid                    bool      `json:"valid"`
+	Error                    string    `json:"error,omitempty"`
+	StartAt                  time.Time `json:"start_at,omitempty"`
+	EndAt                    time.Time `json:"end_at,omitempty"`
+	ElapsedMS                float64   `json:"elapsed_ms,omitempty"`
+	Samples                  int       `json:"samples,omitempty"`
+	WarmupRequests           int       `json:"warmup_requests,omitempty"`
+	Segments                 int       `json:"segments,omitempty"`
+	WarmupExcluded           bool      `json:"warmup_excluded"`
+	AdmittedDelta            float64   `json:"admitted_delta,omitempty"`
+	CompletedDelta           float64   `json:"completed_delta,omitempty"`
+	RejectionsDelta          float64   `json:"admission_rejections_delta,omitempty"`
+	AcceptedRateQPS          float64   `json:"accepted_rate_qps,omitempty"`
+	CompletedRateQPS         float64   `json:"completed_rate_qps,omitempty"`
+	RejectionRateQPS         float64   `json:"admission_rejection_rate_qps,omitempty"`
+	AverageInflight          float64   `json:"average_inflight,omitempty"`
+	LittleLawWaitMS          float64   `json:"little_law_wait_ms,omitempty"`
+	LittleLawWaitValid       bool      `json:"little_law_wait_valid"`
+	MemoryMetricsValid       bool      `json:"memory_metrics_valid"`
+	ResidentMemoryStartBytes float64   `json:"resident_memory_start_bytes,omitempty"`
+	ResidentMemoryPeakBytes  float64   `json:"resident_memory_peak_bytes,omitempty"`
+	ResidentMemoryEndBytes   float64   `json:"resident_memory_end_bytes,omitempty"`
+	ResidentMemoryDeltaBytes float64   `json:"resident_memory_delta_bytes,omitempty"`
+	HeapAllocStartBytes      float64   `json:"heap_alloc_start_bytes,omitempty"`
+	HeapAllocPeakBytes       float64   `json:"heap_alloc_peak_bytes,omitempty"`
+	HeapAllocEndBytes        float64   `json:"heap_alloc_end_bytes,omitempty"`
+	HeapAllocDeltaBytes      float64   `json:"heap_alloc_delta_bytes,omitempty"`
 }
 
 // GatewayMetricsSnapshot is one point read from the Gateway /metrics endpoint.
@@ -56,6 +67,9 @@ type GatewayMetricsSnapshot struct {
 	CompletedRequestsTotal   float64
 	AdmissionRejectionsTotal float64
 	InflightRequests         float64
+	ResidentMemoryBytes      float64
+	HeapAllocBytes           float64
+	MemoryMetricsValid       bool
 }
 
 // GatewayMetricsReader supplies one Gateway metrics snapshot.
@@ -127,8 +141,17 @@ func (r PrometheusGatewayMetricsReader) Snapshot(ctx context.Context) (GatewayMe
 	if err != nil {
 		return GatewayMetricsSnapshot{}, err
 	}
+	residentMemory, residentMemoryPresent, err := optionalMetricValue(families, metricResidentMemory)
+	if err != nil {
+		return GatewayMetricsSnapshot{}, err
+	}
+	heapAlloc, heapAllocPresent, err := optionalMetricValue(families, metricHeapAlloc)
+	if err != nil {
+		return GatewayMetricsSnapshot{}, err
+	}
 	return GatewayMetricsSnapshot{
 		ObservedAt: time.Now().UTC(), AdmittedRequestsTotal: admitted, CompletedRequestsTotal: completed, AdmissionRejectionsTotal: rejections, InflightRequests: inflight,
+		ResidentMemoryBytes: residentMemory, HeapAllocBytes: heapAlloc, MemoryMetricsValid: residentMemoryPresent && heapAllocPresent,
 	}, nil
 }
 
@@ -145,6 +168,17 @@ func metricValue(families map[string]*dto.MetricFamily, name string) (float64, e
 		return metric.Counter.GetValue(), nil
 	}
 	return 0, fmt.Errorf("gateway metric %q has no gauge or counter value", name)
+}
+
+func optionalMetricValue(families map[string]*dto.MetricFamily, name string) (float64, bool, error) {
+	if families[name] == nil {
+		return 0, false, nil
+	}
+	value, err := metricValue(families, name)
+	if err != nil {
+		return 0, false, err
+	}
+	return value, true, nil
 }
 
 func metricSum(families map[string]*dto.MetricFamily, name string) (float64, error) {
@@ -270,11 +304,57 @@ func gatewayMetricsWindow(samples []GatewayMetricsSnapshot) GatewayMetricsWindow
 		RejectionRateQPS: rejectionsDelta / elapsed.Seconds(),
 		AverageInflight:  averageInflight,
 	}
+	window.observeMemory(samples)
 	if acceptedRate > 0 {
 		window.LittleLawWaitMS = averageInflight / acceptedRate * float64(time.Second/time.Millisecond)
 		window.LittleLawWaitValid = true
 	}
 	return window
+}
+
+func (w *GatewayMetricsWindow) observeMemory(samples []GatewayMetricsSnapshot) {
+	if len(samples) == 0 {
+		return
+	}
+	residentStart, residentEnd := 0.0, 0.0
+	heapStart, heapEnd := 0.0, 0.0
+	residentPeak, heapPeak := 0.0, 0.0
+	residentSeen, heapSeen := 0, 0
+	allValid := true
+	for _, sample := range samples {
+		if !sample.MemoryMetricsValid {
+			allValid = false
+			continue
+		}
+		if residentSeen == 0 {
+			residentStart = sample.ResidentMemoryBytes
+		}
+		residentEnd = sample.ResidentMemoryBytes
+		if sample.ResidentMemoryBytes > residentPeak {
+			residentPeak = sample.ResidentMemoryBytes
+		}
+		residentSeen++
+		if heapSeen == 0 {
+			heapStart = sample.HeapAllocBytes
+		}
+		heapEnd = sample.HeapAllocBytes
+		if sample.HeapAllocBytes > heapPeak {
+			heapPeak = sample.HeapAllocBytes
+		}
+		heapSeen++
+	}
+	if residentSeen == 0 || heapSeen == 0 {
+		return
+	}
+	w.MemoryMetricsValid = allValid
+	w.ResidentMemoryStartBytes = residentStart
+	w.ResidentMemoryPeakBytes = residentPeak
+	w.ResidentMemoryEndBytes = residentEnd
+	w.ResidentMemoryDeltaBytes = residentEnd - residentStart
+	w.HeapAllocStartBytes = heapStart
+	w.HeapAllocPeakBytes = heapPeak
+	w.HeapAllocEndBytes = heapEnd
+	w.HeapAllocDeltaBytes = heapEnd - heapStart
 }
 
 func combineGatewayMetricsWindows(windows []GatewayMetricsWindow) GatewayMetricsWindow {
@@ -284,6 +364,8 @@ func combineGatewayMetricsWindows(windows []GatewayMetricsWindow) GatewayMetrics
 	combined := GatewayMetricsWindow{Valid: true, Segments: len(windows)}
 	activeSeconds := 0.0
 	weightedInflight := 0.0
+	memoryValid := true
+	memoryInitialized := false
 	for _, window := range windows {
 		if !window.Valid {
 			return GatewayMetricsWindow{Error: window.Error, Segments: len(windows)}
@@ -301,6 +383,34 @@ func combineGatewayMetricsWindows(windows []GatewayMetricsWindow) GatewayMetrics
 		combined.AdmittedDelta += window.AdmittedDelta
 		combined.CompletedDelta += window.CompletedDelta
 		combined.RejectionsDelta += window.RejectionsDelta
+		if !window.MemoryMetricsValid {
+			memoryValid = false
+			continue
+		}
+		if !memoryInitialized {
+			combined.ResidentMemoryStartBytes = window.ResidentMemoryStartBytes
+			combined.ResidentMemoryPeakBytes = window.ResidentMemoryPeakBytes
+			combined.ResidentMemoryEndBytes = window.ResidentMemoryEndBytes
+			combined.HeapAllocStartBytes = window.HeapAllocStartBytes
+			combined.HeapAllocPeakBytes = window.HeapAllocPeakBytes
+			combined.HeapAllocEndBytes = window.HeapAllocEndBytes
+			memoryInitialized = true
+		} else {
+			if window.ResidentMemoryPeakBytes > combined.ResidentMemoryPeakBytes {
+				combined.ResidentMemoryPeakBytes = window.ResidentMemoryPeakBytes
+			}
+			if window.HeapAllocPeakBytes > combined.HeapAllocPeakBytes {
+				combined.HeapAllocPeakBytes = window.HeapAllocPeakBytes
+			}
+			if window.StartAt.Before(combined.StartAt) {
+				combined.ResidentMemoryStartBytes = window.ResidentMemoryStartBytes
+				combined.HeapAllocStartBytes = window.HeapAllocStartBytes
+			}
+			if window.EndAt.After(combined.EndAt) {
+				combined.ResidentMemoryEndBytes = window.ResidentMemoryEndBytes
+				combined.HeapAllocEndBytes = window.HeapAllocEndBytes
+			}
+		}
 	}
 	if activeSeconds <= 0 {
 		return GatewayMetricsWindow{Error: "gateway metrics segments have no positive duration", Segments: len(windows)}
@@ -310,6 +420,11 @@ func combineGatewayMetricsWindows(windows []GatewayMetricsWindow) GatewayMetrics
 	combined.CompletedRateQPS = combined.CompletedDelta / activeSeconds
 	combined.RejectionRateQPS = combined.RejectionsDelta / activeSeconds
 	combined.AverageInflight = weightedInflight / activeSeconds
+	combined.MemoryMetricsValid = memoryValid && memoryInitialized
+	if combined.MemoryMetricsValid {
+		combined.ResidentMemoryDeltaBytes = combined.ResidentMemoryEndBytes - combined.ResidentMemoryStartBytes
+		combined.HeapAllocDeltaBytes = combined.HeapAllocEndBytes - combined.HeapAllocStartBytes
+	}
 	if combined.AcceptedRateQPS > 0 {
 		combined.LittleLawWaitMS = combined.AverageInflight / combined.AcceptedRateQPS * float64(time.Second/time.Millisecond)
 		combined.LittleLawWaitValid = true

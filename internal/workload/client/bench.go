@@ -63,6 +63,7 @@ type BenchmarkPlan struct {
 	SkipPromptTokenEvidence bool                `json:"skip_prompt_token_evidence,omitempty"`
 	Treatment               string              `json:"treatment,omitempty"`
 	WorkloadSeed            int64               `json:"workload_seed,omitempty"`
+	RandomizeRequestOrder   bool                `json:"randomize_request_order,omitempty"`
 	ExecutionOrder          []string            `json:"execution_order,omitempty"`
 	CacheMode               CacheMode           `json:"cache_mode,omitempty"`
 	RunNonce                string              `json:"run_nonce,omitempty"`
@@ -98,6 +99,7 @@ type BenchmarkAttempt struct {
 	Pattern              PrefixPattern   `json:"prefix_pattern"`
 	Batch                int             `json:"batch"`
 	Request              int             `json:"request"`
+	InputSequence        int             `json:"input_sequence"`
 	PrefixBytes          int             `json:"prefix_bytes"`
 	PromptBytes          int             `json:"prompt_bytes"`
 	TargetPromptTokens   int             `json:"target_prompt_tokens,omitempty"`
@@ -377,6 +379,9 @@ func (r BenchmarkReport) Markdown() string {
 	if r.GatewayMetrics != nil {
 		if r.GatewayMetrics.Valid {
 			fmt.Fprintf(&output, "- Gateway metrics: admitted %.3f QPS, completed %.3f QPS, admission rejects %.3f QPS, average in-flight %.3f, Little's Law W %.2f ms, warmup requests planned/excluded %d\n", r.GatewayMetrics.AcceptedRateQPS, r.GatewayMetrics.CompletedRateQPS, r.GatewayMetrics.RejectionRateQPS, r.GatewayMetrics.AverageInflight, r.GatewayMetrics.LittleLawWaitMS, r.GatewayMetrics.WarmupRequests)
+			if r.GatewayMetrics.MemoryMetricsValid {
+				fmt.Fprintf(&output, "- Gateway memory: RSS start/peak/end %.2f/%.2f/%.2f MiB (delta %.2f MiB), Go heap start/peak/end %.2f/%.2f/%.2f MiB (delta %.2f MiB)\n", bytesToMiB(r.GatewayMetrics.ResidentMemoryStartBytes), bytesToMiB(r.GatewayMetrics.ResidentMemoryPeakBytes), bytesToMiB(r.GatewayMetrics.ResidentMemoryEndBytes), bytesToMiB(r.GatewayMetrics.ResidentMemoryDeltaBytes), bytesToMiB(r.GatewayMetrics.HeapAllocStartBytes), bytesToMiB(r.GatewayMetrics.HeapAllocPeakBytes), bytesToMiB(r.GatewayMetrics.HeapAllocEndBytes), bytesToMiB(r.GatewayMetrics.HeapAllocDeltaBytes))
+			}
 		} else {
 			fmt.Fprintf(&output, "- Gateway metrics: unavailable (%s)\n", r.GatewayMetrics.Error)
 		}
@@ -391,4 +396,8 @@ func (r BenchmarkReport) Markdown() string {
 	}
 	output.WriteString("\nUnavailable KV status is reported separately from an available zero-token cache miss. Prompt text and API credentials are not included.\n")
 	return output.String()
+}
+
+func bytesToMiB(value float64) float64 {
+	return value / (1024 * 1024)
 }

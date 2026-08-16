@@ -61,6 +61,8 @@ func (s *eventStream) replayOnce(parent context.Context) {
 	switch s.reason {
 	case ReasonReplayNotConfirmed:
 		s.reason = ReasonNone
+	case ReasonSequenceReset:
+		s.reason = ReasonNone
 	case ReasonSequenceGap:
 		if s.hasSeq && s.lastSeq >= s.gapUntil {
 			s.reason = ReasonNone

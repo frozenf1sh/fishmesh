@@ -59,6 +59,14 @@ func (o kvEventMetricsObserver) ObserveKVEvent(observation kvcache.EventObservat
 	o.metrics.ObserveKVEvent(string(observation.Backend), observation.Replayed, observation.PublishToApply)
 }
 
+func (o kvEventMetricsObserver) ObserveSequenceReset(observation kvcache.SequenceResetObservation) {
+	o.metrics.ObserveKVSequenceReset(string(observation.Backend), observation.Replayed)
+}
+
+func (o kvEventMetricsObserver) ObserveKVEventError(observation kvcache.EventErrorObservation) {
+	o.metrics.ObserveKVEventError(string(observation.Backend), string(observation.Reason))
+}
+
 // buildRuntime 是 Gateway 的唯一实现装配点。
 //
 // 它按依赖方向从叶子能力开始创建：先 discovery/observation，再 strategy/circuit/

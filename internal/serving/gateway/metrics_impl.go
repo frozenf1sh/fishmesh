@@ -70,6 +70,8 @@ type Metrics struct {
 	kvCacheLastSequence       *prometheus.GaugeVec
 	kvCacheAppliedBatches     *prometheus.GaugeVec
 	kvCacheReplayBatches      *prometheus.GaugeVec
+	kvCacheSequenceResets     *prometheus.CounterVec
+	kvEventErrors             *prometheus.CounterVec
 	kvCacheStatus             *prometheus.GaugeVec
 	kvEventPublishToApply     *prometheus.HistogramVec
 	kvAwareRequests           *prometheus.CounterVec
@@ -85,6 +87,7 @@ type Metrics struct {
 	kvCacheMu                 sync.Mutex
 	kvCacheIDs                map[string]struct{}
 	kvCacheStatuses           map[string]string
+	kvCacheErrorReasons       map[string]map[string]struct{}
 	observationMu             sync.Mutex
 	observationIDs            map[string]struct{}
 	identityLabels            map[string][2]string
@@ -107,11 +110,12 @@ type Metrics struct {
 // observation、KV cache 和预测影子结果分组初始化。
 func NewMetrics() *Metrics {
 	m := &Metrics{
-		registry:        prometheus.NewRegistry(),
-		observationIDs:  make(map[string]struct{}),
-		identityLabels:  make(map[string][2]string),
-		kvCacheIDs:      make(map[string]struct{}),
-		kvCacheStatuses: make(map[string]string),
+		registry:            prometheus.NewRegistry(),
+		observationIDs:      make(map[string]struct{}),
+		identityLabels:      make(map[string][2]string),
+		kvCacheIDs:          make(map[string]struct{}),
+		kvCacheStatuses:     make(map[string]string),
+		kvCacheErrorReasons: make(map[string]map[string]struct{}),
 	}
 	m.initializeRequestMetrics()
 	m.initializeRoutingMetrics()
@@ -298,6 +302,12 @@ func (m *Metrics) initializeKVCacheMetrics() {
 	m.kvCacheReplayBatches = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: metricNamespace, Subsystem: metricSubsystem, Name: metricKVCacheReplayBatches, Help: "KV event batches applied through replay.",
 	}, []string{labelBackendID})
+	m.kvCacheSequenceResets = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: metricNamespace, Subsystem: metricSubsystem, Name: metricKVCacheSequenceResets, Help: "Detected vLLM KV event sequence resets by backend and source.",
+	}, []string{labelBackendID, labelKVEventSource})
+	m.kvEventErrors = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: metricNamespace, Subsystem: metricSubsystem, Name: metricKVEventErrors, Help: "KV event apply failures by backend and stable reason.",
+	}, []string{labelBackendID, labelKVCacheStatus})
 	m.kvCacheStatus = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: metricNamespace, Subsystem: metricSubsystem, Name: metricKVCacheStatus, Help: "Current typed KV cache state reason (one active reason has value 1).",
 	}, []string{labelBackendID, labelKVCacheStatus})
@@ -318,7 +328,7 @@ func (m *Metrics) initializeKVCacheMetrics() {
 		Namespace: metricNamespace, Subsystem: metricSubsystem, Name: metricKVAwareCachedPrefixTokens,
 		Help: "Cached prefix tokens on an KV-aware selection with available KV signal; zero is a real cache miss, not unavailable state.", Buckets: kvAwareCachedPrefixTokenBuckets(),
 	})
-	m.registry.MustRegister(m.kvCacheValid, m.kvCacheFreshness, m.kvCacheLastSequence, m.kvCacheAppliedBatches, m.kvCacheReplayBatches, m.kvCacheStatus, m.kvEventPublishToApply, m.kvAwareRequests, m.kvAwareDegradations, m.kvAwareBypasses, m.kvAwareCachedPrefix)
+	m.registry.MustRegister(m.kvCacheValid, m.kvCacheFreshness, m.kvCacheLastSequence, m.kvCacheAppliedBatches, m.kvCacheReplayBatches, m.kvCacheSequenceResets, m.kvEventErrors, m.kvCacheStatus, m.kvEventPublishToApply, m.kvAwareRequests, m.kvAwareDegradations, m.kvAwareBypasses, m.kvAwareCachedPrefix)
 }
 
 // updateBackendObservations 只使用 backend ID 等有界标签，不写入请求 routing key。
@@ -485,8 +495,14 @@ func (m *Metrics) deleteKVCache(backendID string) {
 	m.kvCacheLastSequence.DeleteLabelValues(backendID)
 	m.kvCacheAppliedBatches.DeleteLabelValues(backendID)
 	m.kvCacheReplayBatches.DeleteLabelValues(backendID)
+	m.kvCacheSequenceResets.DeleteLabelValues(backendID, kvEventSourceLive)
+	m.kvCacheSequenceResets.DeleteLabelValues(backendID, kvEventSourceReplay)
 	m.kvEventPublishToApply.DeleteLabelValues(backendID, kvEventSourceLive)
 	m.kvEventPublishToApply.DeleteLabelValues(backendID, kvEventSourceReplay)
+	for reason := range m.kvCacheErrorReasons[backendID] {
+		m.kvEventErrors.DeleteLabelValues(backendID, reason)
+	}
+	delete(m.kvCacheErrorReasons, backendID)
 	if status, exists := m.kvCacheStatuses[backendID]; exists {
 		m.kvCacheStatus.DeleteLabelValues(backendID, status)
 		delete(m.kvCacheStatuses, backendID)
@@ -674,6 +690,26 @@ func (m *Metrics) ObserveKVEvent(backendID string, replayed bool, publishToApply
 		source = kvEventSourceReplay
 	}
 	m.kvEventPublishToApply.WithLabelValues(backendID, source).Observe(publishToApply.Seconds())
+}
+
+// ObserveKVSequenceReset 记录同一 Pod 实例的 sequence 回绕；source 仅有 live/replay 两个固定值。
+func (m *Metrics) ObserveKVSequenceReset(backendID string, replayed bool) {
+	source := kvEventSourceLive
+	if replayed {
+		source = kvEventSourceReplay
+	}
+	m.kvCacheSequenceResets.WithLabelValues(backendID, source).Inc()
+}
+
+// ObserveKVEventError 记录事件 apply 失败，尤其用于把 engine/request key 漂移从静默错误变成告警输入。
+func (m *Metrics) ObserveKVEventError(backendID, reason string) {
+	m.kvCacheMu.Lock()
+	defer m.kvCacheMu.Unlock()
+	m.kvEventErrors.WithLabelValues(backendID, reason).Inc()
+	if m.kvCacheErrorReasons[backendID] == nil {
+		m.kvCacheErrorReasons[backendID] = make(map[string]struct{})
+	}
+	m.kvCacheErrorReasons[backendID][reason] = struct{}{}
 }
 
 // observeKVEvent 保留内部调用点的统一命名，并转发到导出的事件观测入口。

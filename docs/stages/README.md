@@ -73,5 +73,10 @@
 | 64 | 真实容量、Admission 与路由收益验收 | 完成真实 A0/A1/A2、B1/B2 与长连接对照；确认 active 背压边界、KV locality，runtime 观测仍缺 Pod 维度 |
 | 65 | Admission 反馈修正与 KV 短上下文旁路 | 拆分 soft/hard rejection，阻断控制器自反馈降级；增加可观测的短上下文 KV lookup bypass |
 | 66 | R6I-24 Short-context threshold calibration | 用实际 token 校准阈值，完成 512/1024/2048/3072 sweep 与 threshold 576 双轮 repeat；确定 profile 固定策略 |
+| 67 | R6I-25 大规模 KV-aware/LB 性能实验 | 两侧各 1536 路由请求与 544 admission 请求；输出 TTFT、E2E、QPS、Little’s Law、KV 路径、动态 target/action/reason 与 runtime 缺口报告 |
+| 68 | R6I-26 长上下文低并发与索引内存实验 | 2048/3072/3584 长上下文、并发 4、两轮 paired compare；增加 RSS/Go heap 内存窗口并明确 hash-only 统计边界 |
+| 69 | R6I-27 KV 状态一致性修补 | sequence 回绕清理与 freshness 失效、engine/request key 校验、查询 hash 链短路和一致性指标 |
+| 70 | R6I-27 滚动重启与随机输入长上下文复验 | vLLM/Gateway 双层滚动重启、强随机输入序列、3072/3584 长上下文快速 A/B 与缓存隔离证据 |
+| 71 | R6I-28/R6I-29 R6H 高负载滚动重启复验 | 复用旧 R6H 高负载矩阵；active/off 两组均完成双层缓存隔离，P95 分别 +10.06%/+7.69%，未复现旧 mixed 长尾收益 |
 
 每个阶段完成后都会补充独立中文说明，并在文末明确下一阶段边界。

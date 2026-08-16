@@ -142,6 +142,41 @@ func TestEventStreamRecoversLiveGapThroughReplay(t *testing.T) {
 	}
 }
 
+func TestEventStreamDetectsSequenceResetAndClearsFreshness(t *testing.T) {
+	now := time.Date(2026, 8, 16, 10, 0, 0, 0, time.UTC)
+	instance := testInstance("backend-a", "uid-a", "10.0.0.1:8000")
+	store := &fakeStore{}
+	observer := &sequenceResetObserver{}
+	stream := newEventStream(context.Background(), testConfig(), instance, &replaySource{}, store, func() time.Time { return now }, observer)
+	stream.reason = ReasonNone
+
+	for sequence := uint64(0); sequence <= 4; sequence++ {
+		if err := stream.accept(context.Background(), testEvent(instance, sequence), false); err != nil {
+			t.Fatalf("accept sequence %d: %v", sequence, err)
+		}
+	}
+	stream.lastReplayAt = now
+	if !stream.Snapshot().Valid {
+		t.Fatal("pre-reset stream should be valid")
+	}
+
+	if err := stream.accept(context.Background(), testEvent(instance, 0), false); err != nil {
+		t.Fatalf("accept reset sequence: %v", err)
+	}
+	state := stream.Snapshot()
+	if !state.HasSequence || state.LastSequence != 0 || state.Valid || state.Reason != ReasonSequenceReset || !state.LastReplayAt.IsZero() {
+		t.Fatalf("sequence reset did not rebuild invalid state: %+v", state)
+	}
+	if len(store.cleared) != 1 || observer.previous != 4 || observer.sequence != 0 {
+		t.Fatalf("sequence reset cleanup/observation mismatch: cleared=%v observer=%+v", store.cleared, observer)
+	}
+
+	stream.replayOnce(context.Background())
+	if state := stream.Snapshot(); !state.Valid || state.Reason != ReasonNone {
+		t.Fatalf("replay heartbeat did not confirm reset generation: %+v", state)
+	}
+}
+
 func TestEventStreamRejectsUnrecoverableReplayGap(t *testing.T) {
 	config := testConfig()
 	instance := testInstance("backend-a", "uid-a", "10.0.0.1:8000")
@@ -210,6 +245,18 @@ type eventObserverFunc func(EventObservation)
 
 func (f eventObserverFunc) ObserveKVEvent(observation EventObservation) {
 	f(observation)
+}
+
+type sequenceResetObserver struct {
+	previous uint64
+	sequence uint64
+}
+
+func (*sequenceResetObserver) ObserveKVEvent(EventObservation) {}
+
+func (o *sequenceResetObserver) ObserveSequenceReset(observation SequenceResetObservation) {
+	o.previous = observation.PreviousSequence
+	o.sequence = observation.Sequence
 }
 
 func waitForState(t *testing.T, service *service, backendID string, accepted func(InstanceState) bool) {

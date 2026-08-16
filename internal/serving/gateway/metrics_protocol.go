@@ -47,6 +47,8 @@ const (
 	metricKVCacheLastSequence            = "kv_cache_last_sequence"
 	metricKVCacheAppliedBatches          = "kv_cache_applied_batches"
 	metricKVCacheReplayBatches           = "kv_cache_replay_batches"
+	metricKVCacheSequenceResets          = "kv_cache_sequence_resets_total"
+	metricKVEventErrors                  = "kv_event_errors_total"
 	metricKVCacheStatus                  = "kv_cache_status"
 	metricKVEventPublishToApplySeconds   = "kv_event_publish_to_apply_seconds"
 	metricKVAwareRequestsTotal           = "kv_aware_requests_total"

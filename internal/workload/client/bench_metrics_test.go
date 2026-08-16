@@ -14,15 +14,18 @@ import (
 func TestGatewayMetricsWindowComputesRatesAndLittleLaw(t *testing.T) {
 	start := time.Unix(10, 0)
 	window := gatewayMetricsWindow([]GatewayMetricsSnapshot{
-		{ObservedAt: start, AdmittedRequestsTotal: 20, CompletedRequestsTotal: 30, InflightRequests: 0},
-		{ObservedAt: start.Add(time.Second), AdmittedRequestsTotal: 25, CompletedRequestsTotal: 34, InflightRequests: 4},
-		{ObservedAt: start.Add(2 * time.Second), AdmittedRequestsTotal: 30, CompletedRequestsTotal: 38, InflightRequests: 2},
+		{ObservedAt: start, AdmittedRequestsTotal: 20, CompletedRequestsTotal: 30, InflightRequests: 0, ResidentMemoryBytes: 30, HeapAllocBytes: 10, MemoryMetricsValid: true},
+		{ObservedAt: start.Add(time.Second), AdmittedRequestsTotal: 25, CompletedRequestsTotal: 34, InflightRequests: 4, ResidentMemoryBytes: 40, HeapAllocBytes: 18, MemoryMetricsValid: true},
+		{ObservedAt: start.Add(2 * time.Second), AdmittedRequestsTotal: 30, CompletedRequestsTotal: 38, InflightRequests: 2, ResidentMemoryBytes: 35, HeapAllocBytes: 15, MemoryMetricsValid: true},
 	})
 	if !window.Valid || window.Samples != 3 || window.AdmittedDelta != 10 || window.CompletedDelta != 8 {
 		t.Fatalf("unexpected gateway window: %+v", window)
 	}
 	if window.AcceptedRateQPS != 5 || window.CompletedRateQPS != 4 || window.AverageInflight != 2.5 || window.LittleLawWaitMS != 500 || !window.LittleLawWaitValid {
 		t.Fatalf("unexpected gateway rates: %+v", window)
+	}
+	if !window.MemoryMetricsValid || window.ResidentMemoryStartBytes != 30 || window.ResidentMemoryPeakBytes != 40 || window.ResidentMemoryEndBytes != 35 || window.ResidentMemoryDeltaBytes != 5 || window.HeapAllocPeakBytes != 18 {
+		t.Fatalf("unexpected gateway memory: %+v", window)
 	}
 }
 
@@ -37,6 +40,10 @@ fishmesh_gateway_requests_total{method="POST",status="503"} 2
 fishmesh_gateway_admission_rejections_total 1
 # TYPE fishmesh_gateway_inflight_requests gauge
 fishmesh_gateway_inflight_requests 3
+# TYPE process_resident_memory_bytes gauge
+process_resident_memory_bytes 33554432
+# TYPE go_memstats_heap_alloc_bytes gauge
+go_memstats_heap_alloc_bytes 4194304
 `))
 	}))
 	defer server.Close()
@@ -48,7 +55,7 @@ fishmesh_gateway_inflight_requests 3
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.AdmittedRequestsTotal != 10 || snapshot.CompletedRequestsTotal != 9 || snapshot.AdmissionRejectionsTotal != 1 || snapshot.InflightRequests != 3 || snapshot.ObservedAt.IsZero() {
+	if snapshot.AdmittedRequestsTotal != 10 || snapshot.CompletedRequestsTotal != 9 || snapshot.AdmissionRejectionsTotal != 1 || snapshot.InflightRequests != 3 || snapshot.ResidentMemoryBytes != 33554432 || snapshot.HeapAllocBytes != 4194304 || !snapshot.MemoryMetricsValid || snapshot.ObservedAt.IsZero() {
 		t.Fatalf("unexpected snapshot: %+v", snapshot)
 	}
 }

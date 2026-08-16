@@ -7,7 +7,9 @@ import (
 
 	"github.com/frozenf1sh/fishmesh/internal/serving/backend"
 
+	"github.com/llm-d/llm-d-kv-cache/pkg/kvcache/kvblock"
 	"github.com/llm-d/llm-d-kv-cache/pkg/kvevents"
+	"k8s.io/apimachinery/pkg/util/sets"
 )
 
 func TestVLLMStoreMatchesCacheSaltAndConsumesRemoval(t *testing.T) {
@@ -139,6 +141,81 @@ func TestVLLMStoreRejectsNonCanonicalGroupSemantics(t *testing.T) {
 		})
 	}
 }
+
+func TestVLLMStoreRejectsExistingEngineRequestKeyMismatch(t *testing.T) {
+	store, err := newVLLMStore(testConfig())
+	if err != nil {
+		t.Fatalf("create store: %v", err)
+	}
+	first := &kvevents.BlockStoredEvent{
+		BlockHashes: []uint64{101}, Tokens: sequentialTokens(16), BlockSize: 16, DeviceTier: "gpu",
+	}
+	if err := store.applyOne(context.Background(), "pod-a", "qwen", first); err != nil {
+		t.Fatalf("apply first stored event: %v", err)
+	}
+	secondTokens := sequentialTokens(16)
+	secondTokens[0]++
+	err = store.applyOne(context.Background(), "pod-a", "qwen", &kvevents.BlockStoredEvent{
+		BlockHashes: []uint64{101}, Tokens: secondTokens, BlockSize: 16, DeviceTier: "gpu",
+	})
+	var fault *eventFault
+	if !errors.As(err, &fault) || fault.reason != ReasonEngineRequestKeyMismatch {
+		t.Fatalf("existing engine/request mismatch was not rejected: %T %v", err, err)
+	}
+}
+
+func TestVLLMStoreStopsHashingAfterFirstQueryMiss(t *testing.T) {
+	processor := &recordingTokenProcessor{blockSize: 2}
+	index := &recordingIndex{hitKeys: map[kvblock.BlockHash]bool{1: true}}
+	store := &vllmStore{blockSize: 2, tokenProcessor: processor, index: index}
+
+	keys, keyToPods, err := store.lookupRequestKeysUntilMiss(context.Background(), []uint32{1, 2, 3, 4, 5, 6}, "qwen", "", []string{"pod-a"})
+	if err != nil {
+		t.Fatalf("lookup request keys: %v", err)
+	}
+	if processor.calls != 2 || len(index.lookups) != 2 || len(keys) != 1 || len(keyToPods) != 1 {
+		t.Fatalf("query hash chain was not short-circuited: calls=%d lookups=%d keys=%v keyToPods=%v", processor.calls, len(index.lookups), keys, keyToPods)
+	}
+}
+
+type recordingTokenProcessor struct {
+	blockSize int
+	calls     int
+}
+
+func (p *recordingTokenProcessor) TokensToKVBlockKeys(_ kvblock.BlockHash, _ []uint32, _ string, _ []*kvblock.BlockExtraFeatures) ([]kvblock.BlockHash, error) {
+	p.calls++
+	return []kvblock.BlockHash{kvblock.BlockHash(p.calls)}, nil
+}
+
+func (p *recordingTokenProcessor) BlockSize() int { return p.blockSize }
+
+type recordingIndex struct {
+	hitKeys map[kvblock.BlockHash]bool
+	lookups [][]kvblock.BlockHash
+}
+
+func (i *recordingIndex) Lookup(_ context.Context, keys []kvblock.BlockHash, _ sets.Set[string]) (map[kvblock.BlockHash][]kvblock.PodEntry, error) {
+	i.lookups = append(i.lookups, append([]kvblock.BlockHash(nil), keys...))
+	if len(keys) == 1 && i.hitKeys[keys[0]] {
+		return map[kvblock.BlockHash][]kvblock.PodEntry{keys[0]: {{PodIdentifier: "pod-a"}}}, nil
+	}
+	return map[kvblock.BlockHash][]kvblock.PodEntry{}, nil
+}
+
+func (*recordingIndex) Add(context.Context, []kvblock.BlockHash, []kvblock.BlockHash, []kvblock.PodEntry) error {
+	return nil
+}
+
+func (*recordingIndex) Evict(context.Context, kvblock.BlockHash, kvblock.KeyType, []kvblock.PodEntry) error {
+	return nil
+}
+
+func (*recordingIndex) GetRequestKey(context.Context, kvblock.BlockHash) (kvblock.BlockHash, error) {
+	return kvblock.EmptyBlockHash, errors.New("not found")
+}
+
+func (*recordingIndex) Clear(context.Context, string) error { return nil }
 
 func sequentialTokens(count int) []uint32 {
 	tokens := make([]uint32, count)
