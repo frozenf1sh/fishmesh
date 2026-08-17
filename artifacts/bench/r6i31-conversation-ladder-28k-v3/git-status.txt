@@ -1,0 +1,42 @@
+ M README.md
+ M README_CN.md
+ M deploy/baseline/README.md
+ M deploy/baseline/base/gateway-config.yaml
+ M deploy/experiments/r6i22-final/admission-active/kustomization.yaml
+ M deploy/experiments/r6i22-final/admission-shadow/kustomization.yaml
+ M deploy/lite-kv-aware/README.md
+ M docs/notes/project-status.md
+ M docs/notes/runbook.md
+ M docs/stages/README.md
+ M internal/serving/config/config_test.go
+ M internal/serving/config/defaults.go
+ M internal/serving/config/environment_impl.go
+ M internal/serving/gateway/metrics_impl_test.go
+ M internal/serving/gateway/request_body_impl_test.go
+ M internal/serving/gateway/validation_test.go
+ M internal/serving/requestpath/kv_aware_input_impl_test.go
+ M internal/serving/requestpath/requestpath_impl.go
+ M internal/serving/routing/load_balanced_impl.go
+ M internal/serving/routing/routing.go
+ M internal/serving/routing/routing_test.go
+ M internal/serving/routing/validation_test.go
+ M internal/workload/client/bench.go
+ M internal/workload/client/bench_impl.go
+ M internal/workload/client/bench_impl_test.go
+ M scripts/switch-routing-mode.sh
+?? configs/r6i30-routing-triad.json
+?? configs/r6i31-conversation-ladder-28k.json
+?? deploy/experiments/r6i22-final/load-aware/
+?? deploy/experiments/r6i22-final/round-robin/
+?? deploy/experiments/r6i30-routing-triad/
+?? deploy/experiments/r6i31-conversation-ladder/
+?? docs/experiments/2026-08-16-r6i30-routing-triad-plan.md
+?? docs/notes/agent-prompts-r6b6-onwards.md
+?? docs/notes/interview-materials-20260812.md
+?? docs/notes/kvcache-package-guide.md
+?? docs/notes/plan-adjustment-20260811.md
+?? docs/notes/r6i30-routing-triad-test-agent-prompt.md
+?? "docs/stages/72-R6I30\344\270\211\350\207\202\350\267\257\347\224\261\346\266\210\350\236\215\344\270\216\345\221\275\345\220\215\346\224\266\345\217\243.md"
+?? internal/serving/routing/load_aware_impl.go
+?? internal/serving/routing/round_robin_impl.go
+?? scripts/run-r6i31-conversation-ladder.sh

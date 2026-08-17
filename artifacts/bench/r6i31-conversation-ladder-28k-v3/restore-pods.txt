@@ -1,0 +1,10 @@
+NAME                               READY   UP-TO-DATE   AVAILABLE   AGE   CONTAINERS   IMAGES                                          SELECTOR
+deployment.apps/fishmesh-gateway   1/1     1            1           10d   gateway      fishmesh-gateway:r6i31-4a7c538-20260816230146   app.kubernetes.io/name=fishmesh-gateway
+deployment.apps/qwen-vllm          2/2     2            2           10d   vllm         docker.io/vllm/vllm-openai:v0.23.0              app.kubernetes.io/name=qwen-vllm
+
+NAME                                       READY   STATUS    RESTARTS      AGE     IP            NODE                     NOMINATED NODE   READINESS GATES
+pod/fishmesh-gateway-dc6d5bf86-zms2p       1/1     Running   0             2m3s    10.42.1.186   fishmesh-gpu             <none>           <none>
+pod/fishmesh-grafana-56d6b5db86-6dx28      1/1     Running   1 (44h ago)   3d12h   10.42.0.31    fishmesh-control-plane   <none>           <none>
+pod/fishmesh-prometheus-7dbcc67cf8-tm558   1/1     Running   1 (44h ago)   3d21h   10.42.0.32    fishmesh-control-plane   <none>           <none>
+pod/qwen-vllm-7bc8846d88-t99kd             1/1     Running   0             2m3s    10.42.1.187   fishmesh-gpu             <none>           <none>
+pod/qwen-vllm-7bc8846d88-wkqlt             1/1     Running   0             61s     10.42.1.188   fishmesh-gpu             <none>           <none>

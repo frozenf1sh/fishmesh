@@ -2,7 +2,7 @@
 
 最后项目状态更新时间：2026-08-16；集群最后真实验收时间：2026-08-16。仓库为
 `frozenf1sh/fishmesh`（private），当前 `main` 分支
-包含可信 serving baseline、两条维护中的 routing 主线（`load-balanced`、`kv-aware`；
+包含可信 serving baseline、两条维护中的 routing 主线（`load-aware`、`kv-aware`；
 `session-key` 仅为 frozen compatibility mode，对应策略标识仍为 `load-balanced-v1`、`session-key-v1`、
 `kv-aware-v1`）、request-path reliability
 和工程优先的项目章程。
@@ -11,10 +11,11 @@ Serving 默认配置已收口到 `internal/serving/config.DefaultConfig()`：环
 standalone 产品默认，domain 包不再拥有生产 `DefaultConfig` 或对关键业务零值静默补值。运行时依赖
 （clock、HTTP client）以及 Kubernetes 协议端口等 adapter 级兜底仍保持在实现边界内。
 
-本次 routing 收敛已完成：普通负载均衡使用 `load-balanced`，真实 KV locality 与已知负载联合选路使用
-`kv-aware`；客户端传入 key 的有界粘性 `session-key` 仅作为冻结兼容模式保留。纯 prefix hash 和独立
-Service 选路不再是可配置策略；Service 只保留为 discovery/策略失败时的最终 fallback。请求头、
-环境变量、指标、llm-d 参数、部署 overlay 和文档均已同步到这组三策略命名。
+本次 routing 收敛已完成：`round-robin` 是无调度信号的请求级消融，`load-balanced` 只看 Gateway
+local in-flight，`load-aware` 才是消费完整 vLLM queue/running 的普通默认路径；真实 KV locality 与已知
+负载联合选路使用 `kv-aware`。客户端传入 key 的有界粘性 `session-key` 仅作为冻结兼容模式保留。Service
+只保留为 discovery/策略失败时的最终 fallback；KV 信号不可用时依次降级到 load-aware 与 local
+load-balanced。请求头、环境变量、指标、llm-d 参数、部署 overlay 和文档均已同步到该契约。
 
 request-path reliability、Serving Domain R1–R4、无 GPU simulator 基础、R5C llm-d 本地集成和
 R6A 真实 KV 信号门禁、R6B-1 至 R6B-6、R6C、R6D 与 R6D2 已完成：真实 Render、同步 KV index、pure routing、
@@ -29,7 +30,7 @@ Service/KV-aware 对照：KV-aware P50 TTFT 分别低 21.89%/20.65%，但绝对�
 routing overhead，故没有声称 prefix breakpoint。R5D 标准 Gateway/EPP 部署不取消，但后移到 Lite KV-aware MVP 之后。
 方向基准见 `docs/design/project-charter.md`，新决策见 `docs/design/decisions/002-lite-kv-aware-routing.md`。
 
-仓库基础配置默认为 `load-balanced`；`X-FishMesh-Session-Key` 只在显式 `session-key` 模式下作为
+仓库基础配置默认为 `load-aware`；`X-FishMesh-Session-Key` 只在显式 `session-key` 模式下作为
 客户端提示。历史参考集群在 R6D2 收尾后曾恢复 `deploy/experiments/r6d-session-key`，本次已为 R6H-3
 临时切换到 `deploy/experiments/long-context-kv-aware`；压测结束后按证据恢复基线。KV-aware 模式通过
 EndpointSlice/Pod UID 建立实例、订阅 KVEvents/replay；unknown/stale 永不伪装成零命中。
@@ -521,6 +522,23 @@ KV 784/784 available，rejection 为 0。active/off 方向一致，admission 不
 条件下复现。旧 R6H 使用 `r6i1` 镜像且 A/B 期间不重启，因此仍需 old/current image × warm/reset 2×2
 消融才能完成因果归因。报告见 `docs/experiments/2026-08-16-r6i28-r6h-rolling.md`，结束后恢复
 load-balanced/admission-off 基线。
+
+R6I-30 已完成代码与实验契约收口，尚未运行：`round-robin` 是无调度信号的请求级消融，`load-balanced`
+恢复为 local in-flight 层，`load-aware` 才是读取完整 vLLM queue/running 的默认普通路由；KV 信号不可用时
+依次使用 load-aware、再 local load-balanced，并在 policy 中留下实际降级 provenance。默认 admission tuning
+保持 off：R6I-25 尚未证明双向稳定收敛。下一轮只运行 3072 shared/mixed/random 的 RR/LA/KV 双 replicate
+三臂消融，采集 vLLM prefix-cache metrics；计划和测试 prompt 分别在
+`docs/experiments/2026-08-16-r6i30-routing-triad-plan.md` 与
+`docs/notes/r6i30-routing-triad-test-agent-prompt.md`。
+
+R6I-31 已完成真实逐轮增长会话验证：三位用户各连续 7 轮，实际 prompt 从 6,837 token 增长至 31,479 token；
+每轮均携带真实上一轮 assistant 输出。每个 arm 强制新的 vLLM/Gateway Deployment generation，两个 vLLM Ready
+后才开始，KV arm 还要求双 backend replay valid。LA→KV、KV→LA 双 replicate 均 21/21 成功；pooled TTFT P95
+为 `3973.91 -> 1771.68 ms`（`-55.42%`，bootstrap CI `[-67.28%, -31.52%]`），KV 42/42 available、末轮每请求
+27,376 cached-prefix tokens。此结论只 promotion 到低并发、持续长会话且 KV locality 可持续的 profile；默认普通
+路径仍为 load-aware，信号不可用降级到 load-aware/local load-balanced。详见
+`docs/experiments/2026-08-16-r6i31-conversation-ladder-32k.md`；结束后已恢复 `load-aware + admission off + 4096`
+基线。
 
 ## 下一步待办
 

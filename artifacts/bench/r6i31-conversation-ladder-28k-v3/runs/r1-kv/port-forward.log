@@ -1,0 +1,23 @@
+Forwarding from 127.0.0.1:28131 -> 8080
+Forwarding from [::1]:28131 -> 8080
+Handling connection for 28131
+Handling connection for 28131
+Handling connection for 28131
+Handling connection for 28131
+Handling connection for 28131
+Handling connection for 28131
+Handling connection for 28131
+Handling connection for 28131
+Handling connection for 28131
+Handling connection for 28131
+Handling connection for 28131
+Handling connection for 28131
+Handling connection for 28131
+E0816 23:22:03.276211   63097 portforward.go:502] "Unhandled Error" err="error copying from local connection to remote stream: writeto tcp4 127.0.0.1:28131->127.0.0.1:55991: read tcp4 127.0.0.1:28131->127.0.0.1:55991: read: connection reset by peer"
+Handling connection for 28131
+Handling connection for 28131
+Handling connection for 28131
+Handling connection for 28131
+Handling connection for 28131
+Handling connection for 28131
+Handling connection for 28131

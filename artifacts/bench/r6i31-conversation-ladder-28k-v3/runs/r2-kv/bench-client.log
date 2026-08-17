@@ -1,0 +1,1 @@
+run_id=r2-kv output_dir=/Users/frozenf1sh/prj/fishmesh/artifacts/bench/r6i31-conversation-ladder-28k-v3/runs/r2-kv/bench completed=21 succeeded=21 failed=0 ttft_p50=1150.52ms ttft_p95=1771.68ms report=/Users/frozenf1sh/prj/fishmesh/artifacts/bench/r6i31-conversation-ladder-28k-v3/runs/r2-kv/bench/report.md

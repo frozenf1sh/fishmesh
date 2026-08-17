@@ -1,0 +1,440 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  labels:
+    app.kubernetes.io/component: lite-kv-aware
+    app.kubernetes.io/part-of: fishmesh
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/enforce: baseline
+  name: kubellm
+---
+apiVersion: v1
+automountServiceAccountToken: true
+kind: ServiceAccount
+metadata:
+  annotations:
+    fishmesh.io/permission-scope: namespace-scoped-read-only-endpointslices-and-pods
+  labels:
+    app.kubernetes.io/component: lite-kv-aware
+    app.kubernetes.io/name: fishmesh-gateway
+    app.kubernetes.io/part-of: fishmesh
+  name: fishmesh-gateway
+  namespace: kubellm
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  annotations:
+    fishmesh.io/permission-scope: namespace-scoped-read-only-endpointslice-and-pod-observation
+  labels:
+    app.kubernetes.io/component: lite-kv-aware
+    app.kubernetes.io/part-of: fishmesh
+  name: fishmesh-gateway-lite-kv-aware-reader
+  namespace: kubellm
+rules:
+- apiGroups:
+  - discovery.k8s.io
+  resources:
+  - endpointslices
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  verbs:
+  - get
+  - list
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  labels:
+    app.kubernetes.io/component: lite-kv-aware
+    app.kubernetes.io/part-of: fishmesh
+  name: fishmesh-gateway-lite-kv-aware-reader
+  namespace: kubellm
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: fishmesh-gateway-lite-kv-aware-reader
+subjects:
+- kind: ServiceAccount
+  name: fishmesh-gateway
+  namespace: kubellm
+---
+apiVersion: v1
+data:
+  FISHMESH_ADMISSION_INITIAL_TARGET: "16"
+  FISHMESH_ADMISSION_MAX_TARGET: "16"
+  FISHMESH_ADMISSION_MIN_TARGET: "8"
+  FISHMESH_ADMISSION_TARGET_STEP: "8"
+  FISHMESH_ADMISSION_TUNING_COOLDOWN: 5s
+  FISHMESH_ADMISSION_TUNING_INTERVAL: 2s
+  FISHMESH_ADMISSION_TUNING_MODE: "off"
+  FISHMESH_BACKEND_ENDPOINTS: ""
+  FISHMESH_BACKEND_OBSERVATION_INTERVAL: 500ms
+  FISHMESH_BACKEND_OBSERVATION_MAX_AGE: 2s
+  FISHMESH_BACKEND_OBSERVATION_MODE: prometheus
+  FISHMESH_BACKEND_OBSERVATION_REQUEST_TIMEOUT: 400ms
+  FISHMESH_CIRCUIT_ERROR_THRESHOLD: "0.6"
+  FISHMESH_CIRCUIT_EWMA_ALPHA: "0.5"
+  FISHMESH_CIRCUIT_MIN_REQUESTS: "3"
+  FISHMESH_CIRCUIT_OPEN_DURATION: 10s
+  FISHMESH_ENDPOINT_DISCOVERY: endpointslice
+  FISHMESH_ENDPOINT_MAX_AGE: 30s
+  FISHMESH_ENDPOINT_NAMESPACE: kubellm
+  FISHMESH_ENDPOINT_REFRESH_INTERVAL: 10s
+  FISHMESH_ENDPOINT_SERVICE: qwen-vllm
+  FISHMESH_KUBERNETES_API_URL: ""
+  FISHMESH_KUBERNETES_CA_FILE: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+  FISHMESH_KUBERNETES_TOKEN_FILE: /var/run/secrets/kubernetes.io/serviceaccount/token
+  FISHMESH_KV_AWARE_ESTIMATOR_MODE: token-cost
+  FISHMESH_KV_AWARE_HARD_LOCAL_INFLIGHT: "32"
+  FISHMESH_KV_AWARE_HARD_QUEUE_DEPTH: "16"
+  FISHMESH_KV_AWARE_MODEL: qwen2.5-0.5b-instruct
+  FISHMESH_KV_AWARE_RENDER_URL: http://qwen-vllm-baseline.kubellm.svc.cluster.local:8000
+  FISHMESH_KV_AWARE_STATIC_PROFILE_FILE: ""
+  FISHMESH_LISTEN_ADDRESS: :8080
+  FISHMESH_MAX_CONNS_PER_HOST: "8"
+  FISHMESH_MAX_INFLIGHT_REQUESTS: "16"
+  FISHMESH_MAX_REQUEST_BODY_BYTES: "2097152"
+  FISHMESH_REQUEST_TIMEOUT: 90s
+  FISHMESH_ROUTING_MODE: load-aware
+  FISHMESH_RUNTIME_CPU_HARD_LIMIT_CORES: "0"
+  FISHMESH_RUNTIME_GPU_MEMORY_HARD_LIMIT_BYTES: "0"
+  FISHMESH_RUNTIME_GPU_TEMPERATURE_HARD_LIMIT_CELSIUS: "0"
+  FISHMESH_RUNTIME_GPU_UTILIZATION_HARD_LIMIT_PERCENT: "0"
+  FISHMESH_RUNTIME_MEMORY_HARD_LIMIT_BYTES: "0"
+  FISHMESH_SESSION_KEY_INFLIGHT_DELTA: "2"
+  FISHMESH_SESSION_KEY_MAX_ENTRIES: "10000"
+  FISHMESH_SESSION_KEY_QUEUE_DEPTH_DELTA: "1"
+  FISHMESH_SESSION_KEY_TTL: 5m
+  FISHMESH_SHUTDOWN_TIMEOUT: 30s
+  FISHMESH_UPSTREAM_KEEPALIVE: "true"
+  FISHMESH_UPSTREAM_URL: http://qwen-vllm-baseline.kubellm.svc.cluster.local:8000
+kind: ConfigMap
+metadata:
+  annotations:
+    fishmesh.io/config-version: r6i31-ladder-load-aware
+    fishmesh.io/routing-mode: load-aware-v1
+    fishmesh.io/transport: keep-alive
+  labels:
+    app.kubernetes.io/component: lite-kv-aware
+    app.kubernetes.io/part-of: fishmesh
+  name: fishmesh-gateway-config
+  namespace: kubellm
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/component: lite-kv-aware
+    app.kubernetes.io/name: fishmesh-gateway
+    app.kubernetes.io/part-of: fishmesh
+  name: fishmesh-gateway
+  namespace: kubellm
+spec:
+  ports:
+  - name: http
+    port: 8080
+    protocol: TCP
+    targetPort: http
+  selector:
+    app.kubernetes.io/name: fishmesh-gateway
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/component: lite-kv-aware
+    app.kubernetes.io/name: qwen-vllm
+    app.kubernetes.io/part-of: fishmesh
+  name: qwen-vllm
+  namespace: kubellm
+spec:
+  clusterIP: None
+  ports:
+  - name: http
+    port: 8000
+    targetPort: http
+  publishNotReadyAddresses: false
+  selector:
+    app.kubernetes.io/name: qwen-vllm
+---
+apiVersion: v1
+kind: Service
+metadata:
+  annotations:
+    fishmesh.io/purpose: random-clusterip-baseline
+  labels:
+    app.kubernetes.io/component: lite-kv-aware
+    app.kubernetes.io/name: qwen-vllm-baseline
+    app.kubernetes.io/part-of: fishmesh
+  name: qwen-vllm-baseline
+  namespace: kubellm
+spec:
+  ports:
+  - name: http
+    port: 8000
+    protocol: TCP
+    targetPort: http
+  selector:
+    app.kubernetes.io/name: qwen-vllm
+  sessionAffinity: None
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app.kubernetes.io/component: lite-kv-aware
+    app.kubernetes.io/name: fishmesh-gateway
+    app.kubernetes.io/part-of: fishmesh
+  name: fishmesh-gateway
+  namespace: kubellm
+spec:
+  replicas: 1
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: fishmesh-gateway
+  strategy:
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+    type: RollingUpdate
+  template:
+    metadata:
+      annotations:
+        fishmesh.io/gateway-image-revision: r6i31-4a7c538-20260816230146
+        fishmesh.io/image-amd64-digest: sha256:903c10b37dbc359946bff8dc592d3d6c96841e7f86afd4e35b607fda25c05553
+        fishmesh.io/r6i31-gateway-rollout: r1-la-gateway
+        fishmesh.io/runtime-config-version: r6i30-load-aware
+        fishmesh.io/runtime-profile: r6i31-conversation-ladder-load-aware
+        prometheus.io/path: /metrics
+        prometheus.io/port: "8080"
+        prometheus.io/scrape: "true"
+      labels:
+        app.kubernetes.io/name: fishmesh-gateway
+    spec:
+      automountServiceAccountToken: true
+      containers:
+      - command:
+        - /usr/local/bin/fishmesh-gateway
+        envFrom:
+        - configMapRef:
+            name: fishmesh-gateway-config
+        image: fishmesh-gateway:r6i31-4a7c538-20260816230146
+        imagePullPolicy: Never
+        livenessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /healthz
+            port: http
+          periodSeconds: 10
+          timeoutSeconds: 2
+        name: gateway
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        readinessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /readyz
+            port: http
+          periodSeconds: 5
+          timeoutSeconds: 2
+        resources:
+          limits:
+            cpu: 500m
+            memory: 256Mi
+          requests:
+            cpu: 100m
+            memory: 128Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+      nodeSelector:
+        kubellm.io/gpu: "true"
+        kubernetes.io/arch: amd64
+      securityContext:
+        runAsGroup: 65532
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      serviceAccountName: fishmesh-gateway
+      terminationGracePeriodSeconds: 30
+      tolerations:
+      - effect: NoSchedule
+        key: kubellm.io/gpu
+        operator: Equal
+        value: "true"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app.kubernetes.io/component: lite-kv-aware
+    app.kubernetes.io/name: qwen-vllm
+    app.kubernetes.io/part-of: fishmesh
+  name: qwen-vllm
+  namespace: kubellm
+spec:
+  progressDeadlineSeconds: 1200
+  replicas: 2
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: qwen-vllm
+  strategy:
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
+    type: RollingUpdate
+  template:
+    metadata:
+      annotations:
+        fishmesh.io/r6i31-rollout: r1-la
+        fishmesh.io/vllm-image-amd64-digest: sha256:3a1e7f5904e1a1192a02aa0086ceaffc33985d7044c7bb25b3a43d61bdbe3ac0
+      labels:
+        app.kubernetes.io/name: qwen-vllm
+        app.kubernetes.io/part-of: fishmesh
+    spec:
+      automountServiceAccountToken: false
+      containers:
+      - args:
+        - /models/Qwen2.5-0.5B-Instruct
+        - --served-model-name=qwen2.5-0.5b-instruct
+        - --host=0.0.0.0
+        - --port=8000
+        - --dtype=half
+        - --gpu-memory-utilization=0.40
+        - --max-model-len=32768
+        - --enable-prefix-caching
+        - --kv-events-config={"enable_kv_cache_events":true,"publisher":"zmq","endpoint":"tcp://*:5557","replay_endpoint":"tcp://*:5558","buffer_steps":4096,"hwm":10000,"max_queue_size":10000,"topic":"kv@$(POD_IP):8000@qwen2.5-0.5b-instruct"}
+        - --enable-chunked-prefill
+        - --max-num-batched-tokens=8K
+        - --max-num-seqs=3
+        env:
+        - name: HF_HUB_OFFLINE
+          value: "1"
+        - name: TRANSFORMERS_OFFLINE
+          value: "1"
+        - name: VLLM_LOGGING_LEVEL
+          value: INFO
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        image: docker.io/vllm/vllm-openai:v0.23.0
+        imagePullPolicy: Never
+        livenessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /health
+            port: http
+          periodSeconds: 30
+        name: vllm
+        ports:
+        - containerPort: 8000
+          name: http
+        - containerPort: 5557
+          name: kv-events
+          protocol: TCP
+        - containerPort: 5558
+          name: kv-replay
+          protocol: TCP
+        readinessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /health
+            port: http
+          periodSeconds: 10
+        resources:
+          limits:
+            cpu: "4"
+            memory: 6Gi
+            nvidia.com/gpu: "1"
+          requests:
+            cpu: "1"
+            memory: 4Gi
+            nvidia.com/gpu: "1"
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+        startupProbe:
+          failureThreshold: 90
+          httpGet:
+            path: /health
+            port: http
+          periodSeconds: 10
+        volumeMounts:
+        - mountPath: /models
+          name: model-cache
+          readOnly: true
+        - mountPath: /dev/shm
+          name: dshm
+      nodeSelector:
+        kubellm.io/gpu: "true"
+      runtimeClassName: nvidia
+      securityContext:
+        runAsGroup: 2000
+        runAsNonRoot: true
+        runAsUser: 2000
+        seccompProfile:
+          type: RuntimeDefault
+      terminationGracePeriodSeconds: 120
+      tolerations:
+      - effect: NoSchedule
+        key: kubellm.io/gpu
+        operator: Equal
+        value: "true"
+      volumes:
+      - name: model-cache
+        persistentVolumeClaim:
+          claimName: qwen-models
+      - emptyDir:
+          medium: Memory
+          sizeLimit: 1Gi
+        name: dshm
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  labels:
+    app.kubernetes.io/component: lite-kv-aware
+    app.kubernetes.io/name: fishmesh-gateway
+    app.kubernetes.io/part-of: fishmesh
+  name: fishmesh-gateway
+  namespace: kubellm
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: fishmesh-gateway
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  labels:
+    app.kubernetes.io/component: lite-kv-aware
+    app.kubernetes.io/name: qwen-vllm
+    app.kubernetes.io/part-of: fishmesh
+  name: qwen-vllm
+  namespace: kubellm
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: qwen-vllm

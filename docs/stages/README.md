@@ -78,5 +78,7 @@
 | 69 | R6I-27 KV 状态一致性修补 | sequence 回绕清理与 freshness 失效、engine/request key 校验、查询 hash 链短路和一致性指标 |
 | 70 | R6I-27 滚动重启与随机输入长上下文复验 | vLLM/Gateway 双层滚动重启、强随机输入序列、3072/3584 长上下文快速 A/B 与缓存隔离证据 |
 | 71 | R6I-28/R6I-29 R6H 高负载滚动重启复验 | 复用旧 R6H 高负载矩阵；active/off 两组均完成双层缓存隔离，P95 分别 +10.06%/+7.69%，未复现旧 mixed 长尾收益 |
+| 72 | R6I-30 三臂路由消融与命名收口 | 拆分 round-robin、local load-balanced、load-aware 与 KV fallback provenance；提供最小 RR/LA/KV 实验计划 |
+| 73 | R6I-31 逐轮增长 32K 会话 KV 优势验证 | 真实多轮 history、generation 隔离双 replicate；确认 persistent long conversation 的 KV-aware P95 收益 |
 
 每个阶段完成后都会补充独立中文说明，并在文末明确下一阶段边界。

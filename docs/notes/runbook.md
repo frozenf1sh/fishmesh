@@ -29,7 +29,8 @@ replay 的大值可能只是历史 event 到当前重放的年龄，不能当作
 1. 保存 Gateway `/metrics`、Gateway logs、Pod 描述和响应头；不要记录 prompt、token IDs 或 session key。
 2. 检查 `kubectl -n kubellm get deploy,pod,endpointslice`。只有 Gateway 1/1、vLLM 2/2 Ready 时才将
    流量问题归因给路由。
-3. unknown/stale KV 信号不是零命中。`kv-aware-load-fallback-v1` 是正确的 load-balanced 降级，不能通过
+3. unknown/stale KV 信号不是零命中。`kv-aware-load-aware-fallback-v1` 或
+   `kv-aware-load-balanced-fallback-v2` 是正确降级，不能通过
    重试把它伪装成 KV-aware hit。
 
 ## Gateway unavailable
@@ -45,7 +46,8 @@ kubectl -n kubellm logs deployment/fishmesh-gateway --since=30m
 
 ## KV-aware signal unavailable
 
-症状：`X-FishMesh-KV-Status: match-unavailable`、`X-FishMesh-Policy: kv-aware-load-fallback-v1` 或
+症状：`X-FishMesh-KV-Status: match-unavailable`、`X-FishMesh-Policy: kv-aware-load-aware-fallback-v1`、
+`kv-aware-load-balanced-fallback-v2` 或
 `fishmesh_gateway_kv_aware_degradations_total` 增长。
 
 ```bash

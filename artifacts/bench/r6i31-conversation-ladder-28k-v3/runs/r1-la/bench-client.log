@@ -1,0 +1,1 @@
+run_id=r1-la output_dir=/Users/frozenf1sh/prj/fishmesh/artifacts/bench/r6i31-conversation-ladder-28k-v3/runs/r1-la/bench completed=21 succeeded=21 failed=0 ttft_p50=1295.15ms ttft_p95=4471.19ms report=/Users/frozenf1sh/prj/fishmesh/artifacts/bench/r6i31-conversation-ladder-28k-v3/runs/r1-la/bench/report.md

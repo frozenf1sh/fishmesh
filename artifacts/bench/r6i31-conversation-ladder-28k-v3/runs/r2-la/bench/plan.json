@@ -1,0 +1,29 @@
+{
+  "run_id": "r2-la",
+  "max_tokens": 8,
+  "ignore_eos": true,
+  "request_timeout_ms": 180000,
+  "allow_high_concurrency": false,
+  "treatment": "load-aware",
+  "workload_seed": 20260901,
+  "execution_order": [
+    "conversation-ladder-28k"
+  ],
+  "cache_mode": "steady-warm",
+  "run_nonce": "r2-la-nonce",
+  "cache_generation": "qwen-vllm-5d94dd9c79",
+  "provenance": {},
+  "scenarios": [
+    {
+      "name": "conversation-ladder-28k",
+      "prefix_pattern": "same-prefix",
+      "prefix_bytes": 16384,
+      "prefix_groups": 3,
+      "conversation_turn_bytes": 18400,
+      "batches": 7,
+      "batch_size": 3,
+      "concurrency": 3,
+      "batch_pause_ms": 1000
+    }
+  ]
+}
