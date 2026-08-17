@@ -66,7 +66,7 @@ Standard mode 面向共享 Gateway、多推理池和平台统一入口。FishMes
 - EndpointSlice watch/list、Ready 过滤、周期 relist、freshness 和显式 Service fallback；
 - 带逐字段 valid/age 的 per-backend vLLM queue/running 观测；
 - 无调度信号消融 `round-robin`、本地 in-flight 均衡 `load-balanced`、普通负载感知 `load-aware`，以及
-  结合真实 KV locality 与已知负载的 `kv-aware`；`session-key` 仅作为冻结兼容模式保留；
+  结合真实 KV locality 与已知负载的 `kv-aware`；`session-key` 明确标记为不维护，仅作为冻结兼容模式保留；
 - 非阻塞 admission、per-backend connection bounds、transport error EWMA circuit 和状态回收；
 - Prometheus 路由/发现/backend 指标与 `X-FishMesh-*` 请求 provenance；
 - 严格配置、探针、优雅关闭、最小 RBAC 和经过 race test 的请求生命周期；
@@ -78,6 +78,31 @@ R6A–R6B 的真实信号与请求路径已完成：vLLM Render/KVEvents/replay 
 
 `X-FishMesh-Session-Key` 仍是可选兼容 session hint；下面的 KV-aware 演示刻意不发送它，以证明不同 user
 message 之间的缓存复用。
+
+## 最新长上下文实测：R6I-31 v3
+
+最新一轮完整长上下文实验比较 `load-aware-v1` 与 `kv-aware-v1`：conversation ladder 按约 28K context
+设计，2 个 replicate，每个 replicate/arm 21 个请求，共每臂 42 个成功请求；共享前缀 16 KiB、对话轮次
+18.4 KiB、并发 3。KV-aware 请求证据观测到的 prompt token 范围为 6,837–31,479。早期 v1 有一个请求超过
+模型 32,768 token 上限，因此不纳入结论；v3 两臂均为 42/42 成功。
+
+当前最强的长上下文证据是 pooled TTFT：P95 从 3,973.91 ms 降到 1,771.68 ms，下降 55.42%，20,000 次
+bootstrap 的 95% CI 为 [-67.28%, -31.52%]。P50 从 1,291.07 ms 降到 1,150.52 ms，P99 从 4,471.19 ms
+降到 2,031.37 ms。Gateway accepted QPS 从 1.303 提升到 1.941，Little's Law W 从 1,959.61 ms 降到
+1,213.02 ms。
+
+KV 证据在 42/42 个 KV-aware 请求中可用：cached-prefix 覆盖率 100%，缓存前缀中位数 15,056 token、P95
+为 27,376 token，本轮累计观测到 615,744 个 cached prefix tokens。该结果针对本长上下文 workload，不代表
+KV-aware 对所有流量混合都必然获益。
+
+![R6I-31 TTFT 分位数](docs/benchmarks/r6i31-conversation-ladder-28k/ttft-percentiles.svg)
+
+![R6I-31 Gateway 容量证据](docs/benchmarks/r6i31-conversation-ladder-28k/gateway-capacity.svg)
+
+![R6I-31 KV 证据](docs/benchmarks/r6i31-conversation-ladder-28k/kv-evidence.svg)
+
+图表数据见[已保存的 JSON](docs/benchmarks/r6i31-conversation-ladder-28k/data.json)，由
+[`scripts/generate-r6i31-charts.py`](scripts/generate-r6i31-charts.py) 基于本地 R6I-31 v3 benchmark artifacts 生成。
 
 ## 路由契约
 

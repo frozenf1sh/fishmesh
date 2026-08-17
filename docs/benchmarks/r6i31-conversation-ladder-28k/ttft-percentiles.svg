@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="680" viewBox="0 0 1200 680">
+<rect width="1200" height="680" fill="white"/>
+<text x="48" y="42" fill="#18324b" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="26" font-weight="700">R6I-31 v3: TTFT percentiles</text>
+<text x="48" y="70" fill="#64748b" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="14">Conversation ladder around 28K; KV-aware P95 delta -55.42% (95% CI -67.28% to -31.52%)</text>
+<rect x="96.0" y="91.0" width="12" height="12" rx="2" fill="#64748b"/>
+<text x="114.0" y="102.0" fill="#64748b" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="13px" font-weight="400">load-aware-v1</text>
+<rect x="246.0" y="91.0" width="12" height="12" rx="2" fill="#0f766e"/>
+<text x="264.0" y="102.0" fill="#64748b" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="13px" font-weight="400">kv-aware-v1</text>
+<line x1="90" y1="560.0" x2="1130" y2="560.0" stroke="#e2e8f0" stroke-width="1"/>
+<text x="78.0" y="565.0" fill="#64748b" text-anchor="end" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="12px" font-weight="400">0 ms</text>
+<line x1="90" y1="474.0" x2="1130" y2="474.0" stroke="#e2e8f0" stroke-width="1"/>
+<text x="78.0" y="479.0" fill="#64748b" text-anchor="end" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="12px" font-weight="400">1000 ms</text>
+<line x1="90" y1="388.0" x2="1130" y2="388.0" stroke="#e2e8f0" stroke-width="1"/>
+<text x="78.0" y="393.0" fill="#64748b" text-anchor="end" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="12px" font-weight="400">2000 ms</text>
+<line x1="90" y1="302.0" x2="1130" y2="302.0" stroke="#e2e8f0" stroke-width="1"/>
+<text x="78.0" y="307.0" fill="#64748b" text-anchor="end" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="12px" font-weight="400">3000 ms</text>
+<line x1="90" y1="216.0" x2="1130" y2="216.0" stroke="#e2e8f0" stroke-width="1"/>
+<text x="78.0" y="221.0" fill="#64748b" text-anchor="end" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="12px" font-weight="400">4000 ms</text>
+<line x1="90" y1="130.0" x2="1130" y2="130.0" stroke="#e2e8f0" stroke-width="1"/>
+<text x="78.0" y="135.0" fill="#64748b" text-anchor="end" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="12px" font-weight="400">5000 ms</text>
+<text x="263.3" y="594.0" fill="#18324b" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="14px" font-weight="600">P50</text>
+<rect x="170.3" y="449.0" width="88.0" height="111.0" rx="5" fill="#64748b"/>
+<text x="214.3" y="439.0" fill="#64748b" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="12px" font-weight="600">1291 ms</text>
+<rect x="268.3" y="461.1" width="88.0" height="98.9" rx="5" fill="#0f766e"/>
+<text x="312.3" y="451.1" fill="#0f766e" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="12px" font-weight="600">1151 ms</text>
+<text x="610.0" y="594.0" fill="#18324b" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="14px" font-weight="600">P95</text>
+<rect x="517.0" y="218.2" width="88.0" height="341.8" rx="5" fill="#64748b"/>
+<text x="561.0" y="208.2" fill="#64748b" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="12px" font-weight="600">3974 ms</text>
+<rect x="615.0" y="407.6" width="88.0" height="152.4" rx="5" fill="#0f766e"/>
+<text x="659.0" y="397.6" fill="#0f766e" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="12px" font-weight="600">1772 ms</text>
+<text x="956.7" y="594.0" fill="#18324b" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="14px" font-weight="600">P99</text>
+<rect x="863.7" y="175.5" width="88.0" height="384.5" rx="5" fill="#64748b"/>
+<text x="907.7" y="165.5" fill="#64748b" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="12px" font-weight="600">4471 ms</text>
+<rect x="961.7" y="385.3" width="88.0" height="174.7" rx="5" fill="#0f766e"/>
+<text x="1005.7" y="375.3" fill="#0f766e" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="12px" font-weight="600">2031 ms</text>
+<text x="600.0" y="622.0" fill="#64748b" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="12px" font-weight="400">Source: artifacts/bench/r6i31-conversation-ladder-28k-v3; 42 successful requests per arm</text>
+</svg>

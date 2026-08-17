@@ -1,0 +1,63 @@
+{
+  "ttft": {
+    "metrics": [
+      "P50",
+      "P95",
+      "P99"
+    ],
+    "load-aware-v1": [
+      1291.0675,
+      3973.910417,
+      4471.191708
+    ],
+    "kv-aware-v1": [
+      1150.523958,
+      1771.68025,
+      2031.366583
+    ],
+    "delta_p95_percent": -55.41720713126986,
+    "ci": [
+      -67.27551130536315,
+      -31.524316641366536
+    ]
+  },
+  "capacity": {
+    "metrics": [
+      "Accepted QPS",
+      "Little's Law W (ms)",
+      "Average in-flight"
+    ],
+    "load-aware-v1": [
+      1.303484468172491,
+      1959.6146785714286,
+      2.5541555540240513
+    ],
+    "kv-aware-v1": [
+      1.941428213804093,
+      1213.0244166666666,
+      2.35501245010365
+    ]
+  },
+  "cache": {
+    "metrics": [
+      "Cached samples (%)",
+      "Cached prefix P50 (tokens)",
+      "Cached prefix P95 (tokens)"
+    ],
+    "load-aware-v1": [
+      0.0,
+      0,
+      0
+    ],
+    "kv-aware-v1": [
+      100.0,
+      15056,
+      27376
+    ],
+    "samples": {
+      "load-aware-v1": 42,
+      "kv-aware-v1": 42
+    },
+    "cached_prefix_sum": 615744
+  }
+}
