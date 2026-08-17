@@ -75,20 +75,21 @@ type BenchmarkPlan struct {
 // BenchmarkScenario is one point in the length/prefix/quantity matrix.
 // Batches are sequential; requests inside one batch may run concurrently.
 type BenchmarkScenario struct {
-	Name                 string        `json:"name"`
-	Pattern              PrefixPattern `json:"prefix_pattern"`
-	PrefixBytes          int           `json:"prefix_bytes"`
-	PrefixGroups         int           `json:"prefix_groups"`
-	Batches              int           `json:"batches"`
-	BatchSize            int           `json:"batch_size"`
-	Concurrency          int           `json:"concurrency"`
-	ArrivalRateQPS       float64       `json:"arrival_rate_qps,omitempty"`
-	MixedHotRatio        int           `json:"mixed_hot_ratio,omitempty"`
-	MixedUniqueRatio     int           `json:"mixed_unique_ratio,omitempty"`
-	BatchPauseMS         int           `json:"batch_pause_ms,omitempty"`
-	WarmupRequests       int           `json:"warmup_requests,omitempty"`
-	TargetPromptTokens   int           `json:"target_prompt_tokens,omitempty"`
-	PromptTokenTolerance int           `json:"prompt_token_tolerance,omitempty"`
+	Name                  string        `json:"name"`
+	Pattern               PrefixPattern `json:"prefix_pattern"`
+	PrefixBytes           int           `json:"prefix_bytes"`
+	PrefixGroups          int           `json:"prefix_groups"`
+	ConversationTurnBytes int           `json:"conversation_turn_bytes,omitempty"`
+	Batches               int           `json:"batches"`
+	BatchSize             int           `json:"batch_size"`
+	Concurrency           int           `json:"concurrency"`
+	ArrivalRateQPS        float64       `json:"arrival_rate_qps,omitempty"`
+	MixedHotRatio         int           `json:"mixed_hot_ratio,omitempty"`
+	MixedUniqueRatio      int           `json:"mixed_unique_ratio,omitempty"`
+	BatchPauseMS          int           `json:"batch_pause_ms,omitempty"`
+	WarmupRequests        int           `json:"warmup_requests,omitempty"`
+	TargetPromptTokens    int           `json:"target_prompt_tokens,omitempty"`
+	PromptTokenTolerance  int           `json:"prompt_token_tolerance,omitempty"`
 }
 
 // BenchmarkAttempt is one request evidence record. It contains shape metadata, not prompt content.
@@ -352,6 +353,12 @@ func (s BenchmarkScenario) validate(allowHighConcurrency bool, cacheMode CacheMo
 	}
 	if s.Pattern == PrefixMixed && (s.MixedHotRatio < 0 || s.MixedUniqueRatio < 0 || s.MixedHotRatio+s.MixedUniqueRatio > 100) {
 		return fmt.Errorf("mixed prefix ratios must be non-negative and sum to at most 100")
+	}
+	if s.ConversationTurnBytes < 0 || s.ConversationTurnBytes > maximumPrefixBytes {
+		return fmt.Errorf("conversation turn bytes must be between 0 and %d", maximumPrefixBytes)
+	}
+	if s.ConversationTurnBytes > 0 && (s.Pattern != PrefixSame || s.PrefixGroups != s.BatchSize) {
+		return fmt.Errorf("conversation ladder requires same-prefix and prefix groups equal batch size")
 	}
 	if s.BatchPauseMS < 0 || math.IsNaN(s.ArrivalRateQPS) || math.IsInf(s.ArrivalRateQPS, 0) || s.ArrivalRateQPS < 0 {
 		return fmt.Errorf("batch pause and arrival rate must not be negative or non-finite")

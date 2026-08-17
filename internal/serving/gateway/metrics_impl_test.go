@@ -105,7 +105,7 @@ func TestMetricsObserveKVResetAndEventConsistencyError(t *testing.T) {
 func TestMetricsSeparatesShortContextBypassFromKVDegradation(t *testing.T) {
 	metrics := NewMetrics()
 	metrics.observeSelection(routing.ModeKVAware, requestpath.Lease{
-		Decision: routing.Decision{Backend: backend.Backend{ID: "backend-a"}, Reason: routing.ReasonKVAwareShortContextFallback, Policy: routing.PolicyKVAwareShortContextFallbackV1},
+		Decision: routing.Decision{Backend: backend.Backend{ID: "backend-a"}, Reason: routing.ReasonKVAwareShortContextFallback, Policy: routing.PolicyKVAwareShortContextLoadBalancedV2},
 		State:    requestpath.State{KV: requestpath.KVShortContextBypassed},
 	})
 

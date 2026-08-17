@@ -43,7 +43,7 @@ func DefaultConfig() Config {
 			ShutdownTimeout:   30 * time.Second,
 		},
 		Gateway: gateway.Config{
-			RoutingMode:         routing.ModeLoadBalanced,
+			RoutingMode:         routing.ModeLoadAware,
 			KeepAlive:           false,
 			RequestTimeout:      90 * time.Second,
 			MaxRequestBodyBytes: 2 << 20,
@@ -69,7 +69,7 @@ func DefaultConfig() Config {
 		},
 		Prometheus: observation.PrometheusConfig{MetricsPath: defaultMetricsPath, Clock: time.Now},
 		Routing: routing.Config{
-			Mode:    routing.ModeLoadBalanced,
+			Mode:    routing.ModeLoadAware,
 			Service: service,
 			SessionKey: routing.SessionKeyConfig{
 				TTL:             5 * time.Minute,

@@ -217,7 +217,7 @@ func (v environmentValues) buildConfig(defaults Config) (Config, error) {
 	}
 	discoveryMode := discovery.Mode(valueOrDefault(envEndpointDiscovery, string(defaults.Discovery.Mode)))
 	routingMode := routing.Mode(valueOrDefault(envRoutingMode, string(defaults.Routing.Mode)))
-	if discoveryMode == discovery.ModeStatic && routingMode == routing.ModeLoadBalanced && len(staticBackends) == 0 {
+	if discoveryMode == discovery.ModeStatic && routingMode != routing.ModeKVAware && len(staticBackends) == 0 {
 		staticBackends = []backend.Backend{service}
 	}
 	reconcileInterval := time.Duration(0)

@@ -67,9 +67,9 @@ The deployed baseline already provides:
 - OpenAI-compatible HTTP/SSE proxying, cancellation propagation, stream outcome classification and TTFT metrics;
 - EndpointSlice watch/list, Ready filtering, periodic relist, freshness and explicit Service fallback;
 - per-backend vLLM queue/running observations with per-field validity and age;
-- `load-balanced` for ordinary load-aware balancing and `kv-aware` for real KV locality plus known load;
-  `session-key` remains only as a frozen compatibility mode (policy identifiers are
-  `load-balanced-v1`, `session-key-v1`, and `kv-aware-v1`);
+- `round-robin` for a no-signal request-level ablation, `load-balanced` for local in-flight balancing,
+  `load-aware` for ordinary vLLM queue/running-aware balancing, and `kv-aware` for KV locality plus known load;
+  `session-key` remains only as a frozen compatibility mode;
 - non-blocking admission, per-backend connection bounds, transport-error EWMA circuits and state garbage collection;
 - Prometheus routing/discovery/backend metrics and `X-FishMesh-*` request provenance;
 - strict configuration, probes, graceful shutdown, least-privilege RBAC and race-tested request lifecycle;
@@ -78,7 +78,7 @@ The deployed baseline already provides:
 The R6A–R6B real-signal and request-path work is complete: vLLM Render/KVEvents/replay produced a per-Pod
 cross-session match for a shared system prompt, and the Gateway consumes that state for `kv-aware-v1`.
 Real eviction, subscriber recovery and Pod replacement remove stale locality; unknown or stale state explicitly
-degrades to load-balanced routing rather than masquerading as a zero-token match.
+degrades through load-aware and then local load-balanced routing rather than masquerading as a zero-token match.
 
 `X-FishMesh-Session-Key` remains an optional compatibility session hint; the KV-aware demo below deliberately omits it
 to demonstrate cache reuse across distinct user messages.
@@ -92,7 +92,7 @@ The target policy remains deliberately explainable:
 3. estimate queued work and uncached prefill cost from fresh load samples;
 4. apply a hard overload guard so cache locality cannot dominate severe pressure;
 5. use a small benefit margin/hysteresis to avoid routing churn;
-6. degrade from kv-aware to load-balanced when KV state is unavailable or stale;
+6. degrade from kv-aware to load-aware, then local load-balanced when KV state is unavailable or stale;
 7. use an optional session hint only as a tie-breaker or short-term stability signal;
 8. expose a typed policy, reason, cache source and degradation state for every decision.
 
@@ -102,11 +102,11 @@ operable path from real engine state to a lightweight streaming data plane, plus
 ## Five-minute Lite demo
 
 This demo assumes the Lite prerequisites in [`deploy/lite-kv-aware/README.md`](deploy/lite-kv-aware/README.md): a K3s
-cluster, the model PV and an importable Gateway image. It first proves the ordinary `load-balanced` default, then
+cluster, the model PV and an importable Gateway image. It first proves the ordinary `load-aware` default, then
 temporarily enables the explicit KV-aware overlay. The historical `session-key` experiment overlay remains only
 for compatibility checks. Standard mode / llm-d integration is intentionally deferred.
 
-Verify the repository and the load-balanced baseline:
+Verify the repository and the load-aware baseline:
 
 ```bash
 make ci
@@ -158,7 +158,8 @@ grep -iE 'x-fishmesh-(kv-status|policy|route-reason|cached-prefix-tokens)' \
   /tmp/fishmesh-first.headers /tmp/fishmesh-second.headers
 ```
 
-The first request may correctly show `match-unavailable` with `kv-aware-load-fallback-v1` while replay becomes fresh.
+The first request may correctly show `match-unavailable` with `kv-aware-load-aware-fallback-v1` or
+`kv-aware-load-balanced-fallback-v2` while replay becomes fresh.
 After a valid prewarm, the second should show `available`, `kv-aware-v1`, `kv-aware`, and a
 non-zero `X-FishMesh-Cached-Prefix-Tokens`. `available` with zero cached tokens is a real zero match; it is not the
 same state as unavailable. Restore the default when finished:

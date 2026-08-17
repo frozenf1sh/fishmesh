@@ -8,21 +8,29 @@ namespace="${FISHMESH_NAMESPACE:-kubellm}"
 
 usage() {
   cat <<'EOF'
-用法: scripts/switch-routing-mode.sh <load-balanced|session-key|kv-aware>
+用法: scripts/switch-routing-mode.sh <round-robin|load-balanced|load-aware|session-key|kv-aware>
 
-  load-balanced  普通负载均衡
+  round-robin    无调度信号的请求级轮转实验基线
+  load-balanced  仅按 Gateway local in-flight 的普通负载均衡
+  load-aware     优先按 vLLM queue/running 选路，观测不可用时回退 load-balanced
   session-key    客户端 session key 的有界粘性
   kv-aware       真实 KV 感知路由
 
-三个 overlay 只改 Gateway 的 FISHMESH_ROUTING_MODE 和 runtime-profile 注解;
+五个 overlay 只改 Gateway 的 FISHMESH_ROUTING_MODE 和 runtime-profile 注解;
 vLLM 副本已带 KVEvents,切换不触发 vLLM 重启,只滚动 Gateway。
 EOF
 }
 
 mode="${1:-}"
 case "$mode" in
+  round-robin)
+    overlay="deploy/experiments/r6i22-final/round-robin"
+    ;;
   load-balanced)
-    overlay="deploy/baseline/base"
+    overlay="deploy/experiments/r6i22-final/load-balanced"
+    ;;
+  load-aware)
+    overlay="deploy/experiments/r6i22-final/load-aware"
     ;;
   session-key)
     overlay="deploy/experiments/r6d-session-key"

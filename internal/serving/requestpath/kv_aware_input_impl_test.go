@@ -11,6 +11,7 @@ import (
 
 	"github.com/frozenf1sh/fishmesh/internal/serving/backend"
 	"github.com/frozenf1sh/fishmesh/internal/serving/kvcache"
+	"github.com/frozenf1sh/fishmesh/internal/serving/observation"
 	"github.com/frozenf1sh/fishmesh/internal/serving/routing"
 	"github.com/frozenf1sh/fishmesh/internal/serving/tokenization"
 )
@@ -19,6 +20,18 @@ type recordingKVCache struct {
 	query kvcache.Query
 	err   error
 }
+
+type staticObservationReader map[backend.ID]observation.Backend
+
+func (r staticObservationReader) Snapshot() map[backend.ID]observation.Backend {
+	result := make(map[backend.ID]observation.Backend, len(r))
+	for id, value := range r {
+		result[id] = value
+	}
+	return result
+}
+
+func (staticObservationReader) Close() error { return nil }
 
 func (c *recordingKVCache) Lookup(_ context.Context, query kvcache.Query) (kvcache.Snapshot, error) {
 	c.query = query
@@ -164,7 +177,7 @@ func TestKVAwareShortContextBypassesKVLookup(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer lease.Complete(OutcomeClientCanceled)
-	if lease.State.KV != KVShortContextBypassed || lease.Decision.Reason != routing.ReasonKVAwareShortContextFallback || lease.Decision.Policy != routing.PolicyKVAwareShortContextFallbackV1 {
+	if lease.State.KV != KVShortContextBypassed || lease.Decision.Reason != routing.ReasonKVAwareShortContextFallback || lease.Decision.Policy != routing.PolicyKVAwareShortContextLoadBalancedV2 {
 		t.Fatalf("short-context decision/state = %+v / %q", lease.Decision, lease.State.KV)
 	}
 	if cache.query.Model != "" || len(cache.query.TokenGroups) != 0 {
@@ -204,10 +217,36 @@ func TestKVAwarePathDegradesInternalRenderTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("internal Render timeout should degrade: %v", err)
 	}
-	if lease.State.KV != KVTokenizationFailed || lease.Decision.Reason != routing.ReasonKVAwareSignalUnavailable || lease.Decision.Policy != routing.PolicyKVAwareLoadFallbackV1 {
+	if lease.State.KV != KVTokenizationFailed || lease.Decision.Reason != routing.ReasonKVAwareSignalUnavailable || lease.Decision.Policy != routing.PolicyKVAwareLoadBalancedFallbackV2 {
 		t.Fatalf("degradation decision/state = %+v / %q", lease.Decision, lease.State.KV)
 	}
 	lease.Complete(OutcomeClientCanceled)
+}
+
+func TestKVAwareFallbackPublishesLoadAwareProvenanceWhenVLLMLoadIsComplete(t *testing.T) {
+	resolver := &mutableResolver{backends: []backend.Backend{{ID: "a", URL: "http://a:8000"}, {ID: "b", URL: "http://b:8000"}}}
+	observations := staticObservationReader{
+		"a": {QueueLength: observation.Sample[float64]{Value: 2, Valid: true}, RunningRequests: observation.Sample[float64]{Value: 0, Valid: true}},
+		"b": {QueueLength: observation.Sample[float64]{Value: 0, Valid: true}, RunningRequests: observation.Sample[float64]{Value: 1, Valid: true}},
+	}
+	path, err := New(Config{Service: backend.Backend{ID: "service", URL: "http://service:8000"}}, Dependencies{
+		Resolver: resolver, Observations: observations, Strategy: newKVAwareStrategy(t), Circuits: newTestBreaker(t),
+		Tokenizer: failingTokenizer{err: &tokenization.Error{Code: tokenization.CodeUpstreamUnavailable, Err: context.DeadlineExceeded}},
+		KVCache:   &recordingKVCache{}, KVReconcile: func(context.Context, []backend.Backend) error { return nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer path.Close()
+
+	lease, err := path.Select(context.Background(), Request{Route: string(tokenization.RouteChatCompletions), Body: []byte(`{"model":"qwen","messages":[]}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.Complete(OutcomeClientCanceled)
+	if lease.Decision.Backend.ID != "b" || lease.Decision.Reason != routing.ReasonKVAwareSignalUnavailable || lease.Decision.Policy != routing.PolicyKVAwareLoadAwareFallbackV1 {
+		t.Fatalf("load-aware KV fallback decision = %+v", lease.Decision)
+	}
 }
 
 func TestKVAwarePathRequiresTokenizerAndKVCache(t *testing.T) {

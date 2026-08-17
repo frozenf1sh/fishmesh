@@ -50,9 +50,9 @@ func TestLoadBalancedSelectsLeastInflight(t *testing.T) {
 	}
 }
 
-// TestLoadBalancedPrefersFreshVLLMLoad 验证完整 vLLM queue/running 观测优先于本地计数。
-func TestLoadBalancedPrefersFreshVLLMLoad(t *testing.T) {
-	strategy := NewLoadBalanced()
+// TestLoadAwarePrefersFreshVLLMLoad 验证完整 vLLM queue/running 观测优先于本地计数。
+func TestLoadAwarePrefersFreshVLLMLoad(t *testing.T) {
+	strategy := NewLoadAware()
 	decision, err := strategy.Select("same-prefix", Snapshot{
 		Backends: testBackends(), Inflight: map[backend.ID]int64{"a": 0, "b": 4},
 		Loads: map[backend.ID]Load{
@@ -63,14 +63,14 @@ func TestLoadBalancedPrefersFreshVLLMLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if decision.Backend.ID != "b" {
+	if decision.Backend.ID != "b" || decision.Policy != PolicyLoadAwareV1 || decision.Reason != ReasonLoadAware {
 		t.Fatalf("decision = %+v, want queue-empty backend b", decision)
 	}
 }
 
-// TestLoadBalancedFallsBackToLocalInflightWhenObservedLoadIsIncomplete 验证部分观测不会伪装成零负载。
-func TestLoadBalancedFallsBackToLocalInflightWhenObservedLoadIsIncomplete(t *testing.T) {
-	strategy := NewLoadBalanced()
+// TestLoadAwareFallsBackToLocalInflightWhenObservedLoadIsIncomplete 验证部分观测不会伪装成零负载。
+func TestLoadAwareFallsBackToLocalInflightWhenObservedLoadIsIncomplete(t *testing.T) {
+	strategy := NewLoadAware()
 	decision, err := strategy.Select("same-prefix", Snapshot{
 		Backends: testBackends(), Inflight: map[backend.ID]int64{"a": 3, "b": 1},
 		Loads: map[backend.ID]Load{
@@ -81,8 +81,22 @@ func TestLoadBalancedFallsBackToLocalInflightWhenObservedLoadIsIncomplete(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if decision.Backend.ID != "b" {
+	if decision.Backend.ID != "b" || decision.Policy != PolicyLoadBalancedV1 || decision.Reason != ReasonLoadBalanced {
 		t.Fatalf("decision = %+v, want local-inflight fallback backend b", decision)
+	}
+}
+
+func TestRoundRobinCyclesEligibleBackends(t *testing.T) {
+	strategy := NewRoundRobin()
+	snapshot := Snapshot{Backends: testBackends()}
+	for index, want := range []backend.ID{"a", "b", "a"} {
+		decision, err := strategy.Select("ignored", snapshot)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if decision.Backend.ID != want || decision.Policy != PolicyRoundRobinV1 || decision.Reason != ReasonRoundRobin {
+			t.Fatalf("decision %d = %+v, want %q", index, decision, want)
+		}
 	}
 }
 
@@ -134,14 +148,14 @@ func TestLoadBalancedExcludesIneligibleBackend(t *testing.T) {
 	}
 }
 
-// TestNewConfiguredCreatesLoadBalancedByDefault 验证显式配置的空模式仍解析为普通负载均衡。
-func TestNewConfiguredCreatesLoadBalancedByDefault(t *testing.T) {
+// TestNewConfiguredCreatesLoadAwareByDefault 验证显式配置的空模式解析为默认 load-aware。
+func TestNewConfiguredCreatesLoadAwareByDefault(t *testing.T) {
 	strategy, err := NewConfigured(Config{Mode: "", Service: backend.Backend{ID: "service", URL: "http://service:8000"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strategy.Name() != ModeLoadBalanced {
-		t.Fatalf("strategy name = %q, want %q", strategy.Name(), ModeLoadBalanced)
+	if strategy.Name() != ModeLoadAware {
+		t.Fatalf("strategy name = %q, want %q", strategy.Name(), ModeLoadAware)
 	}
 }
 

@@ -11,11 +11,12 @@ import (
 // 编译期断言：loadBalancedStrategy 必须实现 Strategy 接口。
 var _ Strategy = loadBalancedStrategy{}
 
-// loadBalancedStrategy 是无状态的负载感知策略：
-// 优先使用完整、新鲜的 vLLM queue/running 快照；观测不完整时退回本 Gateway 本地在途请求数。
+// loadBalancedStrategy 是无状态的本地负载均衡策略：只比较当前 Gateway 已登记的
+// in-flight lease。它不把 vLLM queue/running 当作输入，因而既是可解释的消融组，
+// 也是 load-aware 外部观测失效时的保守降级层。
 type loadBalancedStrategy struct{}
 
-// NewLoadBalanced 返回 load-aware 选择策略。
+// NewLoadBalanced 返回只依赖 local in-flight 的普通负载均衡策略。
 func NewLoadBalanced() Strategy {
 	return loadBalancedStrategy{}
 }
@@ -35,12 +36,11 @@ func (loadBalancedStrategy) Select(routingKey string, snapshot Snapshot) (Decisi
 	hash := sha256.Sum256([]byte(routingKey))
 	start := int(binary.BigEndian.Uint32(hash[:4]) % uint32(len(backends)))
 	best := backends[start]
-	useObservedLoad := completeObservedLoad(backends, snapshot.Loads)
 	// 从起点环状遍历其余后端，严格小于才替换，
 	// 保证出现完全相同的负载时保留起点（由哈希决定，确定性不受顺序影响）。
 	for offset := 1; offset < len(backends); offset++ {
 		candidate := backends[(start+offset)%len(backends)]
-		if loadBalancedLess(candidate, best, snapshot, useObservedLoad) {
+		if localInflightLess(candidate, best, snapshot) {
 			best = candidate
 		}
 	}
@@ -80,22 +80,8 @@ func completeObservedLoad(backends []backend.Backend, loads map[backend.ID]Load)
 	return true
 }
 
-// loadBalancedLess 按等待压力、运行压力、本地补偿和最终 local in-flight 比较。
-// queue/running 只有在所有候选都有效时才参与，避免把缺失观测误判成零负载。
-func loadBalancedLess(candidate, current backend.Backend, snapshot Snapshot, useObservedLoad bool) bool {
-	if useObservedLoad {
-		candidateLoad := snapshot.Loads[candidate.ID]
-		currentLoad := snapshot.Loads[current.ID]
-		if candidateLoad.QueueDepth != currentLoad.QueueDepth {
-			return candidateLoad.QueueDepth < currentLoad.QueueDepth
-		}
-		if candidateLoad.Running != currentLoad.Running {
-			return candidateLoad.Running < currentLoad.Running
-		}
-		if candidateLoad.LocalDelta != currentLoad.LocalDelta {
-			return candidateLoad.LocalDelta < currentLoad.LocalDelta
-		}
-	}
+// localInflightLess 仅按本 Gateway 的 lease 计数比较，并以 backend ID 固定平局。
+func localInflightLess(candidate, current backend.Backend, snapshot Snapshot) bool {
 	candidateInflight := snapshot.Inflight[candidate.ID]
 	currentInflight := snapshot.Inflight[current.ID]
 	if candidateInflight != currentInflight {

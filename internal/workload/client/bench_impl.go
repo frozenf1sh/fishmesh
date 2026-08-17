@@ -86,6 +86,14 @@ func (c *Client) runPlan(ctx context.Context, plan BenchmarkPlan, output io.Writ
 	}
 	for _, scenarioName := range plan.ExecutionOrder {
 		scenario := benchmarkScenarioByName(plan.Scenarios, scenarioName)
+		if scenario.ConversationTurnBytes > 0 {
+			ladderAttempts, ladderErr := c.runConversationLadder(ctx, plan, scenario, writer, reader, metricsInterval, &metricsRun, &activeScenario, &activeBatch, &metricsWindows, metricsByScenarioBatch)
+			attempts = append(attempts, ladderAttempts...)
+			if ladderErr != nil {
+				return finish(ladderErr)
+			}
+			continue
+		}
 		warmupBackends := make(map[string]string)
 		for warmup := 0; warmup < scenario.WarmupRequests; warmup++ {
 			attempt := c.runBenchmarkRequest(ctx, plan, scenario, -1, warmup, warmup, "warmup")
@@ -129,6 +137,123 @@ func (c *Client) runPlan(ctx context.Context, plan BenchmarkPlan, output io.Writ
 		return finish(nil)
 	}
 	return finish(benchmarkTokenEvidenceError(attempts))
+}
+
+// runConversationLadder drives a few independent, growing conversations. Each
+// later request includes the actual assistant output from the prior turn, so a
+// cache hit represents a real continuation rather than a synthetic repeated
+// prompt. Batches are turns; requests in one batch are distinct users.
+func (c *Client) runConversationLadder(ctx context.Context, plan BenchmarkPlan, scenario BenchmarkScenario, writer *bufio.Writer, reader GatewayMetricsReader, metricsInterval time.Duration, metricsRun **gatewayMetricsRun, activeScenario *string, activeBatch *int, metricsWindows *[]GatewayMetricsWindow, metricsByScenarioBatch map[string]map[int]GatewayMetricsWindow) ([]BenchmarkAttempt, error) {
+	histories := make([][]Message, scenario.BatchSize)
+	for user := range histories {
+		histories[user] = []Message{{Role: RoleSystem, Content: generatedPrefix(scenario, "conversation-shared")}}
+	}
+	attempts := make([]BenchmarkAttempt, 0, scenario.Batches*scenario.BatchSize)
+	stopMetrics := func() {
+		if *metricsRun == nil {
+			return
+		}
+		window := (*metricsRun).stop(ctx)
+		*metricsWindows = append(*metricsWindows, window)
+		if *activeScenario != "" {
+			if metricsByScenarioBatch[*activeScenario] == nil {
+				metricsByScenarioBatch[*activeScenario] = make(map[int]GatewayMetricsWindow)
+			}
+			metricsByScenarioBatch[*activeScenario][*activeBatch] = window
+		}
+		*metricsRun = nil
+	}
+	for turn := 0; turn < scenario.Batches; turn++ {
+		*activeScenario, *activeBatch = scenario.Name, turn
+		if reader != nil {
+			*metricsRun = beginGatewayMetricsRun(ctx, reader, metricsInterval)
+		}
+		batchAttempts, nextHistories := c.runConversationLadderBatch(ctx, plan, scenario, turn, histories)
+		for _, attempt := range batchAttempts {
+			if err := writeJSONL(writer, attempt); err != nil {
+				stopMetrics()
+				return attempts, err
+			}
+			attempts = append(attempts, attempt)
+			if attempt.Error != "" {
+				stopMetrics()
+				return attempts, fmt.Errorf("conversation ladder %q turn %d user %d failed: %s", scenario.Name, turn, attempt.InputSequence, attempt.Error)
+			}
+		}
+		stopMetrics()
+		histories = nextHistories
+		if turn+1 < scenario.Batches {
+			if err := waitBetweenBatches(ctx, scenario); err != nil {
+				return attempts, err
+			}
+		}
+	}
+	return attempts, nil
+}
+
+func (c *Client) runConversationLadderBatch(ctx context.Context, plan BenchmarkPlan, scenario BenchmarkScenario, turn int, histories [][]Message) ([]BenchmarkAttempt, [][]Message) {
+	type conversationResult struct {
+		user    int
+		attempt BenchmarkAttempt
+		history []Message
+	}
+	jobs := make(chan int, scenario.BatchSize)
+	results := make(chan conversationResult, scenario.BatchSize)
+	workers := min(scenario.Concurrency, scenario.BatchSize)
+	var wait sync.WaitGroup
+	wait.Add(workers)
+	for worker := 0; worker < workers; worker++ {
+		go func() {
+			defer wait.Done()
+			for user := range jobs {
+				messages := append([]Message(nil), histories[user]...)
+				messages = append(messages, Message{Role: RoleUser, Content: generatedConversationTurn(scenario, user, turn)})
+				attempt, result := c.runConversationLadderRequest(ctx, plan, scenario, turn, user, messages)
+				next := append([]Message(nil), messages...)
+				if attempt.Error == "" {
+					if strings.TrimSpace(result.Text) == "" {
+						attempt.Error = "conversation ladder response did not contain assistant text"
+					}
+					next = append(next, Message{Role: RoleAssistant, Content: result.Text})
+				}
+				results <- conversationResult{user: user, attempt: attempt, history: next}
+			}
+		}()
+	}
+	for user := 0; user < scenario.BatchSize; user++ {
+		jobs <- user
+	}
+	close(jobs)
+	wait.Wait()
+	close(results)
+
+	attempts := make([]BenchmarkAttempt, 0, scenario.BatchSize)
+	nextHistories := make([][]Message, scenario.BatchSize)
+	for result := range results {
+		attempts = append(attempts, result.attempt)
+		nextHistories[result.user] = result.history
+	}
+	sort.Slice(attempts, func(i, j int) bool { return attempts[i].InputSequence < attempts[j].InputSequence })
+	return attempts, nextHistories
+}
+
+func (c *Client) runConversationLadderRequest(ctx context.Context, plan BenchmarkPlan, scenario BenchmarkScenario, turn, user int, messages []Message) (BenchmarkAttempt, Result) {
+	group := fmt.Sprintf("conversation-user-%d", user)
+	cacheSalt, cacheScope := benchmarkCacheSalt(plan, scenario, turn, user, group)
+	startedAt := time.Now().UTC()
+	result, err := c.Send(ctx, Request{Messages: messages, MaxTokens: plan.MaxTokens, CacheSalt: cacheSalt, IgnoreEOS: plan.IgnoreEOS})
+	completedAt := time.Now().UTC()
+	record := BenchmarkAttempt{
+		RecordType: "request", RunID: plan.RunID, Scenario: scenario.Name, Pattern: scenario.Pattern,
+		Batch: turn, Request: turn*scenario.BatchSize + user, InputSequence: user, PrefixBytes: scenario.PrefixBytes, PromptBytes: promptBytes(messages),
+		PrefixGroup: group, CacheMode: plan.CacheMode, CacheScope: cacheScope, CacheGeneration: plan.CacheGeneration,
+		StartedAt: startedAt, CompletedAt: completedAt, StatusCode: result.StatusCode, Headers: result.Headers,
+		TTFTMS: durationMS(result.TTFT), DurationMS: durationMS(result.Duration), CachedSample: result.HasCachedPrefixSample,
+	}
+	if err != nil {
+		record.Error = err.Error()
+	}
+	return record, result
 }
 
 func (c *Client) runBenchmarkBatch(ctx context.Context, plan BenchmarkPlan, scenario BenchmarkScenario, batch int) []BenchmarkAttempt {
@@ -296,6 +421,15 @@ func benchmarkMessagesForScenario(scenario BenchmarkScenario, request, totalRequ
 		suffix += " unique-prefix-request."
 	}
 	return []Message{{Role: RoleSystem, Content: prefix}, {Role: RoleUser, Content: suffix}}, group
+}
+
+func generatedConversationTurn(scenario BenchmarkScenario, user, turn int) string {
+	header := fmt.Sprintf("FishMesh conversation ladder user=%d turn=%d. Continue the existing discussion concisely. ", user, turn)
+	if len(header) >= scenario.ConversationTurnBytes {
+		return header[:scenario.ConversationTurnBytes]
+	}
+	fragment := fmt.Sprintf("user-%d-turn-%d persistent discussion context. ", user, turn)
+	return header + strings.Repeat(fragment, (scenario.ConversationTurnBytes-len(header)+len(fragment)-1)/len(fragment))[:scenario.ConversationTurnBytes-len(header)]
 }
 
 func benchmarkPrefixGroup(scenario BenchmarkScenario, request int) (string, bool) {

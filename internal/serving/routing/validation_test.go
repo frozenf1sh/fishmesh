@@ -31,7 +31,7 @@ func TestConfigValidateCentralizesStrategyConstraints(t *testing.T) {
 }
 
 func TestModeValidateAcceptsTheThreeRoutingModes(t *testing.T) {
-	for _, mode := range []Mode{ModeLoadBalanced, ModeSessionKey, ModeKVAware} {
+	for _, mode := range []Mode{ModeRoundRobin, ModeLoadBalanced, ModeLoadAware, ModeSessionKey, ModeKVAware} {
 		if err := mode.Validate(); err != nil {
 			t.Fatalf("mode %q was rejected: %v", mode, err)
 		}

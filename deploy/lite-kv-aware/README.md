@@ -2,7 +2,8 @@
 
 这个 overlay 是 R6C 的单命令产品安装面：它只部署 Gateway 和 Qwen vLLM，Gateway 使用
 `fishmesh-gateway:<tag>` 独立镜像；冻结的 analyst、simulator 和 loadgen 不在其中。基础
-`deploy/baseline/base` 默认使用 `load-balanced`；`session-key` 由单独 overlay 提供，只有此 overlay 明确开启
+`deploy/baseline/base` 默认使用 `load-aware`；`load-balanced` 是外部负载观测不可用时的 local fallback，
+`session-key` 由单独 overlay 提供，只有此 overlay 明确开启
 `kv-aware`。
 
 ## 安装前提
@@ -77,7 +78,7 @@ Gateway 更新或 KV replay 尚未确认时，首个请求可以出现下面的*
 
 ```text
 X-FishMesh-KV-Status: match-unavailable
-X-FishMesh-Policy: kv-aware-load-fallback-v1
+X-FishMesh-Policy: kv-aware-load-aware-fallback-v1 或 kv-aware-load-balanced-fallback-v2
 X-FishMesh-Route-Reason: kv-aware-signal-unavailable
 X-FishMesh-Cached-Prefix-Tokens: 0
 ```
@@ -127,7 +128,8 @@ kubectl --kubeconfig ~/.kube/fishmesh.yaml -n kubellm logs deployment/fishmesh-g
 ```
 
 在替代 Pod 完成 replay 前再次请求，应记录 `match-unavailable` +
-`kv-aware-load-fallback-v1`；等待一个 EndpointSlice refresh/replay 周期后重复请求，应恢复
+`kv-aware-load-aware-fallback-v1` 或 `kv-aware-load-balanced-fallback-v2`；等待一个
+EndpointSlice refresh/replay 周期后重复请求，应恢复
 `available`，或在真实零命中时保持 `available` 且 cached tokens 为 `0`。若出现 sequence gap、
 ZMQ 无法建立或 concurrent apply 的非预期日志，不猜测原因：保留上述日志、metrics 和 Pod
 描述，停止演练并按 R6B-6 诊断规则报告。

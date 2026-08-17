@@ -1,0 +1,25 @@
+{
+  "run_id": "r6i31-conversation-ladder-28k",
+  "max_tokens": 8,
+  "ignore_eos": true,
+  "request_timeout_ms": 180000,
+  "treatment": "replace-per-arm",
+  "workload_seed": 20260831,
+  "randomize_request_order": false,
+  "cache_mode": "steady-warm",
+  "run_nonce": "replace-per-arm",
+  "cache_generation": "replace-with-vllm-pod-generation",
+  "scenarios": [
+    {
+      "name": "conversation-ladder-28k",
+      "prefix_pattern": "same-prefix",
+      "prefix_bytes": 16384,
+      "prefix_groups": 3,
+      "conversation_turn_bytes": 18400,
+      "batches": 7,
+      "batch_size": 3,
+      "concurrency": 3,
+      "batch_pause_ms": 1000
+    }
+  ]
+}

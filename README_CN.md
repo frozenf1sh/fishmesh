@@ -65,9 +65,8 @@ Standard mode 面向共享 Gateway、多推理池和平台统一入口。FishMes
 - OpenAI-compatible HTTP/SSE 代理、取消传播、stream outcome 分类和 TTFT 指标；
 - EndpointSlice watch/list、Ready 过滤、周期 relist、freshness 和显式 Service fallback；
 - 带逐字段 valid/age 的 per-backend vLLM queue/running 观测；
-- 普通负载感知均衡 `load-balanced` 和结合真实 KV locality 与已知负载的 `kv-aware`；
-  `session-key` 仅作为冻结的兼容模式保留（策略标识仍为 `load-balanced-v1`、`session-key-v1`、
-  `kv-aware-v1`）；
+- 无调度信号消融 `round-robin`、本地 in-flight 均衡 `load-balanced`、普通负载感知 `load-aware`，以及
+  结合真实 KV locality 与已知负载的 `kv-aware`；`session-key` 仅作为冻结兼容模式保留；
 - 非阻塞 admission、per-backend connection bounds、transport error EWMA circuit 和状态回收；
 - Prometheus 路由/发现/backend 指标与 `X-FishMesh-*` 请求 provenance；
 - 严格配置、探针、优雅关闭、最小 RBAC 和经过 race test 的请求生命周期；
@@ -75,7 +74,7 @@ Standard mode 面向共享 Gateway、多推理池和平台统一入口。FishMes
 
 R6A–R6B 的真实信号与请求路径已完成：vLLM Render/KVEvents/replay 为共享 system prompt 的不同会话
 提供逐 Pod 命中，Gateway 已据此执行 `kv-aware-v1`。真实 eviction、subscriber 恢复和 Pod
-重建会移除旧 locality；unknown/stale 明确降级到 load-balanced，绝不伪装成零 token 命中。
+重建会移除旧 locality；unknown/stale 明确经 load-aware 再降级到 local load-balanced，绝不伪装成零 token 命中。
 
 `X-FishMesh-Session-Key` 仍是可选兼容 session hint；下面的 KV-aware 演示刻意不发送它，以证明不同 user
 message 之间的缓存复用。
@@ -89,7 +88,7 @@ message 之间的缓存复用。
 3. 使用新鲜负载估算 queued work 和未缓存 prefill 成本；
 4. 使用 hard overload guard，禁止 cache locality 覆盖严重压力；
 5. 使用小幅 benefit margin/hysteresis，避免为了很小的 cache 差异频繁抖动；
-6. KV 状态缺失或过期时，从 kv-aware 明确降级为 load-balanced；
+6. KV 状态缺失或过期时，从 kv-aware 明确降级为 load-aware，再降级为 local load-balanced；
 7. 可选 session hint 只用于平局或短期稳定性；
 8. 每次决策暴露 typed policy、reason、cache source 和 degradation state。
 
@@ -99,10 +98,10 @@ FishMesh 不声称发明新调度算法。工程贡献是把真实 engine state�
 ## 五分钟 Lite 演示
 
 演示前提见 [`deploy/lite-kv-aware/README.md`](deploy/lite-kv-aware/README.md)：已有 K3s、模型 PV 和可导入
-的 Gateway 镜像。先确认普通 `load-balanced` 默认值，再临时启用 KV-aware overlay；有界
+的 Gateway 镜像。先确认普通 `load-aware` 默认值，再临时启用 KV-aware overlay；有界
 历史 `session-key` 实验 overlay 仅用于兼容性验证。Standard mode / llm-d 集成本轮后置。
 
-验证仓库和 load-balanced 基线：
+验证仓库和 load-aware 基线：
 
 ```bash
 make ci
@@ -154,7 +153,8 @@ grep -iE 'x-fishmesh-(kv-status|policy|route-reason|cached-prefix-tokens)' \
   /tmp/fishmesh-first.headers /tmp/fishmesh-second.headers
 ```
 
-首请求在 replay 变为 fresh 前可以正确返回 `match-unavailable` 和 `kv-aware-load-fallback-v1`。有效预热后，
+首请求在 replay 变为 fresh 前可以正确返回 `match-unavailable`，以及
+`kv-aware-load-aware-fallback-v1` 或 `kv-aware-load-balanced-fallback-v2`。有效预热后，
 第二请求应返回 `available`、`kv-aware-v1`、`kv-aware` 及非零
 `X-FishMesh-Cached-Prefix-Tokens`。`available` 但 cached tokens 为零是真实零命中，不等于 unavailable。
 结束后恢复默认值：`kubectl --kubeconfig ~/.kube/fishmesh.yaml apply -k deploy/baseline/base`。

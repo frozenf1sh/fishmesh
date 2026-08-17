@@ -297,10 +297,10 @@ func (s *service) selectDecision(routingKey string, snapshot routing.Snapshot, s
 	}
 	if s.strategy.Name() == routing.ModeKVAware {
 		if kvStatus == KVShortContextBypassed {
-			return s.kvAwareLoadFallback(routingKey, snapshot, routing.ReasonKVAwareShortContextFallback, routing.PolicyKVAwareShortContextFallbackV1)
+			return s.kvAwareLoadFallback(routingKey, snapshot, routing.ReasonKVAwareShortContextFallback, true)
 		}
 		if !snapshot.KVAware.UsableFor(routing.EligibleBackends(snapshot)) {
-			return s.kvAwareLoadFallback(routingKey, snapshot, routing.ReasonKVAwareSignalUnavailable, routing.PolicyKVAwareLoadFallbackV1)
+			return s.kvAwareLoadFallback(routingKey, snapshot, routing.ReasonKVAwareSignalUnavailable, false)
 		}
 	}
 	decision, err := s.strategy.Select(routingKey, snapshot)
@@ -313,16 +313,30 @@ func (s *service) selectDecision(routingKey string, snapshot routing.Snapshot, s
 	return decision
 }
 
-func (s *service) kvAwareLoadFallback(routingKey string, snapshot routing.Snapshot, reason routing.Reason, policy routing.Policy) routing.Decision {
+func (s *service) kvAwareLoadFallback(routingKey string, snapshot routing.Snapshot, reason routing.Reason, shortContext bool) routing.Decision {
 	// KV signal 只决定是否能使用 locality；fallback 仍消费同一份 load-aware 普通策略，
-	// 因而 Render/KV index 暂时不可用时不会丢弃仍然新鲜的 vLLM queue/running 事实。
-	decision, err := routing.NewLoadBalanced().Select(routingKey, snapshot)
+	// 因而 Render/KV index 暂时不可用时不会丢弃仍然新鲜的 vLLM queue/running 事实；如果
+	// 外部观测也不完整，load-aware 自己返回 local load-balanced policy，保留完整 provenance。
+	decision, err := routing.NewLoadAware().Select(routingKey, snapshot)
 	if err != nil || decision.Backend.ID == "" {
 		return s.fallback(routing.ReasonStrategyFallback)
 	}
 	decision.Reason = reason
-	decision.Policy = policy
+	decision.Policy = kvAwareFallbackPolicy(decision.Policy, shortContext)
 	return decision
+}
+
+func kvAwareFallbackPolicy(underlying routing.Policy, shortContext bool) routing.Policy {
+	if underlying == routing.PolicyLoadAwareV1 {
+		if shortContext {
+			return routing.PolicyKVAwareShortContextLoadAwareV1
+		}
+		return routing.PolicyKVAwareLoadAwareFallbackV1
+	}
+	if shortContext {
+		return routing.PolicyKVAwareShortContextLoadBalancedV2
+	}
+	return routing.PolicyKVAwareLoadBalancedFallbackV2
 }
 
 func (s *service) directRoutingEligible(status discovery.ResolverStatus) bool {

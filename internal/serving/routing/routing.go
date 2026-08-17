@@ -14,23 +14,34 @@ import (
 )
 
 const (
-	// ModeLoadBalanced 优先使用完整 vLLM queue/running 观测，观测缺失时退回本 Gateway 在途请求数。
+	// ModeRoundRobin 是请求级 round-robin 消融策略，用于近似没有调度信号的 Kubernetes Service
+	// 基线。它不试图复刻 kube-proxy 的连接跟踪、IPVS 或 HTTP keep-alive 粘性。
+	ModeRoundRobin Mode = "round-robin"
+	// ModeLoadBalanced 只按本 Gateway 的 local in-flight 做普通负载均衡。它也是
+	// load-aware 在 vLLM queue/running 观测不完整或过期时的明确降级层。
 	ModeLoadBalanced Mode = "load-balanced"
+	// ModeLoadAware 优先使用完整、新鲜的 vLLM queue/running 观测，并在观测不可用时
+	// 显式退回 ModeLoadBalanced。它是产品默认普通路由，不读取 KV locality。
+	ModeLoadAware Mode = "load-aware"
 	// ModeSessionKey 是冻结的兼容模式：使用客户端传入的 session key 建立有界粘性，并允许压力或熔断时临时溢出。
-	// 新能力只应进入 load-balanced 或 kv-aware；除安全/构建修复外不再扩展该模式。
+	// 新能力只应进入 load-aware 或 kv-aware；除安全/构建修复外不再扩展该模式。
 	ModeSessionKey Mode = "session-key"
 	// ModeKVAware 联合真实 KV locality 与已知负载，选择等价成本最低的后端。
 	ModeKVAware Mode = "kv-aware"
 
 	// Policy 常量带版本号：同一策略更换算法或语义时必须升版本，
 	// 让监控指标和历史数据能够区分不同时期的行为。
-	PolicyLoadBalancedV1                Policy = "load-balanced-v1"
-	PolicySessionKeyV1                  Policy = "session-key-v1"      // frozen compatibility policy
-	PolicyServiceFallbackV1             Policy = "service-fallback-v1" // 固定 fallback，不是可配置 routing mode
-	PolicyKVAwareV1                     Policy = "kv-aware-v1"
-	PolicyKVAwareStaticV1               Policy = "kv-aware-ttft-static-v1"
-	PolicyKVAwareLoadFallbackV1         Policy = "kv-aware-load-fallback-v1"
-	PolicyKVAwareShortContextFallbackV1 Policy = "kv-aware-short-context-load-fallback-v1"
+	PolicyRoundRobinV1                      Policy = "round-robin-v1"
+	PolicyLoadBalancedV1                    Policy = "load-balanced-v1"
+	PolicyLoadAwareV1                       Policy = "load-aware-v1"
+	PolicySessionKeyV1                      Policy = "session-key-v1"      // frozen compatibility policy
+	PolicyServiceFallbackV1                 Policy = "service-fallback-v1" // 固定 fallback，不是可配置 routing mode
+	PolicyKVAwareV1                         Policy = "kv-aware-v1"
+	PolicyKVAwareStaticV1                   Policy = "kv-aware-ttft-static-v1"
+	PolicyKVAwareLoadAwareFallbackV1        Policy = "kv-aware-load-aware-fallback-v1"
+	PolicyKVAwareLoadBalancedFallbackV2     Policy = "kv-aware-load-balanced-fallback-v2"
+	PolicyKVAwareShortContextLoadAwareV1    Policy = "kv-aware-short-context-load-aware-fallback-v1"
+	PolicyKVAwareShortContextLoadBalancedV2 Policy = "kv-aware-short-context-load-balanced-fallback-v2"
 
 	// Reason 是决策的可解释标签，由 requestpath 投影到观测与调试输出。
 
@@ -40,7 +51,9 @@ const (
 	ReasonSessionKeySpillover Reason = "session-key-spillover" // 偏好后端受限，临时溢出到其他后端
 
 	// —— 负载相关 ——
-	ReasonLoadBalanced                  Reason = "load-balanced"                     // load-balanced 选择在途最少者
+	ReasonRoundRobin                    Reason = "round-robin"                       // round-robin 请求级轮转
+	ReasonLoadBalanced                  Reason = "load-balanced"                     // load-balanced 选择 local in-flight 最少者
+	ReasonLoadAware                     Reason = "load-aware"                        // load-aware 使用完整 vLLM queue/running
 	ReasonMissingSessionKeyLoadBalanced Reason = "missing-session-key-load-balanced" // 请求没有 session key，直接选最少负载者
 	ReasonQueueDepth                    Reason = "queue-depth"                       // 溢出原因：偏好后端外部队列过深
 	ReasonLocalInflight                 Reason = "local-inflight"                    // 溢出原因：偏好后端本地在途过多
@@ -68,11 +81,11 @@ type Mode string
 
 // Validate 检查模式是否属于当前支持的策略集合。
 //
-// 空模式保留为 load-balanced 的兼容默认值；它是配置层的合法输入，而不是一个需要在
+// 空模式保留为 load-aware 的兼容默认值；它是配置层的合法输入，而不是一个需要在
 // 请求路径中反复解释的特殊错误状态。
 func (m Mode) Validate() error {
 	switch m {
-	case "", ModeLoadBalanced, ModeSessionKey, ModeKVAware:
+	case "", ModeRoundRobin, ModeLoadBalanced, ModeLoadAware, ModeSessionKey, ModeKVAware:
 		return nil
 	default:
 		return fmt.Errorf("unsupported routing mode %q", m)
@@ -273,8 +286,9 @@ func (d Decision) Validate() error {
 
 // Strategy 同步地从一张快照中选出一个后端。
 //
-// Select 必须具有确定性：相同 routingKey 与相同 Snapshot 应产生可复现的决策。
-// 有状态策略（session-key）的差异仅来自其记忆表，且记忆表不影响该保证。
+// Select 对无状态策略必须具有确定性：相同 routingKey 与相同 Snapshot 应产生可复现的决策。
+// session-key 的记忆表和 round-robin 的原子游标是明确的有状态例外；二者分别服务粘性兼容与
+// 无信号消融，不能被普通 load-aware/KV-aware 路径隐式使用。
 type Strategy interface {
 	Name() Mode
 	Select(routingKey string, snapshot Snapshot) (Decision, error)
@@ -296,8 +310,12 @@ func NewConfigured(config Config) (Strategy, error) {
 		return newKVAware(config.KVAware), nil
 	case ModeSessionKey:
 		return newSessionKey(config.SessionKey), nil
-	case "", ModeLoadBalanced:
+	case ModeRoundRobin:
+		return NewRoundRobin(), nil
+	case ModeLoadBalanced:
 		return NewLoadBalanced(), nil
+	case "", ModeLoadAware:
+		return NewLoadAware(), nil
 	default:
 		return nil, fmt.Errorf("unsupported routing mode %q", config.Mode)
 	}

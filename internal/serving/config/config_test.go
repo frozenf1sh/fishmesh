@@ -16,7 +16,7 @@ func TestDefaultConfigIsComplete(t *testing.T) {
 	if err := config.Validate(); err != nil {
 		t.Fatalf("default config rejected: %v", err)
 	}
-	if config.Routing.Mode != routing.ModeLoadBalanced || config.Gateway.RoutingMode != routing.ModeLoadBalanced {
+	if config.Routing.Mode != routing.ModeLoadAware || config.Gateway.RoutingMode != routing.ModeLoadAware {
 		t.Fatalf("default routing mode = %q/%q", config.Routing.Mode, config.Gateway.RoutingMode)
 	}
 	if config.Discovery.Mode != discovery.ModeStatic || len(config.Discovery.Static) != 1 {

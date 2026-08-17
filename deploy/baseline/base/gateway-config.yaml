@@ -3,13 +3,13 @@ kind: ConfigMap
 metadata:
   name: fishmesh-gateway-config
   annotations:
-    fishmesh.io/routing-mode: load-balanced
+    fishmesh.io/routing-mode: load-aware-v1
     fishmesh.io/transport: keep-alive
-    fishmesh.io/config-version: v3-serving-reliability
+    fishmesh.io/config-version: v4-load-aware-default
 data:
   FISHMESH_LISTEN_ADDRESS: ":8080"
   FISHMESH_UPSTREAM_URL: http://qwen-vllm-baseline.kubellm.svc.cluster.local:8000
-  FISHMESH_ROUTING_MODE: load-balanced
+  FISHMESH_ROUTING_MODE: load-aware
   FISHMESH_ENDPOINT_DISCOVERY: static
   FISHMESH_ENDPOINT_SERVICE: qwen-vllm
   FISHMESH_ENDPOINT_NAMESPACE: kubellm

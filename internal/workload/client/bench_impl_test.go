@@ -50,6 +50,42 @@ func TestRunPlanWritesAttemptsAndSeparatesUnavailable(t *testing.T) {
 	}
 }
 
+func TestConversationLadderCarriesActualAssistantHistoryAcrossTurns(t *testing.T) {
+	var messageCounts []int
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var body struct {
+			Messages []Message `json:"messages"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		messageCounts = append(messageCounts, len(body.Messages))
+		writer.Header().Set("Content-Type", "text/event-stream")
+		writer.Header().Set(HeaderKVStatus, "available")
+		writer.Header().Set(HeaderCachedPrefixTokens, "128")
+		_, _ = writer.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"assistant-turn\"}}]}\n\ndata: [DONE]\n\n"))
+	}))
+	defer upstream.Close()
+	service, err := New(Config{Endpoint: upstream.URL, Model: "qwen", RequestTimeout: time.Second}, Dependencies{HTTPClient: upstream.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := BenchmarkPlan{
+		RunID: "ladder", MaxTokens: 8, RequestTimeoutMS: 1000, CacheMode: CacheSteadyWarm, RunNonce: "ladder-nonce", WorkloadSeed: 7, Treatment: "contract", CacheGeneration: "generation-a",
+		Scenarios: []BenchmarkScenario{{Name: "ladder", Pattern: PrefixSame, PrefixBytes: 128, PrefixGroups: 2, ConversationTurnBytes: 128, Batches: 2, BatchSize: 2, Concurrency: 1}},
+	}
+	report, err := service.RunPlan(context.Background(), plan, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Requested != 4 || report.Succeeded != 4 || report.Scenarios[0].CachedPrefixSamples != 4 {
+		t.Fatalf("ladder report = %+v", report)
+	}
+	if len(messageCounts) != 4 || messageCounts[0] != 2 || messageCounts[1] != 2 || messageCounts[2] != 4 || messageCounts[3] != 4 {
+		t.Fatalf("message counts = %v, want [2 2 4 4]", messageCounts)
+	}
+}
+
 func TestWindowMetricsRejectsMissingOrNonPositiveWindow(t *testing.T) {
 	started := time.Unix(10, 0)
 	completed := started.Add(2 * time.Second)
@@ -87,6 +123,10 @@ func TestBenchmarkPlanValidatesPatternsAndLoadDiscipline(t *testing.T) {
 	plan.Scenarios[0].ArrivalRateQPS = -1
 	if err := plan.Validate(); err == nil {
 		t.Fatal("negative arrival rate was accepted")
+	}
+	ladder := BenchmarkScenario{Name: "ladder", Pattern: PrefixSame, PrefixBytes: minimumPrefixBytes, PrefixGroups: 1, ConversationTurnBytes: minimumPrefixBytes, Batches: 2, BatchSize: 2, Concurrency: 2}
+	if err := ladder.Validate(); err == nil {
+		t.Fatal("ladder with mismatched prefix groups was accepted")
 	}
 }
 

@@ -27,6 +27,6 @@ func TestConfigValidateRejectsInvalidStartupParameters(t *testing.T) {
 
 func TestConfigValidateAcceptsCompatibilityDefaultMode(t *testing.T) {
 	if err := (Config{RoutingMode: routing.Mode(""), RequestTimeout: time.Second, MaxRequestBodyBytes: 1}).Validate(); err != nil {
-		t.Fatalf("empty routing mode should use the load-balanced compatibility default: %v", err)
+		t.Fatalf("empty routing mode should use the load-aware compatibility default: %v", err)
 	}
 }

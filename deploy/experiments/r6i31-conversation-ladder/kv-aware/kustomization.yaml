@@ -1,0 +1,69 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: kubellm
+resources:
+  - ../../r6i22-final/kv-aware
+patches:
+  - target:
+      kind: ConfigMap
+      name: fishmesh-gateway-config
+    patch: |-
+      - op: replace
+        path: /data/FISHMESH_ADMISSION_TUNING_MODE
+        value: "off"
+      - op: replace
+        path: /data/FISHMESH_ADMISSION_INITIAL_TARGET
+        value: "16"
+      - op: replace
+        path: /data/FISHMESH_ADMISSION_MIN_TARGET
+        value: "8"
+      - op: replace
+        path: /data/FISHMESH_ADMISSION_MAX_TARGET
+        value: "16"
+      - op: replace
+        path: /data/FISHMESH_MAX_INFLIGHT_REQUESTS
+        value: "16"
+      - op: replace
+        path: /data/FISHMESH_MAX_CONNS_PER_HOST
+        value: "8"
+      - op: replace
+        path: /metadata/annotations/fishmesh.io~1config-version
+        value: r6i31-ladder-kv-aware
+  - target:
+      kind: Deployment
+      name: fishmesh-gateway
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/image
+        value: fishmesh-gateway:R6I31_GATEWAY_IMAGE_PLACEHOLDER
+      - op: replace
+        path: /spec/template/metadata/annotations/fishmesh.io~1gateway-image-revision
+        value: R6I31_GATEWAY_IMAGE_PLACEHOLDER
+      - op: replace
+        path: /spec/template/metadata/annotations/fishmesh.io~1runtime-profile
+        value: r6i31-conversation-ladder-kv-aware
+      - op: add
+        path: /spec/template/metadata/annotations/fishmesh.io~1r6i31-gateway-rollout
+        value: r6i31-gateway-rollout-PLACEHOLDER
+  - target:
+      kind: Deployment
+      name: qwen-vllm
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/args/5
+        value: --gpu-memory-utilization=0.40
+      - op: replace
+        path: /spec/template/spec/containers/0/args/6
+        value: --max-model-len=32768
+      - op: add
+        path: /spec/template/spec/containers/0/args/-
+        value: --enable-chunked-prefill
+      - op: add
+        path: /spec/template/spec/containers/0/args/-
+        value: --max-num-batched-tokens=8K
+      - op: add
+        path: /spec/template/spec/containers/0/args/-
+        value: --max-num-seqs=3
+      - op: add
+        path: /spec/template/metadata/annotations/fishmesh.io~1r6i31-rollout
+        value: r6i31-rollout-PLACEHOLDER

@@ -62,7 +62,7 @@ func TestProxyBoundsAndReplaysBodyWhileExposingKVAwareDegradation(t *testing.T) 
 	}))
 	defer upstream.Close()
 	path := &recordingPath{lease: requestpath.Lease{
-		Decision: routing.Decision{Backend: backend.Backend{ID: "backend-a", URL: upstream.URL}, PreferredBackendID: "backend-a", Reason: routing.ReasonKVAwareSignalUnavailable, Policy: routing.PolicyKVAwareLoadFallbackV1},
+		Decision: routing.Decision{Backend: backend.Backend{ID: "backend-a", URL: upstream.URL}, PreferredBackendID: "backend-a", Reason: routing.ReasonKVAwareSignalUnavailable, Policy: routing.PolicyKVAwareLoadBalancedFallbackV2},
 		State: requestpath.State{KV: requestpath.KVMatchUnavailable, Estimate: requestpath.EstimateEvidence{
 			PromptTokens: 1024, UncachedTokens: 512, EstimatedTTFT: 42 * time.Millisecond, Valid: true,
 			Confidence: routing.EstimateConfidenceCalibrated, Version: "profile-v1", LoadValid: true, QueueDepth: 2, LocalDelta: 3,
@@ -78,7 +78,7 @@ func TestProxyBoundsAndReplaysBodyWhileExposingKVAwareDegradation(t *testing.T) 
 	if !path.selected || path.request.Route != "/v1/chat/completions" || !bytes.Equal(path.request.Body, requestBody) {
 		t.Fatalf("requestpath input = %+v", path.request)
 	}
-	if response.Header().Get(headerRouteReason) != string(routing.ReasonKVAwareSignalUnavailable) || response.Header().Get(headerKVStatus) != string(requestpath.KVMatchUnavailable) || response.Header().Get(headerPolicy) != string(routing.PolicyKVAwareLoadFallbackV1) {
+	if response.Header().Get(headerRouteReason) != string(routing.ReasonKVAwareSignalUnavailable) || response.Header().Get(headerKVStatus) != string(requestpath.KVMatchUnavailable) || response.Header().Get(headerPolicy) != string(routing.PolicyKVAwareLoadBalancedFallbackV2) {
 		t.Fatalf("decision headers = %v", response.Header())
 	}
 	if response.Header().Get(headerCachedPrefixTokens) != "0" {
